@@ -36,7 +36,8 @@ window.ICON_SERVICE_PATH = null;
 	// Hmi.js installs everything and must come last.
 	var files = (urlParams['dev'] == '1') ?
 		['HmiLog.js', 'HmiTypes.js', 'HmiProject.js', 'HmiFile.js',
-		 'HmiResources.js', 'HmiFormatPanel.js', 'HmiLinkPanels.js',
+		 'HmiResources.js', 'HmiSimulator.js', 'HmiRuntime.js',
+		 'HmiFormatPanel.js', 'HmiLinkPanels.js',
 		 'HmiFormat.js', 'HmiSelfTest.js', 'Hmi.js'] :
 		['hmi.js'];
 

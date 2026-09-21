@@ -40,6 +40,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFormatTab(ui);
+		HmiSelfTest.testRuntime(ui);
 	}
 	catch (e)
 	{
@@ -301,4 +302,261 @@ HmiSelfTest.testFormatTab = function(ui)
 	HmiSelfTest.check('format.animationContent',
 		panels[3].getElementsByClassName('hmiChip').length > 0,
 		'no link chips rendered');
+};
+
+/**
+ * Spike 1: the run-mode repaint mechanism.
+ *
+ * These are the assertions the whole runtime design rests on. In order:
+ * does decorating getCellStyle plus a targeted repaint actually recolour a
+ * shape; does that survive the revalidation caused by refresh and zoom; and
+ * does the whole run leave the model -- and therefore undo and the modified
+ * flag -- completely untouched.
+ */
+HmiSelfTest.testRuntime = function(ui)
+{
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+	var project = HmiSelfTest.sampleProject();
+	ui.hmiProject = project;
+
+	// Two cells: one analog fill colour, one visibility + pushbutton.
+	var tank = null;
+	var lamp = null;
+
+	model.beginUpdate();
+
+	try
+	{
+		tank = graph.insertVertex(graph.getDefaultParent(), null, 'Tank',
+			300, 40, 80, 60);
+		lamp = graph.insertVertex(graph.getDefaultParent(), null, 'Lamp',
+			420, 40, 60, 40);
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, tank, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: '50', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]}
+	});
+
+	HmiProject.setCellLinks(graph, lamp, {
+		'visibility': {expr: 'Pump1_Run', sense: 'visible'},
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle'}
+	});
+
+	var designFill = graph.getCellStyle(tank)[mxConstants.STYLE_FILLCOLOR];
+
+	// Watch the model for the whole run. Any change at all is a design
+	// violation, not a tuning issue.
+	var modelChanges = 0;
+	var watcher = function() { modelChanges++; };
+	model.addListener(mxEvent.CHANGE, watcher);
+
+	var undoBefore = (ui.editor.undoManager != null) ?
+		ui.editor.undoManager.history.length : -1;
+	var modifiedBefore = ui.editor.modified;
+
+	var sim = new HmiSimulator(project);
+	var rt = new HmiRuntime({graph: graph, project: project, driver: sim});
+	HmiSelfTest.runtime = rt;
+
+	rt.start();
+
+	// Drive a known value rather than waiting for the simulator's waveform.
+	function setLevel(v)
+	{
+		rt.applyBatch({'Tank_Level': {value: v,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+		rt.flush();
+	}
+
+	setLevel(10);
+
+	var state = graph.view.getState(tank);
+
+	HmiSelfTest.check('runtime.state', state != null && state.shape != null);
+
+	if (state == null || state.shape == null)
+	{
+		model.removeListener(watcher);
+		rt.stop();
+
+		return;
+	}
+
+	HmiSelfTest.check('runtime.recolour.low',
+		state.style[mxConstants.STYLE_FILLCOLOR] === '#00CC00',
+		'style fill = ' + state.style[mxConstants.STYLE_FILLCOLOR]);
+
+	// The shape object must actually carry it, not just the style map --
+	// this is what proves configureShape ran rather than the mutation being
+	// swallowed by mxShape.apply's aliasing.
+	HmiSelfTest.check('runtime.recolour.shape',
+		state.shape.fill === '#00CC00', 'shape.fill = ' + state.shape.fill);
+
+	setLevel(80);
+
+	HmiSelfTest.check('runtime.recolour.high',
+		state.shape.fill === '#CC0000', 'shape.fill = ' + state.shape.fill);
+
+	// Crossing back must also repaint (the visual diff must not latch).
+	setLevel(10);
+	HmiSelfTest.check('runtime.recolour.backDown',
+		state.shape.fill === '#00CC00', 'shape.fill = ' + state.shape.fill);
+
+	// --- revalidation survival -------------------------------------------
+	// validateCellState reassigns state.style = graph.getCellStyle(cell), so
+	// a decorator that was not idempotent would lose the colour here.
+
+	setLevel(80);
+	graph.refresh();
+	state = graph.view.getState(tank);
+
+	HmiSelfTest.check('runtime.survivesRefresh',
+		state != null && state.shape != null && state.shape.fill === '#CC0000',
+		'shape.fill = ' + ((state != null && state.shape != null) ?
+			state.shape.fill : 'no state'));
+
+	var zoom = graph.view.scale;
+	graph.zoomIn();
+	state = graph.view.getState(tank);
+
+	HmiSelfTest.check('runtime.survivesZoom',
+		state != null && state.shape != null && state.shape.fill === '#CC0000',
+		'shape.fill = ' + ((state != null && state.shape != null) ?
+			state.shape.fill : 'no state'));
+
+	graph.zoomOut();
+
+	// --- visibility -------------------------------------------------------
+
+	rt.applyBatch({'Pump1_Run': {value: 0, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}});
+	rt.flush();
+
+	var lampState = graph.view.getState(lamp);
+
+	HmiSelfTest.check('runtime.visibility.hidden',
+		lampState != null && lampState.shape != null &&
+		lampState.shape.node.style.visibility === 'hidden',
+		'visibility = ' + ((lampState != null && lampState.shape != null) ?
+			lampState.shape.node.style.visibility : 'no state'));
+
+	rt.applyBatch({'Pump1_Run': {value: 1, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}});
+	rt.flush();
+
+	HmiSelfTest.check('runtime.visibility.shown',
+		lampState.shape.node.style.visibility !== 'hidden');
+
+	// Visibility must survive revalidation the same way colour does. The diff
+	// correctly suppresses a repaint when the visual has not changed, so if
+	// visibility were only applied in repaint() a refresh or zoom would
+	// silently bring a hidden object back.
+	rt.applyBatch({'Pump1_Run': {value: 0, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}});
+	rt.flush();
+	graph.refresh();
+	lampState = graph.view.getState(lamp);
+
+	HmiSelfTest.check('runtime.visibility.survivesRefresh',
+		lampState != null && lampState.shape != null &&
+		lampState.shape.node.style.visibility === 'hidden',
+		'visibility = ' + ((lampState != null && lampState.shape != null) ?
+			lampState.shape.node.style.visibility : 'no state'));
+
+	graph.zoomIn();
+	lampState = graph.view.getState(lamp);
+
+	HmiSelfTest.check('runtime.visibility.survivesZoom',
+		lampState != null && lampState.shape != null &&
+		lampState.shape.node.style.visibility === 'hidden',
+		'visibility = ' + ((lampState != null && lampState.shape != null) ?
+			lampState.shape.node.style.visibility : 'no state'));
+
+	graph.zoomOut();
+
+	// A hidden object must not respond to touch.
+	var beforeTouch = sim.get('Pump1_Run').value;
+	rt.handleTouch(lamp, 'click');
+
+	HmiSelfTest.check('runtime.visibility.blocksTouch',
+		sim.get('Pump1_Run').value === beforeTouch,
+		'hidden object accepted a click');
+
+	rt.applyBatch({'Pump1_Run': {value: 1, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}});
+	rt.flush();
+
+	// --- pushbutton -------------------------------------------------------
+
+	rt.handleTouch(lamp, 'click');
+
+	HmiSelfTest.check('runtime.pushbutton.writes',
+		sim.get('Pump1_Run').value === 0,
+		'value = ' + sim.get('Pump1_Run').value);
+
+	rt.handleTouch(lamp, 'click');
+
+	HmiSelfTest.check('runtime.pushbutton.toggles',
+		sim.get('Pump1_Run').value === 1,
+		'value = ' + sim.get('Pump1_Run').value);
+
+	// --- bad quality ------------------------------------------------------
+
+	rt.applyBatch({'Tank_Level': {value: 80,
+		quality: HmiTypes.QUALITY_BAD, timestamp: Date.now()}});
+	rt.flush();
+	state = graph.view.getState(tank);
+
+	HmiSelfTest.check('runtime.badQuality.holdsLast',
+		state.shape.fill === '#CC0000',
+		'expected the last good colour, got ' + state.shape.fill);
+
+	// --- value display ----------------------------------------------------
+
+	HmiSelfTest.check('runtime.format.decimals',
+		HmiRuntime.formatNumber(42.667, '0.0') === '42.7',
+		HmiRuntime.formatNumber(42.667, '0.0'));
+	HmiSelfTest.check('runtime.format.leadingZeros',
+		HmiRuntime.formatNumber(7, '000') === '007',
+		HmiRuntime.formatNumber(7, '000'));
+
+	// --- the invariant ----------------------------------------------------
+
+	HmiSelfTest.check('runtime.modelUntouched', modelChanges === 0,
+		modelChanges + ' model changes during run');
+
+	rt.stop();
+
+	HmiSelfTest.check('runtime.modelUntouchedAfterStop', modelChanges === 0,
+		modelChanges + ' model changes including stop');
+
+	var undoAfter = (ui.editor.undoManager != null) ?
+		ui.editor.undoManager.history.length : -1;
+
+	HmiSelfTest.check('runtime.undoUntouched', undoAfter === undoBefore,
+		'history ' + undoBefore + ' -> ' + undoAfter);
+	HmiSelfTest.check('runtime.modifiedFlagUntouched',
+		ui.editor.modified === modifiedBefore,
+		'modified ' + modifiedBefore + ' -> ' + ui.editor.modified);
+
+	model.removeListener(watcher);
+
+	// --- restored on stop -------------------------------------------------
+
+	state = graph.view.getState(tank);
+
+	HmiSelfTest.check('runtime.restoresDesignColour',
+		state == null || state.shape == null ||
+		state.shape.fill === designFill,
+		'design ' + designFill + ', got ' +
+		((state != null && state.shape != null) ? state.shape.fill : 'none'));
+
+	HmiSelfTest.check('runtime.reenablesEditing', graph.isEnabled());
 };
