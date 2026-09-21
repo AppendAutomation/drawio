@@ -306,8 +306,11 @@ if (urlParams['dev'] == '1')
     // Electron
     if (mxIsElectron)
     {
-        mxscript('js/desktop/DesktopLibrary.js');
-        mxscript('js/desktop/ElectronApp.js');
+        // HMI fork: these live in js/diagramly/ on branch dev; js/desktop/ does
+        // not exist, so both loads 404'd silently and ElectronApp never ran,
+        // leaving local file open/save dead under DRAWIO_ENV=dev.
+        mxscript('js/diagramly/DesktopLibrary.js');
+        mxscript('js/diagramly/ElectronApp.js');
 
         // ELK, Mermaid and PlantUML are loaded by Devel.js above. Do not
         // load js/elk/drawio-elk.min.js again here: re-running its footer
