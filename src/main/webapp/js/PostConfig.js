@@ -37,8 +37,8 @@ window.ICON_SERVICE_PATH = null;
 	var files = (urlParams['dev'] == '1') ?
 		['HmiLog.js', 'HmiTypes.js', 'HmiProject.js', 'HmiFile.js',
 		 'HmiResources.js', 'HmiSimulator.js', 'HmiRuntime.js',
-		 'HmiFormatPanel.js', 'HmiLinkPanels.js',
-		 'HmiFormat.js', 'HmiSelfTest.js', 'Hmi.js'] :
+		 'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
+		 'HmiDialogs.js', 'HmiMenus.js', 'HmiSelfTest.js', 'Hmi.js'] :
 		['hmi.js'];
 
 	for (var i = 0; i < files.length; i++)

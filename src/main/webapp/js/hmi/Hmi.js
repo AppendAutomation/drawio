@@ -24,6 +24,7 @@ Hmi.install = function()
 	HmiResources.install();
 	HmiFile.install();
 	HmiFormat.install();
+	HmiMenus.install();
 	Hmi.captureUi();
 
 	HmiLog.log('drawio-desktop-hmi ' + Hmi.VERSION + ' installed');

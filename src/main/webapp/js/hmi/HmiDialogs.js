@@ -1,0 +1,1121 @@
+/**
+ * Dialogs: tag dictionary, access names, runtime user input, validation
+ * results and the runtime log.
+ *
+ * All are plain DOM shown through ui.showDialog, following the pattern of
+ * upstream's own EditDataDialog rather than introducing a UI framework.
+ */
+HmiDialogs = function() {};
+
+// ------------------------------------------------------------- utilities
+
+HmiDialogs.el = function(tag, className, text)
+{
+	var node = document.createElement(tag);
+
+	if (className != null)
+	{
+		node.className = className;
+	}
+
+	if (text != null)
+	{
+		mxUtils.write(node, text);
+	}
+
+	return node;
+};
+
+HmiDialogs.button = function(label, fn, primary)
+{
+	var btn = HmiDialogs.el('button', 'geBtn' + ((primary) ? ' gePrimaryBtn' : ''),
+		label);
+
+	mxEvent.addListener(btn, 'click', function(evt)
+	{
+		mxEvent.consume(evt);
+		fn();
+	});
+
+	return btn;
+};
+
+HmiDialogs.field = function(parent, label, value, onChange, type)
+{
+	var row = HmiDialogs.el('div', 'hmiFormRow');
+	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
+
+	var input = document.createElement('input');
+	input.className = 'hmiInput';
+	input.setAttribute('type', type || 'text');
+
+	if (type === 'checkbox')
+	{
+		if (value)
+		{
+			input.setAttribute('checked', 'checked');
+		}
+
+		mxEvent.addListener(input, 'change', function()
+		{
+			onChange(input.checked);
+		});
+	}
+	else
+	{
+		input.value = (value != null) ? value : '';
+
+		var commit = function() { onChange(input.value); };
+		mxEvent.addListener(input, 'blur', commit);
+		mxEvent.addListener(input, 'keydown', function(evt)
+		{
+			if (evt.keyCode == 13) { commit(); }
+		});
+	}
+
+	row.appendChild(input);
+	parent.appendChild(row);
+
+	return input;
+};
+
+HmiDialogs.select = function(parent, label, value, options, onChange)
+{
+	var row = HmiDialogs.el('div', 'hmiFormRow');
+	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
+
+	var select = document.createElement('select');
+	select.className = 'hmiInput';
+
+	for (var i = 0; i < options.length; i++)
+	{
+		var opt = document.createElement('option');
+		var v = (options[i].value != null) ? options[i].value : options[i];
+		opt.setAttribute('value', v);
+		mxUtils.write(opt, (options[i].label != null) ? options[i].label : v);
+
+		if (v === value)
+		{
+			opt.setAttribute('selected', 'selected');
+		}
+
+		select.appendChild(opt);
+	}
+
+	mxEvent.addListener(select, 'change', function()
+	{
+		onChange(select.value);
+	});
+
+	row.appendChild(select);
+	parent.appendChild(row);
+
+	return select;
+};
+
+// ------------------------------------------------------- tag dictionary
+
+HmiDialogs.showTagDictionary = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var dlg = new HmiTagDialog(ui);
+	ui.showDialog(dlg.container, 820, 560, true, false);
+	dlg.init();
+};
+
+HmiTagDialog = function(ui)
+{
+	this.ui = ui;
+	this.project = ui.hmiProject;
+	this.selected = null;
+
+	var div = HmiDialogs.el('div', 'hmiDialog');
+
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		mxResources.get('hmiTagDictionary').replace('...', '')));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody');
+
+	// Left: the list plus its toolbar.
+	var left = HmiDialogs.el('div', 'hmiTagListPane');
+
+	this.filter = document.createElement('input');
+	this.filter.className = 'hmiInput';
+	this.filter.setAttribute('type', 'text');
+	this.filter.setAttribute('placeholder', 'Filter');
+
+	var that = this;
+	mxEvent.addListener(this.filter, 'input', function() { that.renderList(); });
+	left.appendChild(this.filter);
+
+	this.listDiv = HmiDialogs.el('div', 'hmiTagList');
+	left.appendChild(this.listDiv);
+
+	var tools = HmiDialogs.el('div', 'hmiTagTools');
+
+	var newSelect = document.createElement('select');
+	newSelect.className = 'hmiInput';
+	var first = document.createElement('option');
+	first.setAttribute('value', '');
+	mxUtils.write(first, 'New tag...');
+	newSelect.appendChild(first);
+
+	for (var i = 0; i < HmiTypes.TAG_TYPES.length; i++)
+	{
+		var opt = document.createElement('option');
+		opt.setAttribute('value', HmiTypes.TAG_TYPES[i]);
+		mxUtils.write(opt, HmiTypes.TAG_TYPES[i]);
+		newSelect.appendChild(opt);
+	}
+
+	mxEvent.addListener(newSelect, 'change', function()
+	{
+		if (newSelect.value !== '')
+		{
+			that.createTag(newSelect.value);
+			newSelect.value = '';
+		}
+	});
+
+	tools.appendChild(newSelect);
+	tools.appendChild(HmiDialogs.button('Duplicate', function() { that.duplicate(); }));
+	tools.appendChild(HmiDialogs.button('Delete', function() { that.remove(); }));
+	left.appendChild(tools);
+
+	body.appendChild(left);
+
+	// Right: the property form for the selected tag.
+	this.formDiv = HmiDialogs.el('div', 'hmiTagForm');
+	body.appendChild(this.formDiv);
+
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.button('Import CSV...', function() { that.importCsv(); }));
+	footer.appendChild(HmiDialogs.button('Export CSV', function() { that.exportCsv(); }));
+
+	var spacer = HmiDialogs.el('span', 'hmiSpacer');
+	footer.appendChild(spacer);
+
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}, true));
+
+	div.appendChild(footer);
+
+	this.container = div;
+};
+
+HmiTagDialog.prototype.init = function()
+{
+	this.renderList();
+	this.renderForm();
+};
+
+HmiTagDialog.prototype.visibleTags = function()
+{
+	var text = this.filter.value.toLowerCase();
+	var res = [];
+
+	for (var i = 0; i < this.project.tags.length; i++)
+	{
+		var tag = this.project.tags[i];
+
+		if (text === '' || tag.name.toLowerCase().indexOf(text) >= 0 ||
+			(tag.comment != null && tag.comment.toLowerCase().indexOf(text) >= 0))
+		{
+			res.push(tag);
+		}
+	}
+
+	return res;
+};
+
+HmiTagDialog.prototype.renderList = function()
+{
+	var that = this;
+	this.listDiv.innerText = '';
+
+	var tags = this.visibleTags();
+
+	if (tags.length === 0)
+	{
+		this.listDiv.appendChild(
+			HmiDialogs.el('div', 'hmiEmpty', 'No tags defined.'));
+
+		return;
+	}
+
+	for (var i = 0; i < tags.length; i++)
+	{
+		this.listDiv.appendChild(this.createRow(tags[i]));
+	}
+};
+
+HmiTagDialog.prototype.createRow = function(tag)
+{
+	var that = this;
+	var row = HmiDialogs.el('div', 'hmiTagRow' +
+		((this.selected === tag) ? ' hmiTagRowOn' : ''));
+
+	row.appendChild(HmiDialogs.el('span', 'hmiTagName', tag.name));
+	row.appendChild(HmiDialogs.el('span', 'hmiTagType', tag.type));
+
+	mxEvent.addListener(row, 'click', function()
+	{
+		that.selected = tag;
+		that.renderList();
+		that.renderForm();
+	});
+
+	return row;
+};
+
+HmiTagDialog.prototype.renderForm = function()
+{
+	var that = this;
+	var tag = this.selected;
+	this.formDiv.innerText = '';
+
+	if (tag == null)
+	{
+		this.formDiv.appendChild(
+			HmiDialogs.el('div', 'hmiEmpty', 'Select a tag, or create one.'));
+
+		return;
+	}
+
+	// Renaming is a first-class operation, not an edit to a text field:
+	// every expression referencing the old name has to move with it.
+	var nameInput = HmiDialogs.field(this.formDiv, 'Name', tag.name,
+		function(value)
+		{
+			that.rename(tag, value);
+		});
+
+	HmiDialogs.select(this.formDiv, 'Type', tag.type, HmiTypes.TAG_TYPES,
+		function(value)
+		{
+			tag.type = value;
+			that.renderList();
+			that.renderForm();
+		});
+
+	HmiDialogs.field(this.formDiv, 'Comment', tag.comment,
+		function(v) { tag.comment = v; });
+
+	if (HmiTypes.isAnalog(tag.type))
+	{
+		HmiDialogs.field(this.formDiv, 'Engineering units', tag.engUnits,
+			function(v) { tag.engUnits = v; });
+		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+			function(v) { tag.initial = parseFloat(v) || 0; });
+		HmiDialogs.field(this.formDiv, 'Minimum EU', tag.minEU,
+			function(v) { tag.minEU = parseFloat(v) || 0; });
+		HmiDialogs.field(this.formDiv, 'Maximum EU', tag.maxEU,
+			function(v) { tag.maxEU = parseFloat(v) || 0; });
+	}
+	else if (HmiTypes.isDiscrete(tag.type))
+	{
+		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+			function(v) { tag.initial = (v === '1' || v === 'true') ? 1 : 0; });
+		HmiDialogs.field(this.formDiv, 'On message', tag.onMsg,
+			function(v) { tag.onMsg = v; });
+		HmiDialogs.field(this.formDiv, 'Off message', tag.offMsg,
+			function(v) { tag.offMsg = v; });
+	}
+	else
+	{
+		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+			function(v) { tag.initial = v; });
+	}
+
+	if (HmiTypes.isIO(tag.type))
+	{
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'I/O'));
+
+		var names = [''];
+
+		for (var i = 0; i < this.project.accessNames.length; i++)
+		{
+			names.push(this.project.accessNames[i].id);
+		}
+
+		HmiDialogs.select(this.formDiv, 'Access name', tag.access, names,
+			function(v) { tag.access = v; });
+		HmiDialogs.field(this.formDiv, 'Item name', tag.item,
+			function(v) { tag.item = v; });
+
+		if (HmiTypes.isAnalog(tag.type))
+		{
+			HmiDialogs.field(this.formDiv, 'Minimum raw', tag.minRaw,
+				function(v) { tag.minRaw = parseFloat(v) || 0; });
+			HmiDialogs.field(this.formDiv, 'Maximum raw', tag.maxRaw,
+				function(v) { tag.maxRaw = parseFloat(v) || 0; });
+		}
+	}
+
+	if (HmiTypes.isAnalog(tag.type))
+	{
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarms'));
+
+		if (tag.alarms == null)
+		{
+			tag.alarms = {};
+		}
+
+		var limits = [['loLo', 'LoLo'], ['low', 'Low'], ['high', 'High'],
+			['hiHi', 'HiHi'], ['deadband', 'Deadband']];
+
+		for (var i = 0; i < limits.length; i++)
+		{
+			(function(key)
+			{
+				HmiDialogs.field(that.formDiv, limits[i][1], tag.alarms[key],
+					function(v)
+					{
+						if (v === '') { delete tag.alarms[key]; }
+						else { tag.alarms[key] = parseFloat(v); }
+					});
+			})(limits[i][0]);
+		}
+	}
+
+	this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Simulation'));
+
+	if (tag.sim == null)
+	{
+		tag.sim = {};
+	}
+
+	HmiDialogs.select(this.formDiv, 'Mode', tag.sim.mode || '',
+		['', 'sine', 'ramp', 'random', 'toggle', 'static'],
+		function(v)
+		{
+			if (v === '') { delete tag.sim.mode; }
+			else { tag.sim.mode = v; }
+		});
+
+	HmiDialogs.field(this.formDiv, 'Period (ms)', tag.sim.periodMs,
+		function(v)
+		{
+			if (v === '') { delete tag.sim.periodMs; }
+			else { tag.sim.periodMs = v; }
+		});
+};
+
+HmiTagDialog.prototype.uniqueName = function(base)
+{
+	var name = base;
+	var n = 1;
+
+	while (this.project.getTag(name) != null)
+	{
+		name = base + '_' + (++n);
+	}
+
+	return name;
+};
+
+HmiTagDialog.prototype.createTag = function(type)
+{
+	var tag = HmiProject.createTag(this.uniqueName('NewTag'), type);
+	this.project.addTag(tag);
+	this.selected = tag;
+	this.markModified();
+	this.renderList();
+	this.renderForm();
+};
+
+HmiTagDialog.prototype.duplicate = function()
+{
+	if (this.selected == null)
+	{
+		return;
+	}
+
+	var copy = JSON.parse(JSON.stringify(this.selected));
+	copy.name = this.uniqueName(this.selected.name);
+	this.project.addTag(copy);
+	this.selected = copy;
+	this.markModified();
+	this.renderList();
+	this.renderForm();
+};
+
+HmiTagDialog.prototype.remove = function()
+{
+	if (this.selected == null)
+	{
+		return;
+	}
+
+	var refs = HmiTagDialog.findReferences(this.ui, this.selected.name);
+	var name = this.selected.name;
+
+	var proceed = mxUtils.bind(this, function()
+	{
+		this.project.removeTag(name);
+		this.selected = null;
+		this.markModified();
+		this.renderList();
+		this.renderForm();
+	});
+
+	if (refs.length > 0)
+	{
+		this.ui.confirm('"' + name + '" is used by ' + refs.length +
+			' animation link' + ((refs.length == 1) ? '' : 's') +
+			'. Delete it anyway?', proceed);
+	}
+	else
+	{
+		proceed();
+	}
+};
+
+/**
+ * Renames a tag and rewrites every expression that references it.
+ *
+ * Without this a rename silently breaks every animation using the tag, which
+ * makes the tool feel broken long before anyone works out why.
+ */
+HmiTagDialog.prototype.rename = function(tag, next)
+{
+	next = ('' + next).trim();
+
+	if (next === '' || next === tag.name)
+	{
+		return;
+	}
+
+	if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,62}$/.test(next))
+	{
+		this.ui.showError(mxResources.get('error'),
+			'Tag names start with a letter, _ or $ and may contain letters, ' +
+			'digits, _ and $ (max 63 characters).', mxResources.get('ok'));
+		this.renderForm();
+
+		return;
+	}
+
+	if (this.project.getTag(next) != null)
+	{
+		this.ui.showError(mxResources.get('error'),
+			'A tag named "' + next + '" already exists.',
+			mxResources.get('ok'));
+		this.renderForm();
+
+		return;
+	}
+
+	var previous = tag.name;
+	var count = HmiTagDialog.rewriteReferences(this.ui, previous, next);
+
+	delete this.project.tagIndex[previous.toLowerCase()];
+	tag.name = next;
+	this.project.tagIndex[next.toLowerCase()] = tag;
+
+	this.markModified();
+	this.renderList();
+	this.renderForm();
+
+	if (count > 0)
+	{
+		HmiLog.log('renamed ' + previous + ' to ' + next + ', updated ' +
+			count + ' reference' + ((count == 1) ? '' : 's'));
+	}
+};
+
+/** Every link config field that can name a tag. */
+HmiTagDialog.REFERENCE_FIELDS = ['expr', 'tag', 'enableExpr', 'min', 'max',
+	'rateMs'];
+
+HmiTagDialog.eachReference = function(ui, fn)
+{
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+
+	var walk = function(parent)
+	{
+		var count = model.getChildCount(parent);
+
+		for (var i = 0; i < count; i++)
+		{
+			var cell = model.getChildAt(parent, i);
+			var links = HmiProject.getCellLinks(graph, cell);
+			var touched = false;
+
+			for (var key in links)
+			{
+				var cfg = links[key];
+
+				for (var f = 0; f < HmiTagDialog.REFERENCE_FIELDS.length; f++)
+				{
+					var field = HmiTagDialog.REFERENCE_FIELDS[f];
+
+					if (fn(cfg, field, cell, key))
+					{
+						touched = true;
+					}
+				}
+
+				if (cfg.bands != null)
+				{
+					for (var b = 0; b < cfg.bands.length; b++)
+					{
+						if (fn(cfg.bands[b], 'max', cell, key))
+						{
+							touched = true;
+						}
+					}
+				}
+			}
+
+			if (touched)
+			{
+				HmiProject.setCellLinks(graph, cell, links);
+			}
+
+			walk(cell);
+		}
+	};
+
+	walk(graph.getDefaultParent());
+};
+
+HmiTagDialog.findReferences = function(ui, name)
+{
+	var found = [];
+	var target = name.toLowerCase();
+
+	HmiTagDialog.eachReference(ui, function(holder, field, cell, key)
+	{
+		var src = holder[field];
+
+		if (src != null && src !== '' &&
+			HmiTagDialog.referencesTag(src, target))
+		{
+			found.push({cell: cell, link: key, field: field});
+		}
+
+		return false;
+	});
+
+	return found;
+};
+
+HmiTagDialog.referencesTag = function(src, lowerName)
+{
+	var re = new RegExp('(^|[^A-Za-z0-9_$.])' +
+		HmiTagDialog.escapeRe(lowerName) + '(?![A-Za-z0-9_$])', 'i');
+
+	return re.test(' ' + src);
+};
+
+HmiTagDialog.escapeRe = function(text)
+{
+	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+};
+
+HmiTagDialog.rewriteReferences = function(ui, from, to)
+{
+	var count = 0;
+
+	// Word boundary that also refuses a preceding dot, so Other.Tank_Level
+	// (a dotfield on a different tag) is never rewritten.
+	var re = new RegExp('(^|[^A-Za-z0-9_$.])(' +
+		HmiTagDialog.escapeRe(from) + ')(?![A-Za-z0-9_$])', 'gi');
+
+	HmiTagDialog.eachReference(ui, function(holder, field)
+	{
+		var src = holder[field];
+
+		if (src == null || src === '' || typeof src !== 'string')
+		{
+			return false;
+		}
+
+		var next = src.replace(re, function(match, prefix)
+		{
+			count++;
+
+			return prefix + to;
+		});
+
+		if (next !== src)
+		{
+			holder[field] = next;
+
+			return true;
+		}
+
+		return false;
+	});
+
+	return count;
+};
+
+HmiTagDialog.prototype.markModified = function()
+{
+	this.ui.editor.setModified(true);
+};
+
+// --------------------------------------------------------------- CSV
+
+/**
+ * A flat CSV of the scalar fields, which is what an engineer actually wants
+ * for bulk edits in a spreadsheet.
+ */
+HmiTagDialog.CSV_FIELDS = ['name', 'type', 'comment', 'engUnits', 'initial',
+	'minEU', 'maxEU', 'minRaw', 'maxRaw', 'access', 'item', 'onMsg', 'offMsg'];
+
+HmiTagDialog.prototype.exportCsv = function()
+{
+	var rows = [HmiTagDialog.CSV_FIELDS.join(',')];
+
+	for (var i = 0; i < this.project.tags.length; i++)
+	{
+		var tag = this.project.tags[i];
+		var cells = [];
+
+		for (var f = 0; f < HmiTagDialog.CSV_FIELDS.length; f++)
+		{
+			cells.push(HmiTagDialog.csvCell(tag[HmiTagDialog.CSV_FIELDS[f]]));
+		}
+
+		rows.push(cells.join(','));
+	}
+
+	var text = rows.join('\n');
+
+	this.ui.showDialog(new HmiTextDialog(this.ui, 'Export CSV', text,
+		'Copy this into a spreadsheet.').container, 620, 420, true, true);
+};
+
+HmiTagDialog.csvCell = function(value)
+{
+	if (value == null)
+	{
+		return '';
+	}
+
+	var text = '' + value;
+
+	return (/[",\n]/.test(text)) ? '"' + text.replace(/"/g, '""') + '"' : text;
+};
+
+HmiTagDialog.prototype.importCsv = function()
+{
+	var that = this;
+
+	var dlg = new HmiTextDialog(this.ui, 'Import CSV', '',
+		'Paste rows with a header line naming the columns.',
+		function(text)
+		{
+			var added = that.applyCsv(text);
+			that.ui.hideDialog();
+			that.renderList();
+			that.renderForm();
+			HmiLog.log('imported ' + added + ' tags');
+		});
+
+	this.ui.showDialog(dlg.container, 620, 420, true, true);
+};
+
+HmiTagDialog.prototype.applyCsv = function(text)
+{
+	var lines = text.split(/\r?\n/);
+	var header = null;
+	var added = 0;
+
+	for (var i = 0; i < lines.length; i++)
+	{
+		if (lines[i].trim() === '')
+		{
+			continue;
+		}
+
+		var cells = HmiTagDialog.parseCsvLine(lines[i]);
+
+		if (header == null)
+		{
+			header = cells;
+			continue;
+		}
+
+		var record = {};
+
+		for (var c = 0; c < header.length && c < cells.length; c++)
+		{
+			record[header[c].trim()] = cells[c];
+		}
+
+		if (record.name == null || record.name === '')
+		{
+			continue;
+		}
+
+		var type = record.type || 'MemoryReal';
+		var tag = this.project.getTag(record.name);
+
+		if (tag == null)
+		{
+			tag = HmiProject.createTag(record.name, type);
+			this.project.addTag(tag);
+			added++;
+		}
+
+		tag.type = type;
+
+		for (var f = 0; f < HmiTagDialog.CSV_FIELDS.length; f++)
+		{
+			var field = HmiTagDialog.CSV_FIELDS[f];
+
+			if (field === 'name' || field === 'type' ||
+				record[field] == null || record[field] === '')
+			{
+				continue;
+			}
+
+			var numeric = (field === 'minEU' || field === 'maxEU' ||
+				field === 'minRaw' || field === 'maxRaw' ||
+				(field === 'initial' && !HmiTypes.isMessage(type)));
+
+			tag[field] = (numeric) ? parseFloat(record[field]) : record[field];
+		}
+	}
+
+	this.project.reindex();
+	this.markModified();
+
+	return added;
+};
+
+HmiTagDialog.parseCsvLine = function(line)
+{
+	var cells = [];
+	var cur = '';
+	var quoted = false;
+
+	for (var i = 0; i < line.length; i++)
+	{
+		var ch = line.charAt(i);
+
+		if (quoted)
+		{
+			if (ch === '"')
+			{
+				if (line.charAt(i + 1) === '"') { cur += '"'; i++; }
+				else { quoted = false; }
+			}
+			else { cur += ch; }
+		}
+		else if (ch === '"') { quoted = true; }
+		else if (ch === ',') { cells.push(cur); cur = ''; }
+		else { cur += ch; }
+	}
+
+	cells.push(cur);
+
+	return cells;
+};
+
+// ------------------------------------------------------- generic dialogs
+
+HmiTextDialog = function(ui, title, text, hint, onAccept)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', title));
+
+	if (hint != null)
+	{
+		div.appendChild(HmiDialogs.el('div', 'hmiHint', hint));
+	}
+
+	var area = document.createElement('textarea');
+	area.className = 'hmiTextArea';
+	area.value = text || '';
+	div.appendChild(area);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}));
+
+	if (onAccept != null)
+	{
+		footer.appendChild(HmiDialogs.button(mxResources.get('ok'), function()
+		{
+			onAccept(area.value);
+		}, true));
+	}
+
+	div.appendChild(footer);
+	this.container = div;
+
+	window.setTimeout(function() { area.focus(); area.select(); }, 0);
+};
+
+// -------------------------------------------------------- access names
+
+HmiDialogs.showAccessNames = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Access Names'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+
+	var render = function()
+	{
+		body.innerText = '';
+
+		for (var i = 0; i < project.accessNames.length; i++)
+		{
+			(function(a)
+			{
+				var box = HmiDialogs.el('div', 'hmiFormBox');
+				HmiDialogs.field(box, 'Name', a.id, function(v) { a.id = v; });
+				HmiDialogs.select(box, 'Driver', a.driver,
+					['simulator', 'ethernetip'], function(v) { a.driver = v; });
+				HmiDialogs.field(box, 'Node (host or IP)', a.node,
+					function(v) { a.node = v; });
+				HmiDialogs.field(box, 'Topic / slot', a.topic,
+					function(v) { a.topic = v; });
+				HmiDialogs.field(box, 'Scan rate (ms)', a.rateMs,
+					function(v) { a.rateMs = parseInt(v, 10) || 250; });
+				body.appendChild(box);
+			})(project.accessNames[i]);
+		}
+
+		if (project.accessNames.length === 0)
+		{
+			body.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+				'No access names defined.'));
+		}
+	};
+
+	render();
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+
+	footer.appendChild(HmiDialogs.button('Add', function()
+	{
+		project.accessNames.push({id: 'PLC' + (project.accessNames.length + 1),
+			driver: 'simulator', node: '', topic: '', rateMs: 250});
+		render();
+	}));
+
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}, true));
+
+	div.appendChild(footer);
+	ui.showDialog(div, 520, 460, true, true);
+};
+
+// ---------------------------------------------------------- user input
+
+/**
+ * Runtime value entry. Validates against the link's min/max, which are
+ * themselves expressions, so the limits can track engineering ranges.
+ */
+HmiDialogs.showUserInput = function(ui, cfg)
+{
+	var rt = ui.hmiRuntime;
+
+	if (rt == null)
+	{
+		return;
+	}
+
+	var current = rt.getValue(cfg.tag);
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		cfg.prompt || 'Enter value'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', 'hmiHint', cfg.tag));
+
+	var input = null;
+	var error = HmiDialogs.el('div', 'hmiError');
+
+	if (cfg.kind === 'discrete')
+	{
+		var row = HmiDialogs.el('div', 'hmiFormRow');
+		var on = HmiDialogs.button('On', function() { accept(1); });
+		var off = HmiDialogs.button('Off', function() { accept(0); });
+		row.appendChild(on);
+		row.appendChild(off);
+		body.appendChild(row);
+	}
+	else
+	{
+		input = HmiDialogs.field(body, 'Value',
+			(current.value != null) ? current.value : '', function() {});
+	}
+
+	body.appendChild(error);
+	div.appendChild(body);
+
+	function accept(value)
+	{
+		if (cfg.kind === 'analog')
+		{
+			var n = parseFloat(value);
+
+			if (isNaN(n))
+			{
+				error.innerText = 'Enter a number.';
+
+				return;
+			}
+
+			var lo = (cfg.min != null && cfg.min !== '') ?
+				parseFloat(rt.evaluate(cfg.min).value) : NaN;
+			var hi = (cfg.max != null && cfg.max !== '') ?
+				parseFloat(rt.evaluate(cfg.max).value) : NaN;
+
+			if (!isNaN(lo) && n < lo)
+			{
+				error.innerText = 'Minimum is ' + lo + '.';
+
+				return;
+			}
+
+			if (!isNaN(hi) && n > hi)
+			{
+				error.innerText = 'Maximum is ' + hi + '.';
+
+				return;
+			}
+
+			value = n;
+		}
+
+		var writes = {};
+		writes[cfg.tag] = value;
+		var res = rt.driver.write(writes);
+
+		if (res[cfg.tag] != null && !res[cfg.tag].ok)
+		{
+			error.innerText = res[cfg.tag].error;
+
+			return;
+		}
+
+		ui.hideDialog();
+	}
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function()
+	{
+		ui.hideDialog();
+	}));
+
+	if (cfg.kind !== 'discrete')
+	{
+		footer.appendChild(HmiDialogs.button(mxResources.get('ok'), function()
+		{
+			accept(input.value);
+		}, true));
+	}
+
+	div.appendChild(footer);
+	ui.showDialog(div, 380, 240, true, true);
+
+	if (input != null)
+	{
+		window.setTimeout(function() { input.focus(); input.select(); }, 0);
+	}
+};
+
+// ---------------------------------------------------------- validation
+
+HmiDialogs.showValidation = function(ui, problems)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		'Expression Validation'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+
+	if (problems.length === 0)
+	{
+		body.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+			'No problems found.'));
+	}
+	else
+	{
+		for (var i = 0; i < problems.length; i++)
+		{
+			(function(p)
+			{
+				var row = HmiDialogs.el('div', 'hmiProblemRow');
+				row.appendChild(HmiDialogs.el('div', 'hmiProblemWhere',
+					p.page + ' › ' + p.link));
+				row.appendChild(HmiDialogs.el('div', 'hmiProblemWhat',
+					p.message));
+
+				// Clicking selects the offending cell, which is what makes
+				// this usable on a screen with hundreds of objects.
+				mxEvent.addListener(row, 'click', function()
+				{
+					ui.hideDialog();
+					ui.editor.graph.setSelectionCell(p.cell);
+					ui.editor.graph.scrollCellToVisible(p.cell);
+				});
+
+				body.appendChild(row);
+			})(problems[i]);
+		}
+	}
+
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}, true));
+
+	div.appendChild(footer);
+	ui.showDialog(div, 560, 420, true, true);
+};
+
+// ----------------------------------------------------------------- log
+
+HmiDialogs.showLog = function(ui)
+{
+	var lines = [];
+
+	for (var i = 0; i < HmiLog.ring.length; i++)
+	{
+		var e = HmiLog.ring[i];
+		lines.push(new Date(e.t).toLocaleTimeString() + '  [' + e.level +
+			']  ' + e.msg);
+	}
+
+	ui.showDialog(new HmiTextDialog(ui, 'Runtime Log',
+		(lines.length > 0) ? lines.join('\n') : 'Nothing logged.').container,
+		620, 420, true, true);
+};

@@ -41,10 +41,40 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testRuntime(ui);
+		HmiSelfTest.testMenusAndDialogs(ui);
 	}
 	catch (e)
 	{
 		console.log('HMITEST FAIL harness :: ' + e.message + ' @ ' + e.stack);
+	}
+
+	// The test edits the graph and the dictionary, which marks the file
+	// modified and leaves autosave drafts behind -- so every later launch
+	// would open with a draft-recovery prompt. Clear it down.
+	try
+	{
+		if (HmiMenus.isRunning(ui))
+		{
+			HmiMenus.stop(ui);
+		}
+
+		ui.editor.setModified(false);
+
+		var file = ui.getCurrentFile();
+
+		if (file != null)
+		{
+			file.setModified(false);
+
+			if (file.clearDraft != null)
+			{
+				file.clearDraft();
+			}
+		}
+	}
+	catch (e)
+	{
+		console.log('HMITEST cleanup :: ' + e.message);
 	}
 
 	var failed = 0;
@@ -559,4 +589,173 @@ HmiSelfTest.testRuntime = function(ui)
 		((state != null && state.shape != null) ? state.shape.fill : 'none'));
 
 	HmiSelfTest.check('runtime.reenablesEditing', graph.isEnabled());
+};
+
+/** Menu, actions, Run/Stop lifecycle and the tag dictionary. */
+HmiSelfTest.testMenusAndDialogs = function(ui)
+{
+	// --- registration -----------------------------------------------------
+
+	HmiSelfTest.check('menu.registered',
+		ui.menus != null && ui.menus.menus['hmi'] != null);
+	HmiSelfTest.check('menu.inMenubar',
+		mxUtils.indexOf(Menus.prototype.defaultMenuItems, 'hmi') >= 0,
+		Menus.prototype.defaultMenuItems.join(','));
+
+	var actions = ['hmiTagDictionary', 'hmiAccessNames', 'hmiValidate',
+		'hmiRun', 'hmiStop', 'hmiRuntimeLog'];
+	var missing = [];
+
+	for (var i = 0; i < actions.length; i++)
+	{
+		if (ui.actions.get(actions[i]) == null)
+		{
+			missing.push(actions[i]);
+		}
+	}
+
+	HmiSelfTest.check('menu.actions', missing.length === 0,
+		'missing ' + missing.join(','));
+
+	// --- tag dictionary ---------------------------------------------------
+
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var dlg = new HmiTagDialog(ui);
+	dlg.init();
+
+	HmiSelfTest.check('tagDialog.listsTags',
+		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 3,
+		'rows = ' + dlg.listDiv.getElementsByClassName('hmiTagRow').length);
+
+	dlg.filter.value = 'pump';
+	dlg.renderList();
+
+	HmiSelfTest.check('tagDialog.filters',
+		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 1);
+
+	dlg.filter.value = '';
+	dlg.renderList();
+
+	dlg.createTag('MemoryReal');
+
+	HmiSelfTest.check('tagDialog.createsTag',
+		ui.hmiProject.tags.length === 4 && dlg.selected != null);
+
+	dlg.remove();
+
+	HmiSelfTest.check('tagDialog.deletesTag',
+		ui.hmiProject.tags.length === 3);
+
+	// --- CSV --------------------------------------------------------------
+
+	var added = dlg.applyCsv(
+		'name,type,comment,minEU,maxEU\n' +
+		'CSV_Flow,IOReal,"Header, quoted",0,500\n' +
+		'CSV_Run,MemoryDiscrete,,,\n');
+
+	HmiSelfTest.check('tagDialog.csvImport', added === 2,
+		'added ' + added);
+	HmiSelfTest.check('tagDialog.csvQuotedComma',
+		ui.hmiProject.getTag('CSV_Flow') != null &&
+		ui.hmiProject.getTag('CSV_Flow').comment === 'Header, quoted',
+		(ui.hmiProject.getTag('CSV_Flow') != null) ?
+			ui.hmiProject.getTag('CSV_Flow').comment : 'missing');
+	HmiSelfTest.check('tagDialog.csvNumeric',
+		ui.hmiProject.getTag('CSV_Flow').maxEU === 500);
+
+	// --- rename rewrites references --------------------------------------
+	// A rename that does not carry its references breaks every animation
+	// using the tag, so this is asserted rather than assumed.
+
+	var graph = ui.editor.graph;
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Rename',
+			560, 40, 60, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: 'Tank_Level.MaxEU * 0.9', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]},
+		'visibility': {expr: 'NOT Tank_LevelOther', sense: 'visible'}
+	});
+
+	var refs = HmiTagDialog.findReferences(ui, 'Tank_Level');
+
+	HmiSelfTest.check('tagDialog.findsReferences', refs.length >= 2,
+		'found ' + refs.length);
+
+	dlg.selected = ui.hmiProject.getTag('Tank_Level');
+	dlg.rename(dlg.selected, 'DayTank_Level');
+
+	var after = HmiProject.getCellLinks(graph, cell);
+
+	HmiSelfTest.check('tagDialog.renameRewritesExpr',
+		after['fillColor.analog'].expr === 'DayTank_Level',
+		after['fillColor.analog'].expr);
+	HmiSelfTest.check('tagDialog.renameRewritesDotfield',
+		after['fillColor.analog'].bands[0].max === 'DayTank_Level.MaxEU * 0.9',
+		after['fillColor.analog'].bands[0].max);
+
+	// A longer name that merely starts with the old one must be left alone.
+	HmiSelfTest.check('tagDialog.renameRespectsWordBoundary',
+		after['visibility'].expr === 'NOT Tank_LevelOther',
+		after['visibility'].expr);
+	HmiSelfTest.check('tagDialog.renameUpdatesIndex',
+		ui.hmiProject.getTag('DayTank_Level') != null &&
+		ui.hmiProject.getTag('Tank_Level') == null);
+
+	// --- run / stop -------------------------------------------------------
+
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	HmiMenus.start(ui);
+
+	HmiSelfTest.check('run.starts', HmiMenus.isRunning(ui));
+	HmiSelfTest.check('run.disablesEditing', !graph.isEnabled());
+	HmiSelfTest.check('run.showsBanner',
+		document.getElementsByClassName('hmiBanner').length === 1);
+	HmiSelfTest.check('run.marksContainer',
+		ui.container.classList.contains('hmiRunning'));
+
+	HmiMenus.stop(ui);
+
+	HmiSelfTest.check('run.stops', !HmiMenus.isRunning(ui));
+	HmiSelfTest.check('run.reenablesEditing', graph.isEnabled());
+	HmiSelfTest.check('run.removesBanner',
+		document.getElementsByClassName('hmiBanner').length === 0);
+	HmiSelfTest.check('run.clearsContainer',
+		!ui.container.classList.contains('hmiRunning'));
+
+	// Starting twice must not stack runtimes or listeners.
+	HmiMenus.start(ui);
+	HmiMenus.start(ui);
+	HmiSelfTest.check('run.idempotentStart', HmiMenus.isRunning(ui));
+	HmiMenus.stop(ui);
+	HmiMenus.stop(ui);
+	HmiSelfTest.check('run.idempotentStop', !HmiMenus.isRunning(ui) &&
+		document.getElementsByClassName('hmiBanner').length === 0);
+
+	// --- validation -------------------------------------------------------
+
+	var problems = HmiMenus.checkLink(ui.hmiProject,
+		{expr: 'NoSuchTag', tag: 'AlsoMissing'});
+
+	HmiSelfTest.check('validate.reportsUnknownTags', problems.length === 2,
+		problems.join(' | '));
+
+	var clean = HmiMenus.checkLink(ui.hmiProject, {expr: 'Tank_Level'});
+
+	HmiSelfTest.check('validate.acceptsKnownTags', clean.length === 0,
+		clean.join(' | '));
 };

@@ -199,3 +199,269 @@
 {
 	background-color: rgba(255, 255, 255, 0.08);
 }
+
+/* ---------------------------------------------------------------- dialogs */
+
+.hmiDialog
+{
+	display: flex;
+	flex-direction: column;
+	height: 100%;
+	box-sizing: border-box;
+	padding: 12px;
+	font-size: 13px;
+}
+
+.hmiDialogTitle
+{
+	font-size: 15px;
+	font-weight: 600;
+	margin-bottom: 10px;
+	flex: 0 0 auto;
+}
+
+.hmiDialogBody
+{
+	display: flex;
+	gap: 12px;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.hmiDialogBodyPlain
+{
+	display: block;
+	overflow: auto;
+}
+
+.hmiDialogFooter
+{
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	margin-top: 10px;
+	flex: 0 0 auto;
+}
+
+.hmiSpacer
+{
+	flex: 1 1 auto;
+}
+
+.hmiHint
+{
+	color: gray;
+	font-size: 12px;
+	margin-bottom: 8px;
+}
+
+.hmiError
+{
+	color: #d00;
+	font-size: 12px;
+	min-height: 16px;
+	margin-top: 6px;
+}
+
+.hmiEmpty
+{
+	color: gray;
+	padding: 12px;
+	font-style: italic;
+}
+
+.hmiTextArea
+{
+	flex: 1 1 auto;
+	width: 100%;
+	box-sizing: border-box;
+	font-family: monospace;
+	font-size: 12px;
+	padding: 6px;
+	border: 1px solid #c0c0c0;
+	border-radius: 3px;
+	background-color: transparent;
+	color: inherit;
+}
+
+/* ---------------------------------------------------------- tag dictionary */
+
+.hmiTagListPane
+{
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: 300px;
+	flex: 0 0 auto;
+	min-height: 0;
+}
+
+.hmiTagList
+{
+	flex: 1 1 auto;
+	overflow: auto;
+	border: 1px solid #c0c0c0;
+	border-radius: 3px;
+	min-height: 0;
+}
+
+.hmiTagRow
+{
+	display: flex;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 8px;
+	cursor: pointer;
+	border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.hmiTagRow:hover
+{
+	background-color: rgba(0, 0, 0, 0.05);
+}
+
+.hmiTagRowOn
+{
+	background-color: rgba(26, 115, 232, 0.15);
+	font-weight: 600;
+}
+
+.hmiTagName
+{
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hmiTagType
+{
+	color: gray;
+	font-size: 11px;
+	flex: 0 0 auto;
+}
+
+.hmiTagTools
+{
+	display: flex;
+	gap: 4px;
+	flex: 0 0 auto;
+}
+
+.hmiTagForm
+{
+	flex: 1 1 auto;
+	overflow: auto;
+	min-height: 0;
+	padding-right: 4px;
+}
+
+.hmiFormRow
+{
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 6px 0;
+}
+
+.hmiFormLabel
+{
+	width: 130px;
+	flex: 0 0 auto;
+	color: gray;
+	font-size: 12px;
+}
+
+.hmiFormSection
+{
+	margin: 14px 0 4px 0;
+	font-size: 10px;
+	text-transform: uppercase;
+	letter-spacing: 0.4px;
+	color: gray;
+	border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+	padding-bottom: 2px;
+}
+
+.hmiFormBox
+{
+	border: 1px solid #c0c0c0;
+	border-radius: 3px;
+	padding: 8px;
+	margin-bottom: 8px;
+}
+
+/* ------------------------------------------------------------- validation */
+
+.hmiProblemRow
+{
+	padding: 6px 8px;
+	border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+	cursor: pointer;
+}
+
+.hmiProblemRow:hover
+{
+	background-color: rgba(0, 0, 0, 0.05);
+}
+
+.hmiProblemWhere
+{
+	font-size: 11px;
+	color: gray;
+}
+
+.hmiProblemWhat
+{
+	color: #d00;
+}
+
+/* ------------------------------------------------------------- run mode */
+
+/* A live screen and an editor canvas look alike, and mistaking one for the
+   other is how running equipment gets touched by accident. */
+.hmiBanner
+{
+	position: fixed;
+	top: 0;
+	left: 50%;
+	transform: translateX(-50%);
+	z-index: 10000;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 4px 12px;
+	border-radius: 0 0 4px 4px;
+	background-color: #0a7c2f;
+	color: #fff;
+	font-size: 12px;
+	font-weight: 600;
+	letter-spacing: 0.5px;
+	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+}
+
+.hmiBannerStop
+{
+	padding: 1px 8px;
+	font-size: 11px;
+	cursor: pointer;
+}
+
+.hmiRunning .geSidebarContainer,
+.hmiRunning .geFormatContainer
+{
+	opacity: 0.35;
+	pointer-events: none;
+}
+
+[data-theme="dark"] .hmiTagList,
+[data-theme="dark"] .hmiFormBox,
+[data-theme="dark"] .hmiTextArea
+{
+	border-color: #505050;
+}
+
+[data-theme="dark"] .hmiTagRow:hover,
+[data-theme="dark"] .hmiProblemRow:hover
+{
+	background-color: rgba(255, 255, 255, 0.08);
+}
