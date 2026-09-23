@@ -733,14 +733,18 @@ HmiRuntime.prototype.installOverrides = function()
 	{
 		var style = that.origGetCellStyle.apply(this, arguments);
 
-		return (that.running) ? that.decorateStyle(cell, style) : style;
+		return (that.running && cell != null) ?
+			that.decorateStyle(cell, style) : style;
 	};
 
 	this.origGetLabel = graph.getLabel;
 
+	// cell is not always present: upstream calls getLabel from several places
+	// (tooltips, label bounds) where it may be undefined, so guard rather than
+	// assume, or the override throws inside a render path.
 	graph.getLabel = function(cell)
 	{
-		if (that.running)
+		if (that.running && cell != null)
 		{
 			var binding = that.bindings[cell.id];
 
@@ -836,12 +840,11 @@ HmiRuntime.prototype.repaint = function(cell)
 	this.graph.cellRenderer.configureShape(state);
 	state.shape.redraw();
 
-	if (state.text != null)
-	{
-		state.text.value = this.graph.getLabel(cell);
-		state.text.apply(state);
-		state.text.redraw();
-	}
+	// redrawLabel rather than poking state.text: a shape drawn without a label
+	// has no text shape at all, so a Value Display link on it would render
+	// nothing. redrawLabel reads through graph.getLabel -- which this runtime
+	// decorates -- and creates the text shape when there is now a value.
+	this.graph.cellRenderer.redrawLabel(state, true);
 
 	this.applyVisibility(cell, state);
 	this.repaintCount++;

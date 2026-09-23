@@ -200,6 +200,51 @@
 	background-color: rgba(255, 255, 255, 0.08);
 }
 
+
+/* ------------------------------------------------- format panel overrides */
+
+/*
+ * drawio absolutely positions every select inside a format section, because
+ * its own panels place them at explicit coordinates:
+ *
+ *   .geFormatSection select { position: absolute; ... }
+ *
+ * Our rows are in normal flow, so an unqualified select is lifted out of the
+ * flow and lands on top of whatever follows it. Put ours back in the flow.
+ * It also right-aligns inputs, which reads badly for expressions.
+ */
+.geFormatSection select.hmiInput
+{
+	position: static;
+	text-align: left;
+	height: auto;
+	min-height: 22px;
+	width: 100%;
+}
+
+.geFormatSection input.hmiInput:not([type="checkbox"])
+{
+	text-align: left;
+	height: auto;
+	min-height: 22px;
+}
+
+/* Sections are nowrap for drawio's own absolutely-placed controls; ours wrap. */
+.geFormatSection .hmiRow,
+.geFormatSection .hmiBandRow,
+.geFormatSection .hmiLauncherGrid
+{
+	white-space: normal;
+}
+
+/* Blink lists three attributes with differently-sized names, so the colour
+   swatches only line up if the checkbox column has a fixed width. */
+.hmiRowInline .hmiCheck
+{
+	width: 64px;
+	flex: 0 0 auto;
+}
+
 /* ---------------------------------------------------------------- dialogs */
 
 .hmiDialog

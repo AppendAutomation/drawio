@@ -177,9 +177,46 @@ HmiFormatPanel.prototype.chipLabel = function(def)
 
 HmiFormatPanel.prototype.addLink = function(def)
 {
+	// One colour link per attribute. Discrete and Analog both drive the same
+	// property, so holding both would make the result depend on evaluation
+	// order rather than on anything the user chose. Adding one replaces the
+	// other, as InTouch's own dialog does.
+	var conflicts = HmiFormatPanel.conflictsWith(def);
+
+	for (var i = 0; i < conflicts.length; i++)
+	{
+		delete this.links[conflicts[i]];
+		delete this.editorUi.hmiUiState.expanded[conflicts[i]];
+	}
+
 	this.links[def.key] = (def.defaults != null) ? def.defaults() : {};
 	this.editorUi.hmiUiState.expanded[def.key] = true;
 	this.commit();
+};
+
+/**
+ * Link keys that cannot coexist with the given one: every other link in the
+ * same colour family, since they all write the same visual property.
+ */
+HmiFormatPanel.conflictsWith = function(def)
+{
+	var res = [];
+
+	if (HmiRuntime.COLOR_TARGET[def.key] == null)
+	{
+		return res;
+	}
+
+	for (var key in HmiTypes.LINKS)
+	{
+		if (key !== def.key &&
+			HmiRuntime.COLOR_TARGET[key] === HmiRuntime.COLOR_TARGET[def.key])
+		{
+			res.push(key);
+		}
+	}
+
+	return res;
 };
 
 HmiFormatPanel.prototype.removeLink = function(key)

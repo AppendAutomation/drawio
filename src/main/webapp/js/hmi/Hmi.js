@@ -50,6 +50,11 @@ Hmi.captureUi = function()
 		{
 			HmiSelfTest.ui = this;
 
+			if (urlParams['hmidemo'] == '1')
+			{
+				window.setTimeout(function() { HmiSelfTest.demo(Hmi.ui); }, 2000);
+			}
+
 			if (urlParams['hmitest'] == '1')
 			{
 				// After the first layout, so the format panel has a width and

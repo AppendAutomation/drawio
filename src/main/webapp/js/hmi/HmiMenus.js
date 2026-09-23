@@ -75,15 +75,19 @@ HmiMenus.installMenu = function()
 		{
 			var ui = this.editorUi;
 
+			// Action keys here must be the STRIPPED form: addAction removes a
+			// trailing '...' before storing, while addMenuItem looks the key
+			// up verbatim. Passing 'hmiTagDictionary...' finds nothing and
+			// the item is skipped silently, leaving an empty menu.
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
-				this.addMenuItems(menu, ['hmiTagDictionary...',
-					'hmiAccessNames...', '-', 'hmiValidate', '-'], parent);
+				this.addMenuItems(menu, ['hmiTagDictionary',
+					'hmiAccessNames', '-', 'hmiValidate', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
 
-				this.addMenuItems(menu, ['-', 'hmiRuntimeLog...'], parent);
+				this.addMenuItems(menu, ['-', 'hmiRuntimeLog'], parent);
 			})));
 		}));
 	};

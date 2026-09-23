@@ -42,6 +42,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
+		HmiSelfTest.testPanelLayout(ui);
 	}
 	catch (e)
 	{
@@ -51,31 +52,12 @@ HmiSelfTest.run = function(ui)
 	// The test edits the graph and the dictionary, which marks the file
 	// modified and leaves autosave drafts behind -- so every later launch
 	// would open with a draft-recovery prompt. Clear it down.
-	try
+	if (HmiMenus.isRunning(ui))
 	{
-		if (HmiMenus.isRunning(ui))
-		{
-			HmiMenus.stop(ui);
-		}
-
-		ui.editor.setModified(false);
-
-		var file = ui.getCurrentFile();
-
-		if (file != null)
-		{
-			file.setModified(false);
-
-			if (file.clearDraft != null)
-			{
-				file.clearDraft();
-			}
-		}
+		HmiMenus.stop(ui);
 	}
-	catch (e)
-	{
-		console.log('HMITEST cleanup :: ' + e.message);
-	}
+
+	HmiSelfTest.clearDraft(ui);
 
 	var failed = 0;
 
@@ -379,6 +361,26 @@ HmiSelfTest.testRuntime = function(ui)
 		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle'}
 	});
 
+	// Deliberately no label, to prove Value Display creates one.
+	var readout = null;
+
+	model.beginUpdate();
+
+	try
+	{
+		readout = graph.insertVertex(graph.getDefaultParent(), null, '',
+			300, 140, 90, 30);
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, readout, {
+		'valueDisplay': {kind: 'analog', expr: 'Tank_Level', format: '0.0',
+			prefix: '', suffix: ' %'}
+	});
+
 	var designFill = graph.getCellStyle(tank)[mxConstants.STYLE_FILLCOLOR];
 
 	// Watch the model for the whole run. Any change at all is a design
@@ -550,6 +552,25 @@ HmiSelfTest.testRuntime = function(ui)
 
 	// --- value display ----------------------------------------------------
 
+	// A shape drawn without a label has no text shape, so a Value Display on
+	// it used to render nothing at all. The cell itself was created before the
+	// model watcher was armed, since creating it is an edit like any other.
+	rt.bind();
+	rt.applyBatch({'Tank_Level': {value: 42.67,
+		quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+	rt.flush();
+
+	var readoutState = graph.view.getState(readout);
+
+	HmiSelfTest.check('runtime.valueDisplay.createsLabel',
+		readoutState != null && readoutState.text != null,
+		'no text shape was created for an unlabelled cell');
+	HmiSelfTest.check('runtime.valueDisplay.showsValue',
+		readoutState != null && readoutState.text != null &&
+		('' + readoutState.text.value).indexOf('42.7') >= 0,
+		'label = ' + ((readoutState != null && readoutState.text != null) ?
+			readoutState.text.value : 'none'));
+
 	HmiSelfTest.check('runtime.format.decimals',
 		HmiRuntime.formatNumber(42.667, '0.0') === '42.7',
 		HmiRuntime.formatNumber(42.667, '0.0'));
@@ -616,6 +637,60 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 
 	HmiSelfTest.check('menu.actions', missing.length === 0,
 		'missing ' + missing.join(','));
+
+	// Asserting the actions exist is NOT enough, and an earlier version of
+	// this test proved it: addAction strips a trailing '...' before storing
+	// while addMenuItem looks the key up verbatim, so the menu silently
+	// rendered nothing while every action resolved. Build the menu for real.
+	var rendered = [];
+
+	try
+	{
+		var fake = {
+			showDisabled: true,
+			hideShortcuts: true,
+			addItem: function(label)
+			{
+				rendered.push(label);
+
+				return document.createElement('div');
+			},
+			addSeparator: function() { rendered.push('-'); },
+			addCheckmark: function() {}
+		};
+
+		ui.menus.menus['hmi'].funct(fake, null);
+	}
+	catch (e)
+	{
+		rendered = ['threw: ' + e.message];
+	}
+
+	var items = [];
+
+	for (var i = 0; i < rendered.length; i++)
+	{
+		if (rendered[i] !== '-')
+		{
+			items.push(rendered[i]);
+		}
+	}
+
+	HmiSelfTest.check('menu.rendersItems', items.length >= 5,
+		'rendered [' + rendered.join(', ') + ']');
+	// The rendered title carries the trailing '...' from the action key.
+	var hasDictionary = false;
+
+	for (var i = 0; i < items.length; i++)
+	{
+		if (('' + items[i]).indexOf(mxResources.get('hmiTagDictionary')) === 0)
+		{
+			hasDictionary = true;
+		}
+	}
+
+	HmiSelfTest.check('menu.hasTagDictionary', hasDictionary,
+		'rendered [' + items.join(', ') + ']');
 
 	// --- tag dictionary ---------------------------------------------------
 
@@ -715,9 +790,53 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 		ui.hmiProject.getTag('DayTank_Level') != null &&
 		ui.hmiProject.getTag('Tank_Level') == null);
 
+	// --- colour link mutual exclusion ------------------------------------
+	// Discrete and Analog both drive the same visual property, so holding both
+	// would make the outcome depend on evaluation order rather than intent.
+
+	graph.setSelectionCell(cell);
+	ui.format.immediateRefresh();
+
+	var panel = null;
+
+	for (var i = 0; i < ui.format.panels.length; i++)
+	{
+		if (ui.format.panels[i] instanceof HmiFormatPanel)
+		{
+			panel = ui.format.panels[i];
+		}
+	}
+
+	if (panel != null && panel.links != null)
+	{
+		panel.addLink(HmiTypes.LINKS['fillColor.discrete']);
+		var nowLinks = HmiProject.getCellLinks(graph, cell);
+
+		HmiSelfTest.check('panel.colourExclusion.replaces',
+			nowLinks['fillColor.discrete'] != null &&
+			nowLinks['fillColor.analog'] == null,
+			Object.keys(nowLinks).join(','));
+
+		// A different attribute is untouched: line and fill coexist happily.
+		panel.addLink(HmiTypes.LINKS['lineColor.analog']);
+		nowLinks = HmiProject.getCellLinks(graph, cell);
+
+		HmiSelfTest.check('panel.colourExclusion.perAttribute',
+			nowLinks['fillColor.discrete'] != null &&
+			nowLinks['lineColor.analog'] != null,
+			Object.keys(nowLinks).join(','));
+	}
+	else
+	{
+		HmiSelfTest.check('panel.colourExclusion.available', false,
+			'no HmiFormatPanel in the format panels');
+	}
+
 	// --- run / stop -------------------------------------------------------
 
 	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var modifiedBeforeRun = ui.editor.modified;
 
 	HmiMenus.start(ui);
 
@@ -736,6 +855,11 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 		document.getElementsByClassName('hmiBanner').length === 0);
 	HmiSelfTest.check('run.clearsContainer',
 		!ui.container.classList.contains('hmiRunning'));
+
+	// Running and stopping must not by itself make the file look edited.
+	HmiSelfTest.check('run.doesNotMarkModified',
+		ui.editor.modified === modifiedBeforeRun,
+		'modified ' + modifiedBeforeRun + ' -> ' + ui.editor.modified);
 
 	// Starting twice must not stack runtimes or listeners.
 	HmiMenus.start(ui);
@@ -758,4 +882,251 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 
 	HmiSelfTest.check('validate.acceptsKnownTags', clean.length === 0,
 		clean.join(' | '));
+};
+
+/**
+ * Sets up a cell carrying every milestone-1 link and opens the Animation tab
+ * on it. Used to eyeball the panel layout, which assertions cannot judge.
+ */
+HmiSelfTest.demo = function(ui)
+{
+	var graph = ui.editor.graph;
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Demo',
+			80, 200, 120, 60);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'fillColor.analog': HmiTypes.LINKS['fillColor.analog'].defaults(),
+		'visibility': HmiTypes.LINKS['visibility'].defaults(),
+		'blink': HmiTypes.LINKS['blink'].defaults(),
+		'valueDisplay': HmiTypes.LINKS['valueDisplay'].defaults(),
+		'userInput': HmiTypes.LINKS['userInput'].defaults(),
+		'pushbutton': HmiTypes.LINKS['pushbutton'].defaults()
+	});
+
+	// Expand every section so the layout is visible all at once.
+	ui.hmiUiState = {expanded: {}};
+
+	for (var key in HmiTypes.LINKS)
+	{
+		ui.hmiUiState.expanded[key] = true;
+	}
+
+	ui.format.collapsedSections = {};
+
+	graph.setSelectionCell(cell);
+	ui.format.immediateRefresh();
+
+	// Select the Animation tab.
+	var strip = ui.format.container.firstChild;
+
+	if (strip != null && strip.childNodes.length === 4)
+	{
+		strip.childNodes[3].click();
+	}
+
+	HmiSelfTest.clearDraft(ui);
+};
+
+/**
+ * Drops the modified flag and any autosave draft, so a test or demo run does
+ * not leave a draft-recovery prompt for the next launch.
+ */
+HmiSelfTest.clearDraft = function(ui)
+{
+	try
+	{
+		ui.editor.setModified(false);
+
+		var file = ui.getCurrentFile();
+
+		if (file != null)
+		{
+			file.setModified(false);
+
+			if (file.clearDraft != null)
+			{
+				file.clearDraft();
+			}
+		}
+	}
+	catch (e)
+	{
+		console.log('HMITEST cleanup :: ' + e.message);
+	}
+};
+
+/**
+ * Layout regression test for the Animation panel.
+ *
+ * drawio absolutely positions every select inside a .geFormatSection, because
+ * its own panels place them at explicit coordinates. Ours are in normal flow,
+ * so without an override a select is lifted out of the flow and lands on top
+ * of the row after it. That is invisible to any assertion about values, so it
+ * is measured here instead.
+ */
+HmiSelfTest.testPanelLayout = function(ui)
+{
+	var graph = ui.editor.graph;
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Layout',
+			80, 320, 120, 60);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	// Every link type that contains a select, which is where overlap happens.
+	HmiProject.setCellLinks(graph, cell, {
+		'visibility': HmiTypes.LINKS['visibility'].defaults(),
+		'blink': HmiTypes.LINKS['blink'].defaults(),
+		'valueDisplay': HmiTypes.LINKS['valueDisplay'].defaults(),
+		'userInput': HmiTypes.LINKS['userInput'].defaults(),
+		'pushbutton': HmiTypes.LINKS['pushbutton'].defaults()
+	});
+
+	ui.hmiUiState = {expanded: {}};
+
+	for (var key in HmiTypes.LINKS)
+	{
+		ui.hmiUiState.expanded[key] = true;
+	}
+
+	ui.format.collapsedSections = {};
+	graph.setSelectionCell(cell);
+	ui.format.immediateRefresh();
+
+	var strip = ui.format.container.firstChild;
+
+	if (strip == null || strip.childNodes.length !== 4)
+	{
+		HmiSelfTest.check('layout.animationTab', false, 'no Animation tab');
+
+		return;
+	}
+
+	strip.childNodes[3].click();
+
+	var panel = ui.format.container.childNodes[4];
+
+	HmiSelfTest.check('layout.panelVisible',
+		panel != null && panel.offsetHeight > 0,
+		'panel height = ' + ((panel != null) ? panel.offsetHeight : 'none'));
+
+	if (panel == null || panel.offsetHeight === 0)
+	{
+		return;
+	}
+
+	// No select may be absolutely positioned.
+	var selects = panel.getElementsByTagName('select');
+	var absolute = [];
+
+	for (var i = 0; i < selects.length; i++)
+	{
+		if (window.getComputedStyle(selects[i]).position === 'absolute')
+		{
+			absolute.push(i);
+		}
+	}
+
+	HmiSelfTest.check('layout.selectsInFlow', absolute.length === 0,
+		absolute.length + ' of ' + selects.length + ' selects are absolute');
+
+	// No two CONTROLS may overlap. Comparing row boxes is not enough: an
+	// absolutely positioned select escapes its row entirely, so the rows stay
+	// tidy while the select sits on top of the next one. Measuring the
+	// controls is what actually reproduces what the eye sees.
+	var sections = panel.getElementsByClassName('geCollapsibleContent');
+	var overlaps = [];
+
+	for (var s = 0; s < sections.length; s++)
+	{
+		var controls = [];
+		var tags = ['input', 'select', 'textarea'];
+
+		for (var t = 0; t < tags.length; t++)
+		{
+			var found = sections[s].getElementsByTagName(tags[t]);
+
+			for (var f = 0; f < found.length; f++)
+			{
+				if (found[f].type !== 'checkbox')
+				{
+					controls.push(found[f]);
+				}
+			}
+		}
+
+		var boxes = [];
+
+		for (var r = 0; r < controls.length; r++)
+		{
+			var box = controls[r].getBoundingClientRect();
+
+			if (box.height > 0 && box.width > 0)
+			{
+				boxes.push({top: box.top, bottom: box.bottom,
+					left: box.left, right: box.right,
+					text: controls[r].tagName.toLowerCase() + '@' +
+						Math.round(box.top)});
+			}
+		}
+
+		for (var a = 0; a < boxes.length; a++)
+		{
+			for (var b = a + 1; b < boxes.length; b++)
+			{
+				// Allow a pixel of rounding slack.
+				if (boxes[a].top < boxes[b].bottom - 1 &&
+					boxes[b].top < boxes[a].bottom - 1 &&
+					boxes[a].left < boxes[b].right - 1 &&
+					boxes[b].left < boxes[a].right - 1)
+				{
+					overlaps.push(boxes[a].text + ' / ' + boxes[b].text);
+				}
+			}
+		}
+	}
+
+	HmiSelfTest.check('layout.noOverlappingControls', overlaps.length === 0,
+		overlaps.join(' | '));
+
+	// The three blink colour swatches must share a left edge.
+	var swatches = panel.getElementsByClassName('hmiColor');
+	var lefts = {};
+
+	for (var i = 0; i < swatches.length; i++)
+	{
+		var parent = swatches[i].parentNode;
+
+		if (parent != null && parent.className.indexOf('hmiRowInline') >= 0)
+		{
+			lefts[Math.round(swatches[i].getBoundingClientRect().left)] = true;
+		}
+	}
+
+	HmiSelfTest.check('layout.blinkSwatchesAligned',
+		Object.keys(lefts).length <= 1,
+		'left edges at ' + Object.keys(lefts).join(', '));
+
+	ui.editor.setModified(false);
 };
