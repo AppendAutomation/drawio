@@ -86,6 +86,29 @@ HmiSimulator.prototype.subscribe = function(paths, rateMs)
 	this.rateMs = rateMs || 250;
 	this.unsubscribe();
 
+	// A subscription opens with a full snapshot of everything asked for, not
+	// with the first delta. Otherwise a tag that never changes -- a memory
+	// discrete sitting at its initial value, say -- is never sent at all, and
+	// the subscriber's cache holds null for it forever. That makes a
+	// pushbutton read null instead of 0 and a value display show nothing,
+	// which looks exactly like a dead link.
+	var snapshot = {};
+
+	for (var i = 0; i < paths.length; i++)
+	{
+		var tag = this.project.getTag(paths[i]);
+
+		if (tag != null)
+		{
+			snapshot[tag.name] = this.get(tag.name);
+		}
+	}
+
+	if (Object.keys(snapshot).length > 0)
+	{
+		this.emit('change', snapshot);
+	}
+
 	var that = this;
 	this.timer = window.setInterval(function() { that.scan(); }, this.rateMs);
 	this.scan();

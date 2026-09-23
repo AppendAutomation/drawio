@@ -1130,3 +1130,260 @@ HmiSelfTest.testPanelLayout = function(ui)
 
 	ui.editor.setModified(false);
 };
+
+/**
+ * End-to-end run-mode test driven the way a person drives it.
+ *
+ * The synchronous tests call handleTouch and flush() directly, which proves the
+ * logic but skips the two things that actually carry it in use: real mouse
+ * events reaching the graph, and the requestAnimationFrame flush. Both are
+ * exercised here, on real elapsed time.
+ *
+ * Asynchronous, so it reports separately from the main suite.
+ */
+HmiSelfTest.runLive = function(ui)
+{
+	ui = ui || HmiSelfTest.ui;
+
+	var graph = ui.editor.graph;
+	var project = new HmiProject();
+	project.accessNames.push({id: 'PLC1', driver: 'simulator', node: '',
+		topic: '', rateMs: 100});
+
+	var level = HmiProject.createTag('Tank_Level', 'IOReal');
+	level.minEU = 0;
+	level.maxEU = 100;
+	level.sim = {mode: 'ramp', periodMs: '4000'};
+	project.addTag(level);
+	project.addTag(HmiProject.createTag('Pump1_Run', 'MemoryDiscrete'));
+
+	ui.hmiProject = project;
+
+	// Clear the canvas so hit-testing cannot land on leftovers.
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		graph.removeCells(graph.getChildCells(graph.getDefaultParent(),
+			true, true));
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	var readout = null;
+	var button = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		readout = graph.insertVertex(graph.getDefaultParent(), null, '',
+			80, 80, 140, 50);
+		button = graph.insertVertex(graph.getDefaultParent(), null, 'PB',
+			80, 200, 140, 50);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, readout, {
+		'valueDisplay': {kind: 'analog', expr: 'Tank_Level', format: '0.0',
+			prefix: '', suffix: ' %'}
+	});
+
+	HmiProject.setCellLinks(graph, button, {
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle'}
+	});
+
+	var entry = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		entry = graph.insertVertex(graph.getDefaultParent(), null, 'SP',
+			80, 320, 140, 50);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, entry, {
+		'userInput': {kind: 'analog', tag: 'Tank_Level', min: '0',
+			max: 'Tank_Level.MaxEU', prompt: 'Setpoint', keypad: false}
+	});
+
+	graph.clearSelection();
+	HmiMenus.start(ui);
+
+	HmiSelfTest.check('live.started', HmiMenus.isRunning(ui));
+
+	// Let the simulator scan and the animation frames run for real.
+	window.setTimeout(function()
+	{
+		var rt = ui.hmiRuntime;
+
+		HmiSelfTest.check('live.driverProducedValues',
+			rt != null && rt.getValue('Tank_Level').value != null,
+			'value = ' + ((rt != null) ?
+				rt.getValue('Tank_Level').value : 'no runtime'));
+
+		HmiSelfTest.check('live.repaintsHappened',
+			rt != null && rt.repaintCount > 0,
+			'repaintCount = ' + ((rt != null) ? rt.repaintCount : 'n/a'));
+
+		var state = graph.view.getState(readout);
+		var label = (state != null && state.text != null) ?
+			('' + state.text.value) : null;
+
+		HmiSelfTest.check('live.valueDisplayRenders',
+			label != null && /\d/.test(label) && label.indexOf('%') >= 0,
+			'label = ' + label);
+
+		// --- touch path -----------------------------------------------------
+
+		var touches = [];
+		var origTouch = rt.handleTouch;
+
+		rt.handleTouch = function(cell, phase)
+		{
+			touches.push(phase + ':' + ((cell != null) ? cell.id : 'null'));
+
+			return origTouch.apply(this, arguments);
+		};
+
+		// A tag that never changes must still be known: the driver sends a
+		// snapshot when a subscription opens, otherwise the runtime's cache
+		// holds null for it and every link reading it looks dead.
+		HmiSelfTest.check('live.initialValueKnown',
+			rt.getValue('Pump1_Run').value != null,
+			'Pump1_Run = ' + rt.getValue('Pump1_Run').value);
+
+		// The real thing, through the DOM.
+		var beforeDom = rt.getValue('Pump1_Run').value;
+		var domTouchesBefore = touches.length;
+		HmiSelfTest.clickCell(graph, button);
+		var before = beforeDom;
+
+		HmiSelfTest.check('live.domClickReachesGraph',
+			touches.length > domTouchesBefore,
+			'a real mouse sequence produced no touch; touches so far [' +
+			touches.join(', ') + ']');
+
+		// One gesture must produce exactly one click phase. Two would toggle
+		// twice and land back where it started, which reads as "nothing
+		// happened" rather than as a bug.
+		var clickPhases = 0;
+
+		for (var i = domTouchesBefore; i < touches.length; i++)
+		{
+			if (touches[i].indexOf('click:') === 0) { clickPhases++; }
+		}
+
+		HmiSelfTest.check('live.oneClickPerGesture', clickPhases === 1,
+			clickPhases + ' click phases from one gesture [' +
+			touches.slice(domTouchesBefore).join(', ') + ']');
+
+		window.setTimeout(function()
+		{
+			var after = rt.getValue('Pump1_Run').value;
+
+			HmiSelfTest.check('live.pushbuttonToggles', after !== before,
+				'Pump1_Run ' + before + ' -> ' + after);
+
+			// User Input: a click must reach the handler the menu injected,
+			// with the link config, rather than opening nothing at all.
+			var prompted = null;
+			rt.onUserInput = function(cfg) { prompted = cfg; };
+			HmiSelfTest.clickCell(graph, entry);
+
+			HmiSelfTest.check('live.userInputPrompts',
+				prompted != null && prompted.tag === 'Tank_Level',
+				'handler got ' + JSON.stringify(prompted));
+
+			// Its limits are expressions, evaluated against the dictionary.
+			var limit = (prompted != null) ?
+				rt.evaluate(prompted.max) : {value: null};
+
+			HmiSelfTest.check('live.userInputLimitIsExpression',
+				parseFloat(limit.value) === 100,
+				'max evaluated to ' + limit.value);
+
+			// And a write through the driver reaches the runtime's cache.
+			rt.driver.write({'Tank_Level': 42});
+
+			HmiSelfTest.check('live.userInputWriteApplies',
+				parseFloat(rt.getValue('Tank_Level').value) === 42,
+				'Tank_Level = ' + rt.getValue('Tank_Level').value);
+
+			HmiMenus.stop(ui);
+			HmiSelfTest.clearDraft(ui);
+
+			var failed = 0;
+
+			for (var i = 0; i < HmiSelfTest.results.length; i++)
+			{
+				if (!HmiSelfTest.results[i].pass) { failed++; }
+			}
+
+			console.log('HMILIVE DONE total=' + HmiSelfTest.results.length +
+				' failed=' + failed);
+		}, 400);
+	}, 1200);
+};
+
+/**
+ * Dispatches a real pointer/mouse sequence at the centre of a cell, going
+ * through the graph container exactly as a person's click does.
+ */
+HmiSelfTest.clickCell = function(graph, cell)
+{
+	var state = graph.view.getState(cell);
+
+	if (state == null)
+	{
+		HmiSelfTest.check('live.clickTarget', false, 'no state for cell');
+
+		return;
+	}
+
+	var container = graph.container;
+	var box = container.getBoundingClientRect();
+	var x = box.left + state.x + state.width / 2 - container.scrollLeft;
+	var y = box.top + state.y + state.height / 2 - container.scrollTop;
+
+	var target = document.elementFromPoint(x, y) || container;
+
+	HmiSelfTest.check('live.clickTargetInCanvas',
+		container.contains(target) || target === container,
+		'elementFromPoint gave ' + ((target != null) ? target.nodeName : 'null'));
+
+	// Dispatch ONE event family. A browser correlates its own pointer and
+	// mouse events so mxGraph sees a single gesture; two hand-made families
+	// are uncorrelated and arrive as two gestures, which double-fires the
+	// click and makes a toggle look like it did nothing.
+	var usePointer = (window.PointerEvent != null);
+	var phases = ['down', 'up'];
+
+	for (var i = 0; i < phases.length; i++)
+	{
+		var opts = {bubbles: true, cancelable: true, clientX: x, clientY: y,
+			button: 0, buttons: (phases[i] === 'down') ? 1 : 0};
+
+		if (usePointer)
+		{
+			opts.pointerId = 1;
+			opts.pointerType = 'mouse';
+			opts.isPrimary = true;
+			target.dispatchEvent(new PointerEvent('pointer' + phases[i], opts));
+		}
+		else
+		{
+			target.dispatchEvent(new MouseEvent('mouse' + phases[i], opts));
+		}
+	}
+};

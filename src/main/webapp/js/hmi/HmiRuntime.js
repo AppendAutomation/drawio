@@ -940,39 +940,55 @@ HmiRuntime.prototype.stopBlinkTimers = function()
 // ---------------------------------------------------------------- input
 
 /**
- * mxGraph.click fires mxEvent.CLICK before its isEnabled() guard, so touch
- * links keep working while editing is disabled. Listeners are installed on
- * start and removed on stop, so edit mode is never affected.
+ * Touch input.
+ *
+ * Deliberately NOT built on mxEvent.CLICK. Stock mxGraph.click fires that
+ * event before its isEnabled() guard, which would have been ideal here, but
+ * Graph.prototype.addClickHandler replaces the method outright:
+ *
+ *   // Ignores built-in click handling
+ *   graph.click = function(me) {};
+ *
+ * so in drawio no mouse gesture ever produces a CLICK event. A listener on it
+ * looks correct, tests green against a hand-fired event, and never once fires
+ * in the running application.
+ *
+ * Mouse listeners are dispatched normally with the graph disabled, so the
+ * click is derived here: a press and release on the same cell. Listeners are
+ * added on start and removed on stop, so edit mode is untouched.
  */
 HmiRuntime.prototype.installInput = function()
 {
 	var that = this;
 
-	this.clickListener = function(sender, evt)
-	{
-		var cell = evt.getProperty('cell');
-
-		if (cell != null)
-		{
-			that.handleTouch(cell, 'click');
-		}
-	};
-
-	this.graph.addListener(mxEvent.CLICK, this.clickListener);
-
 	this.mouseListener = {
 		mouseDown: function(sender, me)
 		{
 			var cell = me.getCell();
+			that.downCell = cell;
 
-			if (cell != null) { that.handleTouch(cell, 'down'); }
+			if (cell != null)
+			{
+				that.handleTouch(cell, 'down');
+			}
 		},
 		mouseMove: function() {},
 		mouseUp: function(sender, me)
 		{
 			var cell = me.getCell();
 
-			if (cell != null) { that.handleTouch(cell, 'up'); }
+			if (cell != null)
+			{
+				that.handleTouch(cell, 'up');
+
+				// Released on the cell it was pressed on: that is a click.
+				if (cell === that.downCell)
+				{
+					that.handleTouch(cell, 'click');
+				}
+			}
+
+			that.downCell = null;
 		}
 	};
 
@@ -981,17 +997,13 @@ HmiRuntime.prototype.installInput = function()
 
 HmiRuntime.prototype.removeInput = function()
 {
-	if (this.clickListener != null)
-	{
-		this.graph.removeListener(this.clickListener);
-		this.clickListener = null;
-	}
-
 	if (this.mouseListener != null)
 	{
 		this.graph.removeMouseListener(this.mouseListener);
 		this.mouseListener = null;
 	}
+
+	this.downCell = null;
 };
 
 HmiRuntime.prototype.handleTouch = function(cell, phase)
