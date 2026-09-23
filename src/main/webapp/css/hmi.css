@@ -125,6 +125,25 @@
 	font-family: monospace;
 }
 
+/*
+ * Placeholders are hints, not values. At the inherited text colour a hint like
+ * a tag name reads as a filled-in field, and the reader has no way to tell
+ * that the box is actually empty. Muted and italic, and never a string that
+ * would be valid if it were real.
+ */
+.hmiInput::placeholder
+{
+	color: light-dark(#9aa0a6, #7a7f85);
+	font-style: italic;
+	font-family: inherit;
+	opacity: 1;
+}
+
+[data-theme="dark"] .hmiInput::placeholder
+{
+	color: #7a7f85;
+}
+
 .hmiInvalid
 {
 	border-color: #d00 !important;

@@ -15,7 +15,7 @@
 	function discreteColor(content, cfg)
 	{
 		this.addRow(content, mxResources.get('hmiExpression'),
-			this.createExprField(cfg, 'expr', 'Pump1_Run'));
+			this.createExprField(cfg, 'expr', 'discrete tag or expression'));
 		this.addRow(content, mxResources.get('hmiOnColor'),
 			this.createColorField(cfg, 'on'));
 		this.addRow(content, mxResources.get('hmiOffColor'),
@@ -39,7 +39,7 @@
 		var that = this;
 
 		this.addRow(content, mxResources.get('hmiExpression'),
-			this.createExprField(cfg, 'expr', 'Tank_Level'));
+			this.createExprField(cfg, 'expr', 'analog tag or expression'));
 
 		if (cfg.bands == null)
 		{
@@ -99,7 +99,7 @@
 			mxUtils.write(lt, '<');
 			row.appendChild(lt);
 
-			row.appendChild(this.createExprField(band, 'max', 'value'));
+			row.appendChild(this.createExprField(band, 'max', 'upper limit'));
 
 			var del = document.createElement('span');
 			del.className = 'hmiChipRemove';
@@ -127,7 +127,7 @@
 	B['visibility'] = function(content, cfg)
 	{
 		this.addRow(content, mxResources.get('hmiExpression'),
-			this.createExprField(cfg, 'expr', 'NOT Alarm_Ack'));
+			this.createExprField(cfg, 'expr', 'condition'));
 		this.addRow(content, mxResources.get('hmiSense'),
 			this.createSelectField(cfg, 'sense', [
 				{value: 'visible', label: mxResources.get('hmiVisible')},
@@ -142,9 +142,9 @@
 		var that = this;
 
 		this.addRow(content, mxResources.get('hmiExpression'),
-			this.createExprField(cfg, 'expr', 'HiAlarm'));
+			this.createExprField(cfg, 'expr', 'condition'));
 		this.addRow(content, mxResources.get('hmiRate'),
-			this.createExprField(cfg, 'rateMs', '500'));
+			this.createExprField(cfg, 'rateMs', 'milliseconds'));
 
 		if (cfg.attrs == null)
 		{
@@ -218,18 +218,18 @@
 				{value: 'string', label: 'String'}
 			]));
 		this.addRow(content, mxResources.get('hmiExpression'),
-			this.createExprField(cfg, 'expr', 'Tank_Level'));
+			this.createExprField(cfg, 'expr', 'tag or expression'));
 
 		if (cfg.kind != 'string')
 		{
 			this.addRow(content, mxResources.get('hmiFormat'),
-				this.createTextField(cfg, 'format', '0.0'));
+				this.createTextField(cfg, 'format', 'e.g. 0.0'));
 		}
 
 		this.addRow(content, mxResources.get('hmiPrefix'),
-			this.createTextField(cfg, 'prefix', ''));
+			this.createTextField(cfg, 'prefix', 'text before value'));
 		this.addRow(content, mxResources.get('hmiSuffix'),
-			this.createTextField(cfg, 'suffix', ' %'));
+			this.createTextField(cfg, 'suffix', 'text after value'));
 	};
 
 	// ----------------------------------------------------------- user input
@@ -248,13 +248,13 @@
 		if (cfg.kind == 'analog')
 		{
 			this.addRow(content, mxResources.get('hmiMin'),
-				this.createExprField(cfg, 'min', '0'));
+				this.createExprField(cfg, 'min', 'no lower limit'));
 			this.addRow(content, mxResources.get('hmiMax'),
-				this.createExprField(cfg, 'max', 'Tank_Level.MaxEU'));
+				this.createExprField(cfg, 'max', 'no upper limit'));
 		}
 
 		this.addRow(content, mxResources.get('hmiPrompt'),
-			this.createTextField(cfg, 'prompt', 'Enter value'));
+			this.createTextField(cfg, 'prompt', 'shown in the entry dialog'));
 		this.addRow(content, '', this.createCheckField(cfg, 'keypad',
 			'On-screen keypad'));
 	};
@@ -273,7 +273,7 @@
 				{value: 'direct', label: 'Direct (momentary)'}
 			]));
 		this.addRow(content, mxResources.get('hmiEnableExpr'),
-			this.createExprField(cfg, 'enableExpr', ''));
+			this.createExprField(cfg, 'enableExpr', 'always enabled'));
 	};
 })();
 
@@ -287,7 +287,7 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 	var that = this;
 	var project = this.editorUi.hmiProject;
 
-	var input = this.createTextField(cfg, field, 'TagName');
+	var input = this.createTextField(cfg, field, 'tag name');
 
 	if (project != null && project.tags.length > 0)
 	{

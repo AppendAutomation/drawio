@@ -980,6 +980,9 @@ HmiSelfTest.clearDraft = function(ui)
 HmiSelfTest.testPanelLayout = function(ui)
 {
 	var graph = ui.editor.graph;
+
+	// The placeholder assertion below needs a dictionary to collide with.
+	ui.hmiProject = HmiSelfTest.sampleProject();
 	var cell = null;
 
 	graph.getModel().beginUpdate();
@@ -1123,6 +1126,31 @@ HmiSelfTest.testPanelLayout = function(ui)
 			lefts[Math.round(swatches[i].getBoundingClientRect().left)] = true;
 		}
 	}
+
+	// A placeholder must never read as a value. The original hints were real
+	// tag names, so a field showing "Tank_Level" looked filled in when it was
+	// empty -- and the user had a tag by that name, which made it convincing.
+	var inputs = panel.getElementsByTagName('input');
+	var looksReal = [];
+
+	for (var i = 0; i < inputs.length; i++)
+	{
+		var hint = inputs[i].getAttribute('placeholder');
+
+		if (hint == null || hint === '')
+		{
+			continue;
+		}
+
+		if (ui.hmiProject != null && ui.hmiProject.getTag(hint) != null)
+		{
+			looksReal.push(hint);
+		}
+	}
+
+	HmiSelfTest.check('layout.placeholdersAreNotValues',
+		looksReal.length === 0,
+		'placeholders naming real tags: ' + looksReal.join(', '));
 
 	HmiSelfTest.check('layout.blinkSwatchesAligned',
 		Object.keys(lefts).length <= 1,
