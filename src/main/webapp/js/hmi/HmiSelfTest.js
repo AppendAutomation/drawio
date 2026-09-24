@@ -44,6 +44,8 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
 		HmiSelfTest.testPanelLayout(ui);
+		HmiSelfTest.testMovement(ui);
+		HmiSelfTest.testM2Interaction(ui);
 	}
 	catch (e)
 	{
@@ -72,6 +74,35 @@ HmiSelfTest.run = function(ui)
 
 	console.log('HMITEST DONE total=' + HmiSelfTest.results.length +
 		' failed=' + failed);
+};
+
+/**
+ * Clears the canvas.
+ *
+ * The tests share one EditorUi, and setFileData replaces the model wholesale --
+ * restoring the cells that were serialised into the test file. The model's id
+ * counter starts over with the new root, so a cell inserted afterwards can be
+ * handed an id a restored cell already holds. Bindings are keyed by cell id, so
+ * two cells then share one binding and a test silently reads another test's
+ * configuration. Starting each graph-touching test from an empty canvas is the
+ * fix; it also keeps failures readable.
+ */
+HmiSelfTest.resetGraph = function(ui)
+{
+	var graph = ui.editor.graph;
+
+	graph.clearSelection();
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		graph.removeCells(graph.getChildCells(graph.getDefaultParent(),
+			true, true));
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
 };
 
 // ------------------------------------------------------------- fixtures
@@ -329,6 +360,7 @@ HmiSelfTest.testFormatTab = function(ui)
 HmiSelfTest.testRuntime = function(ui)
 {
 	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
 	var model = graph.getModel();
 	var project = HmiSelfTest.sampleProject();
 	ui.hmiProject = project;
@@ -380,28 +412,6 @@ HmiSelfTest.testRuntime = function(ui)
 	HmiProject.setCellLinks(graph, readout, {
 		'valueDisplay': {kind: 'analog', expr: 'Tank_Level', format: '0.0',
 			prefix: '', suffix: ' %'}
-	});
-
-	// A band boundary that is an expression over the dictionary, which is the
-	// whole reason for having an engine rather than literal thresholds.
-	var tank = null;
-
-	graph.getModel().beginUpdate();
-
-	try
-	{
-		tank = graph.insertVertex(graph.getDefaultParent(), null, '',
-			260, 80, 120, 60);
-	}
-	finally
-	{
-		graph.getModel().endUpdate();
-	}
-
-	HmiProject.setCellLinks(graph, tank, {
-		'fillColor.analog': {expr: 'Tank_Level', bands: [
-			{max: 'Tank_Level.MaxEU * 0.9', color: '#00CC00'},
-			{max: null, color: '#CC0000'}]}
 	});
 
 	var designFill = graph.getCellStyle(tank)[mxConstants.STYLE_FILLCOLOR];
@@ -1003,6 +1013,7 @@ HmiSelfTest.clearDraft = function(ui)
 HmiSelfTest.testPanelLayout = function(ui)
 {
 	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
 
 	// The placeholder assertion below needs a dictionary to collide with.
 	ui.hmiProject = HmiSelfTest.sampleProject();
@@ -1211,17 +1222,7 @@ HmiSelfTest.runLive = function(ui)
 	ui.hmiProject = project;
 
 	// Clear the canvas so hit-testing cannot land on leftovers.
-	graph.getModel().beginUpdate();
-
-	try
-	{
-		graph.removeCells(graph.getChildCells(graph.getDefaultParent(),
-			true, true));
-	}
-	finally
-	{
-		graph.getModel().endUpdate();
-	}
+	HmiSelfTest.resetGraph(ui);
 
 	var readout = null;
 	var button = null;
@@ -1736,4 +1737,328 @@ HmiSelfTest.testExpressions = function()
 	HmiSelfTest.check('expr.cacheInvalidatesOnEdit',
 		before.errors.length > 0 && after.errors.length === 0,
 		'before=' + before.errors.length + ' after=' + after.errors.length);
+};
+
+/**
+ * Milestone 2: geometry, percent fill, alarm colour, sliders and scripts.
+ *
+ * Geometry is asserted through the view's own state, because that is what the
+ * shape is drawn from -- and re-asserted after refresh and zoom, since the
+ * whole design rests on the adjustment being part of every validation rather
+ * than a correction applied once.
+ */
+HmiSelfTest.testMovement = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var model = graph.getModel();
+	var project = HmiSelfTest.sampleProject();
+	project.getTag('Tank_Level').alarms = {loLo: 5, low: 10, high: 90, hiHi: 95};
+	ui.hmiProject = project;
+
+	var cells = {};
+	var specs = [
+		['rot', 'orientation', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+			angleMin: '0', angleMax: '180'}],
+		['locH', 'location.horizontal', {expr: 'Tank_Level', atMin: '0',
+			atMax: '100', offsetMin: '0', offsetMax: '200'}],
+		['locV', 'location.vertical', {expr: 'Tank_Level', atMin: '0',
+			atMax: '100', offsetMin: '0', offsetMax: '-100'}],
+		['w', 'size.width', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+			pctMin: '0', pctMax: '100'}],
+		['h', 'size.height', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+			pctMin: '50', pctMax: '100'}],
+		['fillV', 'percentFill.vertical', {expr: 'Tank_Level', atMin: '0',
+			atMax: 'Tank_Level.MaxEU', pctMin: '0', pctMax: '100'}],
+		['alarm', 'fillColor.analogAlarm', {tag: 'Tank_Level',
+			loLo: '#000011', low: '#000022', normal: '#000033',
+			high: '#000044', hiHi: '#000055'}]
+	];
+
+	model.beginUpdate();
+
+	try
+	{
+		for (var i = 0; i < specs.length; i++)
+		{
+			cells[specs[i][0]] = graph.insertVertex(graph.getDefaultParent(),
+				null, '', 60 + i * 130, 420, 100, 80);
+		}
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	for (var i = 0; i < specs.length; i++)
+	{
+		var links = {};
+		links[specs[i][1]] = specs[i][2];
+		HmiProject.setCellLinks(graph, cells[specs[i][0]], links);
+	}
+
+	var design = {};
+
+	for (var k in cells)
+	{
+		var st = graph.view.getState(cells[k]);
+		design[k] = (st != null) ?
+			{x: st.x, y: st.y, width: st.width, height: st.height} : null;
+	}
+
+	var sim = new HmiSimulator(project);
+	var rt = new HmiRuntime({graph: graph, project: project, driver: sim});
+	rt.start();
+
+	function setLevel(v)
+	{
+		rt.applyBatch({'Tank_Level': {value: v,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+		rt.flush();
+		graph.view.validate();
+	}
+
+	setLevel(50);
+
+	// --- orientation ------------------------------------------------------
+
+	var rotState = graph.view.getState(cells.rot);
+
+	HmiSelfTest.check('m2.orientation',
+		rotState != null && parseFloat(
+			rotState.style[mxConstants.STYLE_ROTATION]) === 90,
+		'rotation = ' + ((rotState != null) ?
+			rotState.style[mxConstants.STYLE_ROTATION] : 'none'));
+
+	// --- location ---------------------------------------------------------
+
+	var scale = graph.view.scale;
+	var locH = graph.view.getState(cells.locH);
+
+	HmiSelfTest.check('m2.locationHorizontal',
+		Math.abs((locH.x - design.locH.x) - 100 * scale) < 1,
+		'dx = ' + (locH.x - design.locH.x) + ', wanted ' + (100 * scale));
+
+	var locV = graph.view.getState(cells.locV);
+
+	HmiSelfTest.check('m2.locationVertical',
+		Math.abs((locV.y - design.locV.y) + 50 * scale) < 1,
+		'dy = ' + (locV.y - design.locV.y) + ', wanted ' + (-50 * scale));
+
+	// --- size -------------------------------------------------------------
+
+	var wState = graph.view.getState(cells.w);
+
+	HmiSelfTest.check('m2.sizeWidth',
+		Math.abs(wState.width - design.w.width * 0.5) < 1,
+		'width = ' + wState.width + ', wanted ' + (design.w.width * 0.5));
+
+	var hState = graph.view.getState(cells.h);
+
+	HmiSelfTest.check('m2.sizeHeight',
+		Math.abs(hState.height - design.h.height * 0.75) < 1,
+		'height = ' + hState.height + ', wanted ' + (design.h.height * 0.75));
+
+	// --- percent fill (the spike) ----------------------------------------
+
+	var fillState = graph.view.getState(cells.fillV);
+	var clipRef = (fillState != null && fillState.shape != null) ?
+		fillState.shape.node.getAttribute('clip-path') : null;
+
+	HmiSelfTest.check('m2.fillClipApplied',
+		clipRef != null && clipRef.indexOf('hmiClip-') > 0,
+		'clip-path = ' + clipRef);
+
+	var clip = document.getElementById('hmiClip-' + cells.fillV.id);
+
+	HmiSelfTest.check('m2.fillClipHalf',
+		clip != null && Math.abs(
+			parseFloat(clip.firstChild.getAttribute('height')) - 0.5) < 0.01,
+		'height = ' + ((clip != null) ?
+			clip.firstChild.getAttribute('height') : 'none'));
+
+	// Vertical fill grows from the bottom, so y is the complement.
+	HmiSelfTest.check('m2.fillClipFromBottom',
+		clip != null && Math.abs(
+			parseFloat(clip.firstChild.getAttribute('y')) - 0.5) < 0.01,
+		'y = ' + ((clip != null) ? clip.firstChild.getAttribute('y') : 'none'));
+
+	// --- alarm colour -----------------------------------------------------
+
+	var alarmState = graph.view.getState(cells.alarm);
+
+	HmiSelfTest.check('m2.alarmNormal',
+		alarmState.shape.fill === '#000033',
+		'fill = ' + alarmState.shape.fill);
+
+	setLevel(97);
+
+	HmiSelfTest.check('m2.alarmHiHi',
+		graph.view.getState(cells.alarm).shape.fill === '#000055',
+		'fill = ' + graph.view.getState(cells.alarm).shape.fill);
+
+	setLevel(3);
+
+	HmiSelfTest.check('m2.alarmLoLo',
+		graph.view.getState(cells.alarm).shape.fill === '#000011',
+		'fill = ' + graph.view.getState(cells.alarm).shape.fill);
+
+	// --- survives revalidation -------------------------------------------
+
+	setLevel(50);
+	graph.refresh();
+	graph.view.validate();
+
+	HmiSelfTest.check('m2.geometrySurvivesRefresh',
+		Math.abs((graph.view.getState(cells.locH).x - design.locH.x) -
+			100 * graph.view.scale) < 1,
+		'dx after refresh = ' +
+		(graph.view.getState(cells.locH).x - design.locH.x));
+
+	graph.zoomIn();
+	var zoomScale = graph.view.scale;
+
+	HmiSelfTest.check('m2.geometrySurvivesZoom',
+		Math.abs((graph.view.getState(cells.locH).x - design.locH.x * 1) -
+			100 * zoomScale) < Math.max(2, design.locH.x),
+		'offset should scale with zoom');
+
+	var zoomClip = document.getElementById('hmiClip-' + cells.fillV.id);
+
+	HmiSelfTest.check('m2.fillSurvivesZoom',
+		zoomClip != null && Math.abs(
+			parseFloat(zoomClip.firstChild.getAttribute('height')) - 0.5) < 0.01,
+		'objectBoundingBox units should be zoom independent');
+
+	graph.zoomOut();
+
+	// --- the invariant still holds ---------------------------------------
+
+	var modifiedBefore = ui.editor.modified;
+	setLevel(20);
+
+	HmiSelfTest.check('m2.modelStillUntouched',
+		ui.editor.modified === modifiedBefore,
+		'geometry animation must not modify the file');
+
+	rt.stop();
+
+	// Design geometry must come back, and no clip paths left behind.
+	graph.view.validate();
+	var after = graph.view.getState(cells.locH);
+
+	HmiSelfTest.check('m2.geometryRestored',
+		Math.abs(after.x - design.locH.x) < 1,
+		'x = ' + after.x + ', design ' + design.locH.x);
+
+	HmiSelfTest.check('m2.clipsRemoved',
+		document.getElementById('hmiClip-' + cells.fillV.id) == null);
+
+	HmiSelfTest.clearDraft(ui);
+};
+
+/** Sliders, action scripts and window links. */
+HmiSelfTest.testM2Interaction = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var project = HmiSelfTest.sampleProject();
+	ui.hmiProject = project;
+
+	var slider = null;
+	var scripted = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		slider = graph.insertVertex(graph.getDefaultParent(), null, '',
+			60, 540, 100, 40);
+		scripted = graph.insertVertex(graph.getDefaultParent(), null, '',
+			200, 540, 100, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, slider, {
+		'slider.horizontal': {tag: 'Tank_Level', atMin: '0', atMax: '100',
+			travelMin: '0', travelMax: '100'}
+	});
+
+	HmiProject.setCellLinks(graph, scripted, {
+		'pushbutton.action': {onDown: 'Pump1_Run = 1;',
+			whileDown: '', onUp: 'Pump1_Run = 0;', everyMs: '1000'}
+	});
+
+	var sim = new HmiSimulator(project);
+	var rt = new HmiRuntime({graph: graph, project: project, driver: sim});
+	rt.start();
+
+	// --- slider -----------------------------------------------------------
+
+	rt.applyBatch({'Tank_Level': {value: 0, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}});
+	rt.flush();
+
+	var fake = {
+		x: 0,
+		getGraphX: function() { return this.x; },
+		getGraphY: function() { return 0; },
+		getCell: function() { return slider; }
+	};
+
+	rt.downCell = slider;
+	rt.beginDrag(slider, fake);
+	fake.x = 50 * graph.view.scale;
+	rt.handleDrag(fake);
+
+	HmiSelfTest.check('m2.sliderWrites',
+		Math.abs(parseFloat(sim.get('Tank_Level').value) - 50) < 1,
+		'Tank_Level = ' + sim.get('Tank_Level').value);
+
+	// Travel is clamped, so dragging past the end holds at the limit.
+	fake.x = 500 * graph.view.scale;
+	rt.handleDrag(fake);
+
+	HmiSelfTest.check('m2.sliderClamps',
+		parseFloat(sim.get('Tank_Level').value) === 100,
+		'Tank_Level = ' + sim.get('Tank_Level').value);
+
+	rt.downCell = null;
+
+	// --- action script ----------------------------------------------------
+
+	sim.write({'Pump1_Run': 0});
+	rt.handleTouch(scripted, 'down');
+
+	HmiSelfTest.check('m2.actionScriptOnDown',
+		sim.get('Pump1_Run').value === 1,
+		'Pump1_Run = ' + sim.get('Pump1_Run').value);
+
+	rt.handleTouch(scripted, 'up');
+
+	HmiSelfTest.check('m2.actionScriptOnUp',
+		sim.get('Pump1_Run').value === 0,
+		'Pump1_Run = ' + sim.get('Pump1_Run').value);
+
+	// --- disable blocks touch --------------------------------------------
+
+	HmiProject.setCellLinks(graph, scripted, {
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'set'},
+		'disable': {expr: '1'}
+	});
+
+	rt.rebind();
+	rt.flush();
+	sim.write({'Pump1_Run': 0});
+	rt.handleTouch(scripted, 'click');
+
+	HmiSelfTest.check('m2.disableBlocksTouch',
+		sim.get('Pump1_Run').value === 0,
+		'a disabled object accepted a click');
+
+	rt.stop();
+	HmiSelfTest.clearDraft(ui);
 };

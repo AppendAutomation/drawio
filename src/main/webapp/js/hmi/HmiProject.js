@@ -11,11 +11,16 @@ HmiProject = function()
 	this.tags = [];
 	this.tagIndex = {};
 
-	// Bumped whenever the dictionary changes. Compilation resolves tag names
-	// against it, so a compiled expression cached before an edit must not be
-	// served afterwards.
+	// Compilation resolves tag names against this dictionary, so the expression
+	// cache is keyed on both of these. The uid is needed as well as the
+	// revision because two different projects can easily sit at the same
+	// revision -- a freshly loaded file and a freshly built one, say -- and
+	// keying on the revision alone serves one project's compile to the other.
+	this.uid = 'p' + (++HmiProject.uidCounter);
 	this.revision = 0;
 };
+
+HmiProject.uidCounter = 0;
 
 HmiProject.prototype.touch = function()
 {

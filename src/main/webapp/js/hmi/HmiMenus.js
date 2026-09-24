@@ -169,6 +169,50 @@ HmiMenus.start = function(ui)
 			HmiDialogs.showUserInput(ui, cfg);
 		};
 
+		// A "window" in InTouch is a page here. Showing one selects it; hiding
+		// returns to the page that was showing before, which is the closest
+		// honest equivalent without a real popup window manager.
+		ui.hmiRuntime.onWindow = function(action, name)
+		{
+			HmiLog.guard('window', function()
+			{
+				if (ui.pages == null)
+				{
+					return;
+				}
+
+				if (action === 'hide')
+				{
+					if (ui.hmiPreviousPage != null)
+					{
+						ui.selectPage(ui.hmiPreviousPage);
+						ui.hmiPreviousPage = null;
+					}
+
+					return;
+				}
+
+				for (var i = 0; i < ui.pages.length; i++)
+				{
+					var page = ui.pages[i];
+					var pageName = (page.getName != null) ? page.getName() : null;
+
+					if (pageName === name && page !== ui.currentPage)
+					{
+						ui.hmiPreviousPage = ui.currentPage;
+						ui.selectPage(page);
+
+						// A new page means new cells, so rebind to them.
+						ui.hmiRuntime.rebind();
+
+						return;
+					}
+				}
+
+				HmiLog.once('window:' + name, 'no page named "' + name + '"');
+			});
+		};
+
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});

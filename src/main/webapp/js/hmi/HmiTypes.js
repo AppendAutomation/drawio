@@ -78,6 +78,7 @@ HmiTypes.FAMILIES = [
 	{id: 'lineColor', label: 'Line Color'},
 	{id: 'fillColor', label: 'Fill Color'},
 	{id: 'textColor', label: 'Text Color'},
+	{id: 'movement', label: 'Value / Movement'},
 	{id: 'display', label: 'Miscellaneous'},
 	{id: 'value', label: 'Value Display'}
 ];
@@ -89,7 +90,7 @@ HmiTypes.FAMILIES = [
  * registered here so the numeric mapping stays in one place, but the panel
  * only offers those whose milestone is <= HmiTypes.MILESTONE.
  */
-HmiTypes.MILESTONE = 1;
+HmiTypes.MILESTONE = 2;
 
 HmiTypes.LINKS = {};
 
@@ -137,12 +138,39 @@ HmiTypes.defineLink = function(key, def)
 	analogColor('textColor.analog', 802, 'textColor', 'Text Color / Analog');
 
 	// Alarm colour variants are M2; registered for code fidelity only.
-	def('lineColor.discreteAlarm', {code: 203, family: 'lineColor', label: 'Line Color / Discrete Alarm', milestone: 2});
-	def('lineColor.analogAlarm', {code: 204, family: 'lineColor', label: 'Line Color / Analog Alarm', milestone: 2});
-	def('fillColor.discreteAlarm', {code: 303, family: 'fillColor', label: 'Fill Color / Discrete Alarm', milestone: 2});
-	def('fillColor.analogAlarm', {code: 304, family: 'fillColor', label: 'Fill Color / Analog Alarm', milestone: 2});
-	def('textColor.discreteAlarm', {code: 803, family: 'textColor', label: 'Text Color / Discrete Alarm', milestone: 2});
-	def('textColor.analogAlarm', {code: 804, family: 'textColor', label: 'Text Color / Analog Alarm', milestone: 2});
+	def('lineColor.discreteAlarm', {code: 203, family: 'lineColor', label: 'Line Color / Discrete Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', on: '#CC0000', off: '#808080'};
+		}});
+	def('lineColor.analogAlarm', {code: 204, family: 'lineColor', label: 'Line Color / Analog Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', loLo: '#CC0000', low: '#CC8800',
+				normal: '#00CC00', high: '#CC8800', hiHi: '#CC0000'};
+		}});
+	def('fillColor.discreteAlarm', {code: 303, family: 'fillColor', label: 'Fill Color / Discrete Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', on: '#CC0000', off: '#808080'};
+		}});
+	def('fillColor.analogAlarm', {code: 304, family: 'fillColor', label: 'Fill Color / Analog Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', loLo: '#CC0000', low: '#CC8800',
+				normal: '#00CC00', high: '#CC8800', hiHi: '#CC0000'};
+		}});
+	def('textColor.discreteAlarm', {code: 803, family: 'textColor', label: 'Text Color / Discrete Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', on: '#CC0000', off: '#808080'};
+		}});
+	def('textColor.analogAlarm', {code: 804, family: 'textColor', label: 'Text Color / Analog Alarm', milestone: 2,
+		defaults: function()
+		{
+			return {tag: '', loLo: '#CC0000', low: '#CC8800',
+				normal: '#00CC00', high: '#CC8800', hiHi: '#CC0000'};
+		}});
 
 	// --- miscellaneous display
 
@@ -159,7 +187,11 @@ HmiTypes.defineLink = function(key, def)
 				fill: '#FF0000', line: '#FFFFFF', text: '#000000', blank: false};
 		}});
 
-	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 2});
+	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 2,
+		defaults: function()
+		{
+			return {expr: ''};
+		}});
 
 	// --- value display
 
@@ -184,21 +216,72 @@ HmiTypes.defineLink = function(key, def)
 			return {kind: 'discrete', tag: '', action: 'toggle', enableExpr: ''};
 		}});
 
-	def('pushbutton.action', {code: 402, family: 'touch', label: 'Action Script', milestone: 2});
-	def('showWindow', {code: 403, family: 'touch', label: 'Show Window', milestone: 2});
-	def('hideWindow', {code: 404, family: 'touch', label: 'Hide Window', milestone: 2});
-	def('slider.horizontal', {code: 501, family: 'touch', label: 'Slider / Horizontal', milestone: 2});
-	def('slider.vertical', {code: 511, family: 'touch', label: 'Slider / Vertical', milestone: 2});
+	def('pushbutton.action', {code: 402, family: 'touch', label: 'Action Script',
+		milestone: 2,
+		defaults: function()
+		{
+			return {onDown: '', whileDown: '', onUp: '', everyMs: '1000'};
+		}});
+
+	def('showWindow', {code: 403, family: 'touch', label: 'Show Window',
+		milestone: 2,
+		defaults: function()
+		{
+			return {window: '', enableExpr: ''};
+		}});
+
+	def('hideWindow', {code: 404, family: 'touch', label: 'Hide Window',
+		milestone: 2,
+		defaults: function()
+		{
+			return {window: '', enableExpr: ''};
+		}});
+
+	function slider(key, code, label)
+	{
+		def(key, {code: code, family: 'touch', label: label, milestone: 2,
+			defaults: function()
+			{
+				return {tag: '', atMin: '0', atMax: '100',
+					travelMin: '0', travelMax: '100'};
+			}});
+	}
+
+	slider('slider.horizontal', 501, 'Slider / Horizontal');
+	slider('slider.vertical', 511, 'Slider / Vertical');
 
 	// --- geometry, all M2
 
-	def('location.horizontal', {code: 521, family: 'display', label: 'Location / Horizontal', milestone: 2});
-	def('location.vertical', {code: 531, family: 'display', label: 'Location / Vertical', milestone: 2});
-	def('size.width', {code: 541, family: 'display', label: 'Object Size / Width', milestone: 2});
-	def('size.height', {code: 551, family: 'display', label: 'Object Size / Height', milestone: 2});
-	def('percentFill.horizontal', {code: 561, family: 'display', label: 'Percent Fill / Horizontal', milestone: 2});
-	def('percentFill.vertical', {code: 571, family: 'display', label: 'Percent Fill / Vertical', milestone: 2});
-	def('orientation', {code: 720, family: 'display', label: 'Orientation', milestone: 2});
+	// The value/movement family. Every bound is an expression, so a range can
+	// track the dictionary rather than being frozen at design time.
+	function ranged(key, code, family, label, outMin, outMax, a, b)
+	{
+		def(key, {code: code, family: family, label: label, milestone: 2,
+			outMin: outMin, outMax: outMax,
+			defaults: function()
+			{
+				var cfg = {expr: '', atMin: '0', atMax: '100'};
+				cfg[outMin] = '' + a;
+				cfg[outMax] = '' + b;
+
+				return cfg;
+			}});
+	}
+
+	ranged('location.horizontal', 521, 'movement', 'Location / Horizontal',
+		'offsetMin', 'offsetMax', -100, 100);
+	ranged('location.vertical', 531, 'movement', 'Location / Vertical',
+		'offsetMin', 'offsetMax', -100, 100);
+	ranged('size.width', 541, 'movement', 'Object Size / Width',
+		'pctMin', 'pctMax', 0, 100);
+	ranged('size.height', 551, 'movement', 'Object Size / Height',
+		'pctMin', 'pctMax', 0, 100);
+	ranged('percentFill.horizontal', 561, 'movement', 'Percent Fill / Horizontal',
+		'pctMin', 'pctMax', 0, 100);
+	ranged('percentFill.vertical', 571, 'movement', 'Percent Fill / Vertical',
+		'pctMin', 'pctMax', 0, 100);
+	ranged('orientation', 720, 'movement', 'Orientation',
+		'angleMin', 'angleMax', 0, 360);
 })();
 
 /** Link keys available in the current milestone, in registry order. */

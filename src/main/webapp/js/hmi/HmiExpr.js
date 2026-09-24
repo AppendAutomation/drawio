@@ -994,9 +994,10 @@ HmiExpr.CACHE_MAX = 500;
 HmiExpr.cacheKey = function(src, opts)
 {
 	// The dictionary takes part in compilation (unknown tags are errors), so
-	// a project edit must not be served a stale compile.
-	var stamp = (opts != null && opts.project != null) ?
-		opts.project.revision : 'none';
+	// the key carries both which dictionary and which version of it.
+	var project = (opts != null) ? opts.project : null;
+	var stamp = (project != null) ?
+		(project.uid + '#' + project.revision) : 'none';
 
 	return ((opts != null && opts.mode === 'script') ? 's:' : 'e:') +
 		stamp + ':' + src;

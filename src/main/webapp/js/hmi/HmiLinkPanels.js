@@ -335,3 +335,241 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 
 	return input;
 };
+
+/**
+ * Milestone 2 link editors.
+ *
+ * The value/movement family all share one shape -- a driving expression, an
+ * input range, and an output range -- so they are generated from the registry
+ * rather than written out six times. Every bound is an expression field, which
+ * is what lets a bargraph's top track Tank_Level.MaxEU instead of being frozen
+ * at design time.
+ */
+(function()
+{
+	var B = HmiFormatPanel.BUILDERS;
+
+	var RANGE_LABELS = {
+		offsetMin: 'Offset at minimum', offsetMax: 'Offset at maximum',
+		pctMin: 'Percent at minimum', pctMax: 'Percent at maximum',
+		angleMin: 'Angle at minimum', angleMax: 'Angle at maximum'
+	};
+
+	var RANGE_HINTS = {
+		offsetMin: 'pixels', offsetMax: 'pixels',
+		pctMin: 'percent', pctMax: 'percent',
+		angleMin: 'degrees', angleMax: 'degrees'
+	};
+
+	function ranged(content, cfg, key, def)
+	{
+		this.addRow(content, mxResources.get('hmiExpression'),
+			this.createExprField(cfg, 'expr', 'analog tag or expression'));
+		this.addRow(content, 'Value at minimum',
+			this.createExprField(cfg, 'atMin', 'input low'));
+		this.addRow(content, 'Value at maximum',
+			this.createExprField(cfg, 'atMax', 'input high'));
+		this.addRow(content, RANGE_LABELS[def.outMin],
+			this.createExprField(cfg, def.outMin, RANGE_HINTS[def.outMin]));
+		this.addRow(content, RANGE_LABELS[def.outMax],
+			this.createExprField(cfg, def.outMax, RANGE_HINTS[def.outMax]));
+	}
+
+	var movement = ['location.horizontal', 'location.vertical',
+		'size.width', 'size.height', 'percentFill.horizontal',
+		'percentFill.vertical', 'orientation'];
+
+	for (var i = 0; i < movement.length; i++)
+	{
+		B[movement[i]] = ranged;
+	}
+
+	// ---------------------------------------------------------------- disable
+
+	B['disable'] = function(content, cfg)
+	{
+		this.addRow(content, mxResources.get('hmiExpression'),
+			this.createExprField(cfg, 'expr', 'condition'));
+
+		var note = HmiDialogs.el('div', 'hmiHint',
+			'A disabled object ignores touch.');
+		content.appendChild(note);
+	};
+
+	// ---------------------------------------------------------- alarm colour
+
+	function discreteAlarmColor(content, cfg)
+	{
+		this.addRow(content, mxResources.get('hmiTag'),
+			this.createTagField(cfg, 'tag'));
+		this.addRow(content, 'In alarm', this.createColorField(cfg, 'on'));
+		this.addRow(content, 'Normal', this.createColorField(cfg, 'off'));
+	}
+
+	function analogAlarmColor(content, cfg)
+	{
+		this.addRow(content, mxResources.get('hmiTag'),
+			this.createTagField(cfg, 'tag'));
+
+		var limits = [['loLo', 'LoLo'], ['low', 'Low'], ['normal', 'Normal'],
+			['high', 'High'], ['hiHi', 'HiHi']];
+
+		for (var i = 0; i < limits.length; i++)
+		{
+			this.addRow(content, limits[i][1],
+				this.createColorField(cfg, limits[i][0]));
+		}
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'Limits come from the tag in the dictionary.'));
+	}
+
+	B['lineColor.discreteAlarm'] = discreteAlarmColor;
+	B['fillColor.discreteAlarm'] = discreteAlarmColor;
+	B['textColor.discreteAlarm'] = discreteAlarmColor;
+	B['lineColor.analogAlarm'] = analogAlarmColor;
+	B['fillColor.analogAlarm'] = analogAlarmColor;
+	B['textColor.analogAlarm'] = analogAlarmColor;
+
+	// ---------------------------------------------------------------- slider
+
+	function slider(content, cfg, key)
+	{
+		this.addRow(content, mxResources.get('hmiTag'),
+			this.createTagField(cfg, 'tag'));
+		this.addRow(content, 'Value at minimum',
+			this.createExprField(cfg, 'atMin', 'value at one end'));
+		this.addRow(content, 'Value at maximum',
+			this.createExprField(cfg, 'atMax', 'value at the other'));
+		this.addRow(content, 'Travel at minimum',
+			this.createExprField(cfg, 'travelMin', 'pixels'));
+		this.addRow(content, 'Travel at maximum',
+			this.createExprField(cfg, 'travelMax', 'pixels'));
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'Dragging writes the tag. Add a Location link on the same object ' +
+			'to make it move.'));
+	}
+
+	B['slider.horizontal'] = slider;
+	B['slider.vertical'] = slider;
+
+	// ------------------------------------------------------- window controls
+
+	function windowLink(content, cfg)
+	{
+		this.addRow(content, 'Window', this.createPageField(cfg, 'window'));
+		this.addRow(content, mxResources.get('hmiEnableExpr'),
+			this.createExprField(cfg, 'enableExpr', 'always enabled'));
+	}
+
+	B['showWindow'] = windowLink;
+	B['hideWindow'] = windowLink;
+
+	// --------------------------------------------------------- action script
+
+	B['pushbutton.action'] = function(content, cfg)
+	{
+		this.addRow(content, 'On down',
+			this.createScriptField(cfg, 'onDown'));
+		this.addRow(content, 'While down',
+			this.createScriptField(cfg, 'whileDown'));
+		this.addRow(content, 'Every (ms)',
+			this.createExprField(cfg, 'everyMs', 'milliseconds'));
+		this.addRow(content, 'On up',
+			this.createScriptField(cfg, 'onUp'));
+	};
+})();
+
+/**
+ * A page picker. A "window" in InTouch terms is a page in this fork, so the
+ * field offers the pages that actually exist rather than a free-text name that
+ * can silently point nowhere.
+ */
+HmiFormatPanel.prototype.createPageField = function(cfg, field)
+{
+	var that = this;
+	var ui = this.editorUi;
+	var options = [{value: '', label: '(none)'}];
+
+	if (ui.pages != null)
+	{
+		for (var i = 0; i < ui.pages.length; i++)
+		{
+			var name = (ui.pages[i].getName != null) ?
+				ui.pages[i].getName() : ('Page ' + (i + 1));
+			options.push({value: name, label: name});
+		}
+	}
+
+	// Keep a name that no longer matches a page, so renaming a page does not
+	// silently discard the link; it shows as unknown instead.
+	var known = false;
+
+	for (var i = 0; i < options.length; i++)
+	{
+		if (options[i].value === cfg[field]) { known = true; }
+	}
+
+	if (!known && cfg[field] != null && cfg[field] !== '')
+	{
+		options.push({value: cfg[field], label: cfg[field] + ' (missing)'});
+	}
+
+	return this.createSelectField(cfg, field, options);
+};
+
+/**
+ * A multi-line script field. Committed on blur rather than per keystroke, so
+ * one edit is one undo entry.
+ */
+HmiFormatPanel.prototype.createScriptField = function(cfg, field)
+{
+	var that = this;
+	var area = document.createElement('textarea');
+	area.className = 'hmiInput hmiScript';
+	area.setAttribute('rows', '3');
+	area.setAttribute('placeholder', 'QuickScript statements');
+	area.value = (cfg[field] != null) ? cfg[field] : '';
+
+	var validate = function()
+	{
+		if (area.value === '')
+		{
+			area.classList.remove('hmiInvalid');
+			area.removeAttribute('title');
+
+			return;
+		}
+
+		var compiled = HmiExpr.compile(area.value,
+			{project: that.editorUi.hmiProject, mode: 'script'});
+
+		if (compiled.errors.length > 0)
+		{
+			area.classList.add('hmiInvalid');
+			area.setAttribute('title', compiled.errors[0].message);
+		}
+		else
+		{
+			area.classList.remove('hmiInvalid');
+			area.removeAttribute('title');
+		}
+	};
+
+	mxEvent.addListener(area, 'input', validate);
+	mxEvent.addListener(area, 'blur', function()
+	{
+		validate();
+
+		if (cfg[field] !== area.value)
+		{
+			cfg[field] = area.value;
+			that.commit();
+		}
+	});
+
+	validate();
+
+	return area;
+};

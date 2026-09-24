@@ -150,6 +150,14 @@
 	background-color: rgba(221, 0, 0, 0.06);
 }
 
+.hmiScript
+{
+	font-family: monospace;
+	font-size: 11px;
+	resize: vertical;
+	min-height: 48px;
+}
+
 .hmiColor
 {
 	width: 28px;
@@ -209,7 +217,15 @@
 /* Dark mode: drawio sets [data-theme] / .geDarkMode on the document. */
 [data-theme="dark"] .hmiChip,
 [data-theme="dark"] .hmiInput,
-[data-theme="dark"] .hmiColor
+[data-theme="dark"] .hmiScript
+{
+	font-family: monospace;
+	font-size: 11px;
+	resize: vertical;
+	min-height: 48px;
+}
+
+.hmiColor
 {
 	border-color: #505050;
 }

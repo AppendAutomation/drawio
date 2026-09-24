@@ -90,6 +90,7 @@ HmiRuntime.prototype.stop = function()
 	this.running = false;
 
 	this.stopBlinkTimers();
+	this.stopWhileDown();
 	this.removeInput();
 
 	if (this.onChange != null)
@@ -118,6 +119,35 @@ HmiRuntime.prototype.stop = function()
 	this.graph.setEnabled(this.wasEnabled);
 
 	// Repaint from the pure model.
+	this.graph.refresh();
+};
+
+/**
+ * Rebinds to the cells currently on screen, after a page change.
+ *
+ * The subscription is reopened because a different page reads different tags,
+ * and the driver sends a snapshot on subscribe, so the new page's objects have
+ * values to render on their first frame rather than after their first change.
+ */
+HmiRuntime.prototype.rebind = function()
+{
+	if (!this.running)
+	{
+		return;
+	}
+
+	this.bind();
+
+	var paths = [];
+
+	for (var name in this.reverseIndex)
+	{
+		paths.push(name);
+	}
+
+	this.driver.unsubscribe();
+	this.driver.subscribe(paths, this.scanRateMs());
+	this.startBlinkTimers();
 	this.graph.refresh();
 };
 
@@ -520,6 +550,31 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 			visual[HmiRuntime.COLOR_TARGET[key]] = color;
 		}
 	}
+	else if (key === 'fillColor.discreteAlarm' ||
+		key === 'lineColor.discreteAlarm' || key === 'textColor.discreteAlarm')
+	{
+		var target = HmiRuntime.ALARM_TARGET[key];
+
+		if (cfg.tag)
+		{
+			visual[target] = (this.inAlarm(cfg.tag)) ? cfg.on : cfg.off;
+		}
+	}
+	else if (key === 'fillColor.analogAlarm' ||
+		key === 'lineColor.analogAlarm' || key === 'textColor.analogAlarm')
+	{
+		var target = HmiRuntime.ALARM_TARGET[key];
+
+		if (cfg.tag)
+		{
+			var band = this.alarmState(cfg.tag);
+
+			if (band != null && cfg[band] != null)
+			{
+				visual[target] = cfg[band];
+			}
+		}
+	}
 	else if (key === 'visibility')
 	{
 		var r = this.evaluate(cfg.expr);
@@ -534,6 +589,168 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 	{
 		visual.label = this.formatValue(cfg);
 	}
+	else if (key === 'disable')
+	{
+		var r = this.evaluate(cfg.expr);
+		visual.disabled = HmiRuntime.truthy(r.value);
+	}
+	else if (key === 'orientation')
+	{
+		var angle = this.mapValue(cfg, 'angleMin', 'angleMax', 0, 360);
+
+		if (angle != null)
+		{
+			// InTouch counts clockwise from the design orientation, and so
+			// does mxGraph's rotation style, so no sign flip is needed.
+			visual.rotation = angle;
+		}
+	}
+	else if (key === 'location.horizontal' || key === 'location.vertical')
+	{
+		var offset = this.mapValue(cfg, 'offsetMin', 'offsetMax', 0, 100);
+
+		if (offset != null)
+		{
+			if (key === 'location.horizontal') { visual.dx = offset; }
+			else { visual.dy = offset; }
+		}
+	}
+	else if (key === 'size.width' || key === 'size.height')
+	{
+		var pct = this.mapValue(cfg, 'pctMin', 'pctMax', 0, 100);
+
+		if (pct != null)
+		{
+			// Percent of the design size, as InTouch expresses it.
+			if (key === 'size.width') { visual.scaleX = pct / 100; }
+			else { visual.scaleY = pct / 100; }
+		}
+	}
+	else if (key === 'percentFill.horizontal' || key === 'percentFill.vertical')
+	{
+		var pct = this.mapValue(cfg, 'pctMin', 'pctMax', 0, 100);
+
+		if (pct != null)
+		{
+			visual.fillPct = pct;
+			visual.fillDir = (key === 'percentFill.horizontal') ? 'h' : 'v';
+		}
+	}
+	else if (key === 'slider.horizontal' || key === 'slider.vertical')
+	{
+		// Sliders are input only; their visual position comes from the tag,
+		// which the author expresses with a Location or Percent Fill link.
+	}
+};
+
+/**
+ * Maps the link's driving value from its input range onto an output range,
+ * clamped at both ends.
+ *
+ * Every one of the six bounds is an expression, so a range can track the
+ * dictionary -- AtMax of Tank_Level.MaxEU keeps a bargraph correct when the
+ * engineering range is edited.
+ */
+HmiRuntime.prototype.mapValue = function(cfg, outMinKey, outMaxKey,
+	outMinDefault, outMaxDefault)
+{
+	var r = this.evaluate(cfg.expr);
+
+	if (r.quality <= HmiTypes.QUALITY_BAD)
+	{
+		return null;
+	}
+
+	var value = parseFloat(r.value);
+
+	if (isNaN(value))
+	{
+		return null;
+	}
+
+	var lo = this.number(cfg.atMin, 0);
+	var hi = this.number(cfg.atMax, 100);
+	var a = this.number(cfg[outMinKey], outMinDefault);
+	var b = this.number(cfg[outMaxKey], outMaxDefault);
+
+	if (hi === lo)
+	{
+		return a;
+	}
+
+	var t = (value - lo) / (hi - lo);
+	t = Math.max(0, Math.min(1, t));
+
+	return a + (b - a) * t;
+};
+
+/** Evaluates an expression to a number, falling back when it cannot. */
+HmiRuntime.prototype.number = function(src, fallback)
+{
+	if (src == null || src === '')
+	{
+		return fallback;
+	}
+
+	var r = this.evaluate(src);
+	var n = parseFloat(r.value);
+
+	return (isNaN(n)) ? fallback : n;
+};
+
+HmiRuntime.ALARM_TARGET = {
+	'fillColor.discreteAlarm': 'fillColor', 'fillColor.analogAlarm': 'fillColor',
+	'lineColor.discreteAlarm': 'strokeColor', 'lineColor.analogAlarm': 'strokeColor',
+	'textColor.discreteAlarm': 'fontColor', 'textColor.analogAlarm': 'fontColor'
+};
+
+/**
+ * Alarm state from the tag's own limits in the dictionary, so a limit edited
+ * once is honoured by every link that colours on it.
+ */
+HmiRuntime.prototype.alarmState = function(name)
+{
+	var tag = this.project.getTag(name);
+	var live = this.getValue(name);
+
+	if (tag == null || live.quality <= HmiTypes.QUALITY_BAD)
+	{
+		return null;
+	}
+
+	var limits = tag.alarms;
+	var value = parseFloat(live.value);
+
+	if (limits == null || isNaN(value))
+	{
+		return 'normal';
+	}
+
+	// Checked outermost first, so overlapping limits resolve to the most
+	// urgent rather than to whichever was tested first.
+	if (limits.hiHi != null && value >= limits.hiHi) { return 'hiHi'; }
+	if (limits.loLo != null && value <= limits.loLo) { return 'loLo'; }
+	if (limits.high != null && value >= limits.high) { return 'high'; }
+	if (limits.low != null && value <= limits.low) { return 'low'; }
+
+	return 'normal';
+};
+
+HmiRuntime.prototype.inAlarm = function(name)
+{
+	var tag = this.project.getTag(name);
+
+	if (tag != null && HmiTypes.isDiscrete(tag.type))
+	{
+		var live = this.getValue(name);
+
+		return live.quality > HmiTypes.QUALITY_BAD &&
+			HmiRuntime.truthy(live.value);
+	}
+
+	var state = this.alarmState(name);
+
+	return state != null && state !== 'normal';
 };
 
 HmiRuntime.COLOR_TARGET = {
@@ -698,7 +915,9 @@ HmiRuntime.formatNumber = function(value, format)
 
 HmiRuntime.sameVisual = function(a, b)
 {
-	var keys = ['fillColor', 'strokeColor', 'fontColor', 'visible', 'label'];
+	var keys = ['fillColor', 'strokeColor', 'fontColor', 'visible', 'label',
+		'rotation', 'dx', 'dy', 'scaleX', 'scaleY', 'fillPct', 'fillDir',
+		'disabled'];
 
 	for (var i = 0; i < keys.length; i++)
 	{
@@ -758,6 +977,23 @@ HmiRuntime.prototype.installOverrides = function()
 	// itself has not changed the diff correctly skips a repaint, so nothing
 	// reapplies it. Hooking validateCellState makes it idempotent and
 	// revalidation-proof, exactly as decorating getCellStyle does for colour.
+	// Location and Size are not style, they are geometry. updateCellState is
+	// where the view computes a cell's bounds, and validateCellState redraws
+	// immediately afterwards -- so adjusting the bounds here lands in the very
+	// next paint and, because it runs on every validation, survives zoom, pan
+	// and refresh for free. The model is never touched.
+	this.origUpdateCellState = graph.view.updateCellState;
+
+	graph.view.updateCellState = function(state)
+	{
+		that.origUpdateCellState.apply(this, arguments);
+
+		if (that.running && state != null)
+		{
+			that.applyGeometry(state);
+		}
+	};
+
 	this.origValidateCellState = graph.view.validateCellState;
 
 	graph.view.validateCellState = function(cell, recurse)
@@ -767,6 +1003,7 @@ HmiRuntime.prototype.installOverrides = function()
 		if (that.running && state != null)
 		{
 			that.applyVisibility(cell, state);
+			that.applyFill(cell, state);
 		}
 
 		return state;
@@ -792,6 +1029,14 @@ HmiRuntime.prototype.removeOverrides = function()
 		this.graph.view.validateCellState = this.origValidateCellState;
 		this.origValidateCellState = null;
 	}
+
+	if (this.origUpdateCellState != null)
+	{
+		this.graph.view.updateCellState = this.origUpdateCellState;
+		this.origUpdateCellState = null;
+	}
+
+	HmiRuntime.clearClips(this.graph);
 };
 
 HmiRuntime.prototype.decorateStyle = function(cell, style)
@@ -808,6 +1053,9 @@ HmiRuntime.prototype.decorateStyle = function(cell, style)
 	if (v.fillColor != null) { style[mxConstants.STYLE_FILLCOLOR] = v.fillColor; }
 	if (v.strokeColor != null) { style[mxConstants.STYLE_STROKECOLOR] = v.strokeColor; }
 	if (v.fontColor != null) { style[mxConstants.STYLE_FONTCOLOR] = v.fontColor; }
+
+	// Rotation is a style key, so orientation needs no separate mechanism.
+	if (v.rotation != null) { style[mxConstants.STYLE_ROTATION] = v.rotation; }
 
 	return style;
 };
@@ -828,6 +1076,30 @@ HmiRuntime.prototype.repaint = function(cell)
 		return;
 	}
 
+	// Geometry cannot be corrected in place: applyGeometry adds offsets to the
+	// bounds the view computed, so applying it to an already-adjusted state
+	// would accumulate. Instead the state is invalidated and revalidated,
+	// which recomputes the design bounds and re-applies the offset exactly
+	// once. Targeted at the one cell, so it stays O(1).
+	if (this.hasGeometry(cell))
+	{
+		this.graph.view.invalidate(cell, false, false);
+		this.graph.view.validateCellState(cell, false);
+
+		state = this.graph.view.getState(cell);
+
+		if (state == null || state.shape == null)
+		{
+			return;
+		}
+
+		this.applyVisibility(cell, state);
+		this.applyFill(cell, state);
+		this.repaintCount++;
+
+		return;
+	}
+
 	this.decorateStyle(cell, state.style);
 
 	state.shape.resetStyles();
@@ -841,7 +1113,182 @@ HmiRuntime.prototype.repaint = function(cell)
 	this.graph.cellRenderer.redrawLabel(state, true);
 
 	this.applyVisibility(cell, state);
+	this.applyFill(cell, state);
 	this.repaintCount++;
+};
+
+/**
+ * Applies Location and Size to a cell's computed bounds.
+ *
+ * Runs inside updateCellState, before the shape is drawn, so the displacement
+ * is part of the normal paint rather than a correction applied afterwards.
+ * The model keeps its design-time geometry throughout.
+ */
+/** True when a binding displaces or resizes its cell. */
+HmiRuntime.prototype.hasGeometry = function(cell)
+{
+	var binding = this.bindings[cell.id];
+
+	if (binding == null)
+	{
+		return false;
+	}
+
+	var v = binding.visual;
+
+	return v.dx != null || v.dy != null || v.scaleX != null || v.scaleY != null;
+};
+
+HmiRuntime.prototype.applyGeometry = function(state)
+{
+	var binding = (state.cell != null) ? this.bindings[state.cell.id] : null;
+
+	if (binding == null)
+	{
+		return;
+	}
+
+	var v = binding.visual;
+	var scale = this.graph.view.scale;
+
+	// Size scales about the top-left, as InTouch does.
+	if (v.scaleX != null)
+	{
+		state.width = state.width * v.scaleX;
+	}
+
+	if (v.scaleY != null)
+	{
+		state.height = state.height * v.scaleY;
+	}
+
+	// Offsets are authored in diagram units, so they follow the zoom.
+	if (v.dx != null)
+	{
+		state.x += v.dx * scale;
+	}
+
+	if (v.dy != null)
+	{
+		state.y += v.dy * scale;
+	}
+};
+
+// ------------------------------------------------------------- percent fill
+
+/**
+ * Percent fill, via an SVG clip path on the shape node.
+ *
+ * drawio has no partial-fill primitive. A clip keeps the object's own shape --
+ * a tank outline stays a tank outline as it fills -- which an overlaid
+ * rectangle would not. objectBoundingBox units are used so the clip needs no
+ * knowledge of the cell's position, size or the current zoom, and therefore
+ * survives pan and zoom without recomputation.
+ */
+HmiRuntime.prototype.applyFill = function(cell, state)
+{
+	var binding = this.bindings[cell.id];
+
+	if (binding == null || state.shape == null || state.shape.node == null)
+	{
+		return;
+	}
+
+	var pct = binding.visual.fillPct;
+
+	if (pct == null)
+	{
+		if (state.shape.node.getAttribute('clip-path') != null)
+		{
+			state.shape.node.removeAttribute('clip-path');
+		}
+
+		return;
+	}
+
+	var dir = binding.visual.fillDir || 'v';
+	var f = Math.max(0, Math.min(1, pct / 100));
+	var id = 'hmiClip-' + cell.id;
+	var defs = HmiRuntime.clipDefs(this.graph);
+
+	if (defs == null)
+	{
+		return;
+	}
+
+	var clip = document.getElementById(id);
+
+	if (clip == null)
+	{
+		clip = document.createElementNS(mxConstants.NS_SVG, 'clipPath');
+		clip.setAttribute('id', id);
+		clip.setAttribute('clipPathUnits', 'objectBoundingBox');
+		clip.appendChild(document.createElementNS(mxConstants.NS_SVG, 'rect'));
+		defs.appendChild(clip);
+	}
+
+	var rect = clip.firstChild;
+
+	// Horizontal fills from the left, vertical from the bottom -- a tank
+	// fills upwards, which is the only reading anyone expects.
+	if (dir === 'h')
+	{
+		rect.setAttribute('x', 0);
+		rect.setAttribute('y', 0);
+		rect.setAttribute('width', (f > 0) ? f : 0.0001);
+		rect.setAttribute('height', 1);
+	}
+	else
+	{
+		rect.setAttribute('x', 0);
+		rect.setAttribute('y', 1 - f);
+		rect.setAttribute('width', 1);
+		rect.setAttribute('height', (f > 0) ? f : 0.0001);
+	}
+
+	state.shape.node.setAttribute('clip-path', 'url(#' + id + ')');
+};
+
+HmiRuntime.clipDefs = function(graph)
+{
+	var canvas = (graph.view != null) ? graph.view.getCanvas() : null;
+
+	if (canvas == null)
+	{
+		return null;
+	}
+
+	var svg = canvas.ownerSVGElement || canvas;
+	var defs = svg.getElementsByTagName('defs')[0];
+
+	if (defs == null)
+	{
+		defs = document.createElementNS(mxConstants.NS_SVG, 'defs');
+		svg.insertBefore(defs, svg.firstChild);
+	}
+
+	return defs;
+};
+
+/** Drops every clip path this runtime created, on stop. */
+HmiRuntime.clearClips = function(graph)
+{
+	var defs = HmiRuntime.clipDefs(graph);
+
+	if (defs == null)
+	{
+		return;
+	}
+
+	var clips = defs.getElementsByTagName('clipPath');
+
+	for (var i = clips.length - 1; i >= 0; i--)
+	{
+		if (('' + clips[i].getAttribute('id')).indexOf('hmiClip-') === 0)
+		{
+			defs.removeChild(clips[i]);
+		}
+	}
 };
 
 /**
@@ -879,6 +1326,10 @@ HmiRuntime.prototype.applyVisibility = function(cell, state)
  */
 HmiRuntime.prototype.startBlinkTimers = function()
 {
+	// Rebinding calls this again, so clear before arming or a page change
+	// would leave the old page's timers running.
+	this.stopBlinkTimers();
+
 	var rates = {};
 
 	for (var id in this.bindings)
@@ -960,13 +1411,15 @@ HmiRuntime.prototype.installInput = function()
 		{
 			var cell = me.getCell();
 			that.downCell = cell;
+			that.downAt = {x: me.getGraphX(), y: me.getGraphY()};
 
 			if (cell != null)
 			{
+				that.beginDrag(cell, me);
 				that.handleTouch(cell, 'down');
 			}
 		},
-		mouseMove: function() {},
+		mouseMove: function(sender, me) { that.handleDrag(me); },
 		mouseUp: function(sender, me)
 		{
 			var cell = me.getCell();
@@ -983,6 +1436,7 @@ HmiRuntime.prototype.installInput = function()
 			}
 
 			that.downCell = null;
+			that.stopWhileDown();
 		}
 	};
 
@@ -1009,8 +1463,8 @@ HmiRuntime.prototype.handleTouch = function(cell, phase)
 		return;
 	}
 
-	// An object hidden by a visibility link is not touchable, as in InTouch.
-	if (binding.visual.visible === false)
+	// Hidden or disabled objects are not touchable, as in InTouch.
+	if (binding.visual.visible === false || binding.visual.disabled === true)
 	{
 		return;
 	}
@@ -1060,4 +1514,194 @@ HmiRuntime.prototype.handleTouch = function(cell, phase)
 	{
 		this.onUserInput(input, binding);
 	}
+
+	// Window navigation. The runtime stays ignorant of pages and dialogs; the
+	// host injects a handler, exactly as it does for user input.
+	if (phase === 'click' && this.onWindow != null)
+	{
+		var show = binding.links['showWindow'];
+		var hide = binding.links['hideWindow'];
+
+		if (show != null && show.window && this.enabled(show))
+		{
+			this.onWindow('show', show.window);
+		}
+
+		if (hide != null && hide.window && this.enabled(hide))
+		{
+			this.onWindow('hide', hide.window);
+		}
+	}
+
+	// Action scripts.
+	var action = binding.links['pushbutton.action'];
+
+	if (action != null)
+	{
+		if (phase === 'down')
+		{
+			this.runScript(action.onDown);
+			this.startWhileDown(cell, action);
+		}
+		else if (phase === 'up')
+		{
+			this.stopWhileDown();
+			this.runScript(action.onUp);
+		}
+	}
+};
+
+/** True when a link has no enable expression, or it evaluates true. */
+HmiRuntime.prototype.enabled = function(cfg)
+{
+	if (cfg.enableExpr == null || cfg.enableExpr === '')
+	{
+		return true;
+	}
+
+	return HmiRuntime.truthy(this.evaluate(cfg.enableExpr).value);
+};
+
+HmiRuntime.prototype.runScript = function(src)
+{
+	if (src == null || src === '')
+	{
+		return;
+	}
+
+	var compiled = HmiExpr.compile('' + src,
+		{project: this.project, mode: 'script'});
+
+	if (compiled.errors.length > 0)
+	{
+		HmiLog.once('script:' + src, compiled.errors[0].message);
+
+		return;
+	}
+
+	var res = compiled.eval(this.context());
+
+	if (res.error != null)
+	{
+		HmiLog.once('script:' + src, res.error);
+	}
+};
+
+HmiRuntime.prototype.startWhileDown = function(cell, action)
+{
+	this.stopWhileDown();
+
+	if (action.whileDown == null || action.whileDown === '')
+	{
+		return;
+	}
+
+	var rate = this.number(action.everyMs, 1000);
+	var that = this;
+
+	this.whileDownTimer = window.setInterval(function()
+	{
+		that.runScript(action.whileDown);
+	}, Math.max(50, rate));
+};
+
+HmiRuntime.prototype.stopWhileDown = function()
+{
+	if (this.whileDownTimer != null)
+	{
+		window.clearInterval(this.whileDownTimer);
+		this.whileDownTimer = null;
+	}
+};
+
+/**
+ * Slider dragging.
+ *
+ * Travel is measured in diagram units from where the press landed, mapped back
+ * onto the tag's value range -- the same mapping the movement links use, run
+ * in reverse.
+ */
+HmiRuntime.prototype.handleDrag = function(me)
+{
+	if (this.downCell == null)
+	{
+		return;
+	}
+
+	var binding = this.bindings[this.downCell.id];
+
+	if (binding == null || binding.visual.disabled === true)
+	{
+		return;
+	}
+
+	var cfg = binding.links['slider.horizontal'] ||
+		binding.links['slider.vertical'];
+
+	if (cfg == null || !cfg.tag)
+	{
+		return;
+	}
+
+	var horizontal = (binding.links['slider.horizontal'] != null);
+	var scale = this.graph.view.scale;
+	var moved = (horizontal) ?
+		(me.getGraphX() - this.downAt.x) : (me.getGraphY() - this.downAt.y);
+	moved = moved / scale;
+
+	var t1 = this.number(cfg.travelMin, 0);
+	var t2 = this.number(cfg.travelMax, 100);
+	var v1 = this.number(cfg.atMin, 0);
+	var v2 = this.number(cfg.atMax, 100);
+
+	if (t2 === t1)
+	{
+		return;
+	}
+
+	// Screen y grows downwards, so a vertical slider counts travel upwards.
+	var travel = this.dragBase + ((horizontal) ? moved : -moved);
+	var f = (travel - t1) / (t2 - t1);
+	f = Math.max(0, Math.min(1, f));
+
+	var value = v1 + (v2 - v1) * f;
+	var writes = {};
+	writes[cfg.tag] = value;
+	this.driver.write(writes);
+};
+
+/** Where the slider's travel stood when the press landed. */
+HmiRuntime.prototype.beginDrag = function(cell, me)
+{
+	var binding = this.bindings[cell.id];
+
+	if (binding == null)
+	{
+		return;
+	}
+
+	var cfg = binding.links['slider.horizontal'] ||
+		binding.links['slider.vertical'];
+
+	if (cfg == null || !cfg.tag)
+	{
+		return;
+	}
+
+	var v1 = this.number(cfg.atMin, 0);
+	var v2 = this.number(cfg.atMax, 100);
+	var t1 = this.number(cfg.travelMin, 0);
+	var t2 = this.number(cfg.travelMax, 100);
+	var current = parseFloat(this.getValue(cfg.tag).value);
+
+	if (isNaN(current) || v2 === v1)
+	{
+		this.dragBase = t1;
+
+		return;
+	}
+
+	var f = Math.max(0, Math.min(1, (current - v1) / (v2 - v1)));
+	this.dragBase = t1 + (t2 - t1) * f;
+	this.downAt = {x: me.getGraphX(), y: me.getGraphY()};
 };
