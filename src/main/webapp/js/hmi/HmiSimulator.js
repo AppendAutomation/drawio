@@ -244,22 +244,29 @@ HmiSimulator.prototype.scan = function()
 };
 
 /**
- * Memory tags hold whatever was last written; I/O tags follow their profile,
- * defaulting to something visibly moving so a new screen animates at once.
+ * I/O tags follow a profile by default, so a new screen animates at once.
+ *
+ * Memory tags hold whatever was last written, because that is what a memory
+ * tag is for -- a pushbutton or a script owns it, and a waveform would fight
+ * whoever wrote it. But an explicitly chosen mode is honoured on them too:
+ * driving a memory tag is how a screen gets tested before any PLC exists, and
+ * the dictionary offers the Simulation section on every tag type, so ignoring
+ * it there would be the field lying about what it does.
  */
 HmiSimulator.prototype.simulate = function(tag, elapsed, prev)
 {
 	var now = Date.now();
 
-	if (!HmiTypes.isIO(tag.type))
+	var sim = tag.sim || {};
+	var mode = sim.mode;
+
+	if (!HmiTypes.isIO(tag.type) && (mode == null || mode === ''))
 	{
 		return (prev != null) ? prev :
 			{value: tag.initial || 0, quality: HmiTypes.QUALITY_GOOD,
 				timestamp: now};
 	}
 
-	var sim = tag.sim || {};
-	var mode = sim.mode;
 	var period = parseFloat(sim.periodMs);
 
 	if (isNaN(period) || period <= 0)

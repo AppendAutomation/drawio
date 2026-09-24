@@ -37,6 +37,7 @@ HmiSelfTest.run = function(ui)
 	try
 	{
 		HmiSelfTest.testExpressions();
+		HmiSelfTest.testSimulation();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
@@ -2061,4 +2062,88 @@ HmiSelfTest.testM2Interaction = function(ui)
 
 	rt.stop();
 	HmiSelfTest.clearDraft(ui);
+};
+
+/**
+ * Simulator behaviour per tag type.
+ *
+ * The dictionary offers a Simulation section on every tag type, so the driver
+ * has to honour it on every tag type -- otherwise the field silently does
+ * nothing on memory tags, which is worse than not offering it.
+ */
+HmiSelfTest.testSimulation = function()
+{
+	var project = new HmiProject();
+	project.accessNames.push({id: 'PLC1', driver: 'simulator', node: '',
+		topic: '', rateMs: 100});
+
+	var io = HmiProject.createTag('IO_Level', 'IOReal');
+	io.minEU = 0;
+	io.maxEU = 100;
+	project.addTag(io);
+
+	// A memory tag with no mode: owned by whoever writes it.
+	var held = HmiProject.createTag('Mem_Held', 'MemoryReal');
+	held.initial = 42;
+	project.addTag(held);
+
+	// A memory tag with a mode chosen in the dictionary: must animate.
+	var driven = HmiProject.createTag('Mem_Driven', 'MemoryReal');
+	driven.minEU = 0;
+	driven.maxEU = 100;
+	driven.sim = {mode: 'ramp', periodMs: '1000'};
+	project.addTag(driven);
+
+	var discrete = HmiProject.createTag('Mem_Toggle', 'MemoryDiscrete');
+	discrete.sim = {mode: 'toggle', periodMs: '1000'};
+	project.addTag(discrete);
+
+	var sim = new HmiSimulator(project);
+	sim.connect();
+
+	function at(tag, ms)
+	{
+		return sim.simulate(tag, ms, sim.get(tag.name)).value;
+	}
+
+	// I/O animates by default.
+	HmiSelfTest.check('sim.ioDefaultsToMoving',
+		at(io, 0) !== at(io, 7500),
+		'IOReal should move without any profile');
+
+	// A memory tag with no mode holds.
+	HmiSelfTest.check('sim.memoryHoldsWithoutMode',
+		at(held, 0) === at(held, 7500) && at(held, 0) === 42,
+		'Mem_Held = ' + at(held, 0) + ' then ' + at(held, 7500));
+
+	// A memory tag with a mode animates.
+	HmiSelfTest.check('sim.memoryFollowsExplicitMode',
+		at(driven, 0) !== at(driven, 500),
+		'Mem_Driven = ' + at(driven, 0) + ' then ' + at(driven, 500));
+
+	HmiSelfTest.check('sim.memoryRampSpansRange',
+		Math.abs(at(driven, 0) - 0) < 1 && Math.abs(at(driven, 900) - 90) < 5,
+		'ramp gave ' + at(driven, 0) + ' and ' + at(driven, 900));
+
+	HmiSelfTest.check('sim.memoryDiscreteToggles',
+		at(discrete, 100) === 0 && at(discrete, 600) === 1,
+		'toggle gave ' + at(discrete, 100) + ' and ' + at(discrete, 600));
+
+	// A write to a held memory tag still sticks, which is what makes
+	// pushbuttons work.
+	sim.write({'Mem_Held': 7});
+
+	HmiSelfTest.check('sim.writeStillWins',
+		sim.get('Mem_Held').value === 7 && at(held, 9000) === 7,
+		'Mem_Held = ' + sim.get('Mem_Held').value);
+
+	// Fault injection applies whatever the tag type.
+	sim.setFaulted('Mem_Held', true);
+	sim.scan();
+
+	HmiSelfTest.check('sim.faultInjectionOnMemory',
+		sim.get('Mem_Held').quality === HmiTypes.QUALITY_BAD,
+		'quality = ' + sim.get('Mem_Held').quality);
+
+	sim.setFaulted('Mem_Held', false);
 };
