@@ -2147,3 +2147,163 @@ HmiSelfTest.testSimulation = function()
 
 	sim.setFaulted('Mem_Held', false);
 };
+
+/**
+ * A real file round trip, through the desktop save and read path.
+ *
+ * Everything else asserts against getFileData/setFileData in memory. This
+ * writes an actual .drawio-hmi to disk with the app's own save machinery, reads
+ * the bytes back, and loads them -- which is the only way to know the file a
+ * person ends up with is the file the tests have been describing.
+ *
+ * The path comes from urlParams.hmifile.
+ */
+HmiSelfTest.runFile = function(ui, path)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+
+	var project = HmiSelfTest.sampleProject();
+	project.getTag('Tank_Level').alarms = {loLo: 5, low: 10, high: 90, hiHi: 95};
+	ui.hmiProject = project;
+
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Tank',
+			40, 40, 120, 80);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: 'Tank_Level.MaxEU * 0.9', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]},
+		'orientation': {expr: 'Tank_Level', atMin: '0', atMax: '100',
+			angleMin: '0', angleMax: '180'},
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle',
+			enableExpr: 'A == 1;\nB == 2;'}
+	});
+
+	var data = ui.getFileData(true);
+	var file = new LocalFile(ui, data, path.replace(/^.*[\\\/]/, ''));
+	file.fileObject = {path: path, name: path.replace(/^.*[\\\/]/, ''),
+		type: 'utf-8'};
+
+	file.save(false, function()
+	{
+		HmiSelfTest.check('file.disk.saved', true);
+
+		// Read the bytes back, exactly as opening the file would.
+		electron.request({action: 'readFile', filename: path, encoding: 'utf-8'},
+			function(text)
+			{
+				HmiSelfTest.verifyFile(ui, text);
+			},
+			function(e)
+			{
+				HmiSelfTest.check('file.disk.read', false,
+					'could not read back: ' + e);
+				HmiSelfTest.finishFile();
+			});
+	},
+	function(e)
+	{
+		HmiSelfTest.check('file.disk.saved', false, 'save failed: ' + e);
+		HmiSelfTest.finishFile();
+	});
+};
+
+HmiSelfTest.verifyFile = function(ui, text)
+{
+	// What is actually on disk.
+	HmiSelfTest.check('file.disk.hasVersionMarker',
+		text.indexOf('hmiVersion="1"') > 0);
+	HmiSelfTest.check('file.disk.hasDictionary',
+		text.indexOf('<hmiProject') > 0);
+	HmiSelfTest.check('file.disk.hasTagFields',
+		text.indexOf('Tank_Level') > 0 && text.indexOf('N7:0') > 0);
+	HmiSelfTest.check('file.disk.hasAlarms', text.indexOf('hiHi="95"') > 0);
+	HmiSelfTest.check('file.disk.hasCellLinks',
+		text.indexOf('fillColor.analog') > 0);
+
+	// Still valid drawio XML, so stock drawio can open the diagram.
+	HmiSelfTest.check('file.disk.isMxfile',
+		text.indexOf('<mxfile') >= 0 && text.indexOf('<diagram') > 0);
+
+	// Now load it as opening would.
+	ui.hmiProject = null;
+	HmiSelfTest.resetGraph(ui);
+	ui.setFileData(text);
+
+	HmiSelfTest.check('file.disk.dictionaryReturns',
+		ui.hmiProject != null && ui.hmiProject.tags.length === 3,
+		(ui.hmiProject != null) ? 'tags = ' + ui.hmiProject.tags.length : 'null');
+
+	HmiSelfTest.check('file.disk.ioFieldsReturn',
+		ui.hmiProject != null &&
+		ui.hmiProject.getTag('Tank_Level') != null &&
+		ui.hmiProject.getTag('Tank_Level').item === 'N7:0' &&
+		ui.hmiProject.getTag('Tank_Level').alarms.hiHi === 95);
+
+	// And the animations came back on the cell.
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+	var found = null;
+
+	var walk = function(parent)
+	{
+		var count = model.getChildCount(parent);
+
+		for (var i = 0; i < count; i++)
+		{
+			var c = model.getChildAt(parent, i);
+			var links = HmiProject.getCellLinks(graph, c);
+
+			if (Object.keys(links).length > 0) { found = links; }
+
+			walk(c);
+		}
+	};
+
+	walk(graph.getDefaultParent());
+
+	HmiSelfTest.check('file.disk.linksReturn',
+		found != null && found['fillColor.analog'] != null &&
+		found['orientation'] != null && found['pushbutton'] != null,
+		(found != null) ? Object.keys(found).join(',') : 'no animated cell');
+
+	HmiSelfTest.check('file.disk.bandExpressionReturns',
+		found != null && found['fillColor.analog'] != null &&
+		found['fillColor.analog'].bands[0].max === 'Tank_Level.MaxEU * 0.9',
+		(found != null && found['fillColor.analog'] != null) ?
+			found['fillColor.analog'].bands[0].max : 'none');
+
+	// The multi-line case, which is the one a flat attribute would mangle.
+	HmiSelfTest.check('file.disk.newlinesReturn',
+		found != null && found['pushbutton'] != null &&
+		found['pushbutton'].enableExpr === 'A == 1;\nB == 2;',
+		(found != null && found['pushbutton'] != null) ?
+			JSON.stringify(found['pushbutton'].enableExpr) : 'none');
+
+	HmiSelfTest.finishFile();
+};
+
+HmiSelfTest.finishFile = function()
+{
+	var failed = 0;
+
+	for (var i = 0; i < HmiSelfTest.results.length; i++)
+	{
+		if (!HmiSelfTest.results[i].pass) { failed++; }
+	}
+
+	console.log('HMIFILE DONE total=' + HmiSelfTest.results.length +
+		' failed=' + failed);
+};

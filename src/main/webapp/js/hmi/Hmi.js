@@ -50,6 +50,16 @@ Hmi.captureUi = function()
 		{
 			HmiSelfTest.ui = this;
 
+			if (urlParams['hmifile'] != null)
+			{
+				window.setTimeout(function()
+				{
+					HmiSelfTest.results = [];
+					HmiSelfTest.runFile(Hmi.ui,
+						decodeURIComponent(urlParams['hmifile']));
+				}, 2500);
+			}
+
 			if (urlParams['hmilive'] == '1')
 			{
 				window.setTimeout(function() { HmiSelfTest.runLive(Hmi.ui); }, 2500);
