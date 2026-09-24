@@ -41,6 +41,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
+		HmiSelfTest.testFilenames(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
@@ -2306,4 +2307,75 @@ HmiSelfTest.finishFile = function()
 
 	console.log('HMIFILE DONE total=' + HmiSelfTest.results.length +
 		' failed=' + failed);
+};
+
+/**
+ * File naming and the save-dialog file types.
+ *
+ * Registering the HMI type is not just a matter of adding it to the list:
+ * diagramFileTypes[0] is taken as the default by the filename dialog and the
+ * new-file flow, and upstream's normalizeFilename does not recognise a
+ * two-part extension.
+ */
+HmiSelfTest.testFilenames = function(ui)
+{
+	var types = ui.editor.diagramFileTypes;
+
+	HmiSelfTest.check('name.typeRegistered',
+		HmiSelfTest.hasFileType(types, 'drawio-hmi'),
+		types.map(function(t) { return t.extension; }).join(','));
+
+	// Ours must not lead, or every new diagram is named after it.
+	HmiSelfTest.check('name.drawioStillDefault',
+		types[0].extension === 'drawio',
+		'first type is .' + types[0].extension);
+
+	var saved = ui.hmiProject;
+
+	// A plain diagram keeps the ordinary extension.
+	ui.hmiProject = new HmiProject();
+
+	HmiSelfTest.check('name.plainKeepsDrawio',
+		ui.normalizeFilename('Untitled Diagram.drawio') ===
+			'Untitled Diagram.drawio',
+		ui.normalizeFilename('Untitled Diagram.drawio'));
+
+	// A document with a dictionary suggests ours.
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	HmiSelfTest.check('name.hmiSuggestsExtension',
+		ui.normalizeFilename('Untitled Diagram.drawio') ===
+			'Untitled Diagram.drawio-hmi',
+		ui.normalizeFilename('Untitled Diagram.drawio'));
+
+	// And a name that already carries ours is left alone, rather than coming
+	// back as Name.drawio-hmi.drawio.
+	HmiSelfTest.check('name.noDoubleExtension',
+		ui.normalizeFilename('Plant.drawio-hmi') === 'Plant.drawio-hmi',
+		ui.normalizeFilename('Plant.drawio-hmi'));
+
+	// An explicit export format still wins.
+	HmiSelfTest.check('name.explicitFormatWins',
+		ui.normalizeFilename('Plant.svg', 'svg') === 'Plant.svg',
+		ui.normalizeFilename('Plant.svg', 'svg'));
+
+	// The open dialog offers ours alongside drawio.
+	var filters = HmiFile.withHmiFilter([
+		{name: 'Diagram', extensions: ['drawio', 'xml']}]);
+
+	HmiSelfTest.check('name.openFilterIncludesHmi',
+		mxUtils.indexOf(filters[0].extensions, 'drawio-hmi') >= 0,
+		filters[0].extensions.join(','));
+
+	ui.hmiProject = saved;
+};
+
+HmiSelfTest.hasFileType = function(types, ext)
+{
+	for (var i = 0; i < types.length; i++)
+	{
+		if (types[i].extension === ext) { return true; }
+	}
+
+	return false;
 };

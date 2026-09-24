@@ -96,19 +96,64 @@ HmiFile.install = function()
 	};
 
 	// -------------------------------------------------- save dialog filter
-	// diagramFileTypes is declarative and feeds createFileSystemFilters, so
-	// prepending an entry is all the Save As dialog needs.
+	// diagramFileTypes is declarative and feeds createFileSystemFilters, which
+	// promotes whichever entry matches the current filename's extension.
 
 	if (Editor.prototype.diagramFileTypes != null)
 	{
-		Editor.prototype.diagramFileTypes = [{
-			description: 'hmiFileType',
-			extension: 'drawio-hmi',
-			mimeType: 'text/xml'
-		}].concat(Editor.prototype.diagramFileTypes);
+		// APPENDED, not prepended. The filename dialog and the new-file flow
+		// both take diagramFileTypes[0] as the default, so putting ours first
+		// renamed every new diagram to "HMI Application.drawio" -- our type's
+		// description with the ordinary extension. The save dialog promotes
+		// this entry on its own when the document actually holds HMI content,
+		// which is the only time it should lead.
+		Editor.prototype.diagramFileTypes =
+			Editor.prototype.diagramFileTypes.concat([{
+				description: 'hmiFileType',
+				extension: 'drawio-hmi',
+				mimeType: 'text/xml'
+			}]);
 	}
 
+	HmiFile.installFilename();
 	HmiFile.installOpenFilter();
+};
+
+/**
+ * Makes .drawio-hmi the suggested extension for a document that carries a tag
+ * dictionary, and stops upstream appending a second extension to a name that
+ * already has ours.
+ */
+HmiFile.installFilename = function()
+{
+	var editorUiNormalizeFilename = EditorUi.prototype.normalizeFilename;
+
+	EditorUi.prototype.normalizeFilename = function(title, defaultExtension)
+	{
+		// Upstream only recognises xml/html/drawio/png/svg/pdf, so a title
+		// that already ends in .drawio-hmi would come back as
+		// "Name.drawio-hmi.drawio".
+		if (typeof title === 'string' &&
+			title.toLowerCase().lastIndexOf(HmiFile.EXTENSION) ===
+			title.length - HmiFile.EXTENSION.length)
+		{
+			return title;
+		}
+
+		var name = editorUiNormalizeFilename.apply(this, arguments);
+
+		return HmiLog.guard('filename', mxUtils.bind(this, function()
+		{
+			if (defaultExtension == null && this.hmiProject != null &&
+				!this.hmiProject.isEmpty() &&
+				typeof name === 'string' && /\.drawio$/i.test(name))
+			{
+				return name.replace(/\.drawio$/i, HmiFile.EXTENSION);
+			}
+
+			return name;
+		}), name);
+	};
 };
 
 /**
