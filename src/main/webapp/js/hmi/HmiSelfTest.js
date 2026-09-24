@@ -38,6 +38,7 @@ HmiSelfTest.run = function(ui)
 	{
 		HmiSelfTest.testExpressions();
 		HmiSelfTest.testSimulation();
+		HmiSelfTest.testConditionals();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
@@ -2618,4 +2619,172 @@ HmiSelfTest.testScriptFields = function(ui)
 		'stored ' + ((back != null) ? JSON.stringify(back.onDown) : 'nothing'));
 
 	HmiSelfTest.clearDraft(ui);
+};
+
+/** IF / THEN / ELSE / ENDIF in action scripts. */
+HmiSelfTest.testConditionals = function()
+{
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Other', 'MemoryInteger'));
+
+	var values = {};
+	var written = {};
+
+	function reset(level, quality)
+	{
+		values = {
+			'tank_level': {value: level,
+				quality: (quality != null) ? quality : HmiTypes.QUALITY_GOOD,
+				timestamp: 100},
+			'pump1_run': {value: 1, quality: HmiTypes.QUALITY_GOOD, timestamp: 100},
+			'result': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 100},
+			'other': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 100}
+		};
+		written = {};
+	}
+
+	var ctx = {
+		read: function(name)
+		{
+			var v = values[name.toLowerCase()];
+
+			return (v != null) ? v :
+				{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+		},
+		write: function(name, value)
+		{
+			written[name] = value;
+			values[name.toLowerCase()] = {value: value,
+				quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+		},
+		now: function() { return Date.now(); }
+	};
+
+	function run(src, level, quality)
+	{
+		reset(level, quality);
+		var c = HmiExpr.compile(src, {project: project, mode: 'script'});
+
+		if (c.errors.length > 0)
+		{
+			return {errors: c.errors};
+		}
+
+		c.eval(ctx);
+
+		return {written: written, compiled: c};
+	}
+
+	// --- the then branch --------------------------------------------------
+
+	var simple = 'IF Tank_Level > 50 THEN Result = 1; ENDIF;';
+
+	HmiSelfTest.check('if.thenTaken',
+		run(simple, 80).written['Result'] === 1,
+		JSON.stringify(run(simple, 80).written));
+
+	HmiSelfTest.check('if.thenSkipped',
+		run(simple, 10).written['Result'] === undefined,
+		JSON.stringify(run(simple, 10).written));
+
+	// --- else -------------------------------------------------------------
+
+	var both = 'IF Tank_Level > 50 THEN Result = 1; ELSE Result = 2; ENDIF;';
+
+	HmiSelfTest.check('if.elseTaken',
+		run(both, 10).written['Result'] === 2,
+		JSON.stringify(run(both, 10).written));
+
+	// --- several statements per branch ------------------------------------
+
+	var many = 'IF Tank_Level > 50 THEN Result = 1; Other = 9; ENDIF;';
+	var manyRes = run(many, 80).written;
+
+	HmiSelfTest.check('if.multipleStatements',
+		manyRes['Result'] === 1 && manyRes['Other'] === 9,
+		JSON.stringify(manyRes));
+
+	// --- nesting, which is how an else-if is written ----------------------
+
+	var nested = 'IF Tank_Level > 90 THEN Result = 3; ELSE ' +
+		'IF Tank_Level > 50 THEN Result = 2; ELSE Result = 1; ENDIF; ENDIF;';
+
+	HmiSelfTest.check('if.nestedHigh',
+		run(nested, 95).written['Result'] === 3,
+		JSON.stringify(run(nested, 95).written));
+	HmiSelfTest.check('if.nestedMiddle',
+		run(nested, 70).written['Result'] === 2,
+		JSON.stringify(run(nested, 70).written));
+	HmiSelfTest.check('if.nestedLow',
+		run(nested, 10).written['Result'] === 1,
+		JSON.stringify(run(nested, 10).written));
+
+	// --- statements around the block --------------------------------------
+
+	var around = 'Other = 5; IF Tank_Level > 50 THEN Result = 1; ENDIF; ' +
+		'Other = 6;';
+	var aroundRes = run(around, 80).written;
+
+	HmiSelfTest.check('if.statementsAroundBlock',
+		aroundRes['Other'] === 6 && aroundRes['Result'] === 1,
+		JSON.stringify(aroundRes));
+
+	// A bare ENDIF without the trailing semicolon still parses.
+	HmiSelfTest.check('if.trailingSemicolonOptional',
+		run('IF Tank_Level > 50 THEN Result = 1; ENDIF', 80)
+			.written['Result'] === 1);
+
+	// --- boolean conditions and AND/OR ------------------------------------
+
+	HmiSelfTest.check('if.compoundCondition',
+		run('IF Tank_Level > 50 AND Pump1_Run THEN Result = 1; ENDIF;', 80)
+			.written['Result'] === 1);
+	HmiSelfTest.check('if.notCondition',
+		run('IF NOT Pump1_Run THEN Result = 1; ELSE Result = 2; ENDIF;', 80)
+			.written['Result'] === 2);
+
+	// --- writes are still collected inside branches -----------------------
+
+	var collected = HmiExpr.compile(both, {project: project, mode: 'script'});
+
+	HmiSelfTest.check('if.writesCollected',
+		mxUtils.indexOf(collected.writes, 'Result') >= 0,
+		collected.writes.join(','));
+
+	// --- bad quality takes NEITHER branch ---------------------------------
+	// An action script actuates equipment; branching on a value known to be
+	// unreliable is how a dead link ends up commanding a plant.
+
+	var badRun = run(both, 80, HmiTypes.QUALITY_BAD);
+
+	HmiSelfTest.check('if.badQualityTakesNoBranch',
+		badRun.written['Result'] === undefined,
+		'wrote ' + JSON.stringify(badRun.written));
+
+	// --- errors -----------------------------------------------------------
+
+	HmiSelfTest.check('if.missingThen',
+		HmiExpr.compile('IF Tank_Level > 50 Result = 1; ENDIF;',
+			{project: project, mode: 'script'}).errors.length > 0);
+	HmiSelfTest.check('if.missingEndif',
+		HmiExpr.compile('IF Tank_Level > 50 THEN Result = 1;',
+			{project: project, mode: 'script'}).errors.length > 0);
+	HmiSelfTest.check('if.rejectedInExpressionMode',
+		HmiExpr.compile('IF Tank_Level > 50 THEN 1 ENDIF',
+			{project: project}).errors.length > 0);
+
+	// --- the keyword must not swallow a tag that starts with it -----------
+
+	project.addTag(HmiProject.createTag('IFace_Ready', 'MemoryDiscrete'));
+	values = {};
+
+	var keywordish = HmiExpr.compile(
+		'IF IFace_Ready THEN Result = 1; ENDIF;',
+		{project: project, mode: 'script'});
+
+	HmiSelfTest.check('if.keywordPrefixIsNotKeyword',
+		keywordish.errors.length === 0 &&
+		mxUtils.indexOf(keywordish.deps, 'IFace_Ready') >= 0,
+		(keywordish.errors[0] || {}).message || keywordish.deps.join(','));
 };

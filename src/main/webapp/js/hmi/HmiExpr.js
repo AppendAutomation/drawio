@@ -25,8 +25,13 @@ HmiExpr.T = {
 	NUMBER: 'number', STRING: 'string', IDENT: 'ident', OP: 'op', END: 'end'
 };
 
-/** Word operators, matched case-insensitively on a whole token. */
-HmiExpr.WORD_OPS = {AND: 'AND', OR: 'OR', NOT: 'NOT', MOD: 'MOD'};
+/**
+ * Words that are operators or keywords, matched case-insensitively on a whole
+ * token. Reclassification happens after an identifier has been lexed greedily,
+ * so a tag named Android or Ifac is unaffected.
+ */
+HmiExpr.WORD_OPS = {AND: 'AND', OR: 'OR', NOT: 'NOT', MOD: 'MOD',
+	IF: 'IF', THEN: 'THEN', ELSE: 'ELSE', ENDIF: 'ENDIF'};
 
 /** Tag names are limited to 63 characters, as in InTouch. */
 HmiExpr.MAX_NAME = 63;
@@ -403,9 +408,13 @@ HmiExpr.Parser.prototype.parseScript = function()
 	while (this.peek().type !== HmiExpr.T.END)
 	{
 		var before = this.i;
-		statements.push(this.parseStatement());
+		var statement = this.parseStatement();
+		statements.push(statement);
 
-		if (!this.eatOp(';') && this.peek().type !== HmiExpr.T.END)
+		// "ENDIF;" is the InTouch spelling, but a bare ENDIF is unambiguous
+		// so it is not worth rejecting.
+		if (!this.eatOp(';') && this.peek().type !== HmiExpr.T.END &&
+			statement.type !== 'if')
 		{
 			this.error('expected ;');
 		}
@@ -422,6 +431,11 @@ HmiExpr.Parser.prototype.parseScript = function()
 
 HmiExpr.Parser.prototype.parseStatement = function()
 {
+	if (this.atOp('IF'))
+	{
+		return this.parseIf();
+	}
+
 	var start = this.i;
 	var node = this.parseOr();
 
@@ -446,6 +460,80 @@ HmiExpr.Parser.prototype.parseStatement = function()
 	}
 
 	return {type: 'expr', value: node};
+};
+
+/**
+ * IF <condition> THEN <statements> [ELSE <statements>] ENDIF
+ *
+ * There is no ELSEIF: an else branch is a statement list, so a nested IF
+ * inside it reads the same and needs no extra grammar. Each nested IF closes
+ * with its own ENDIF, which keeps the parse unambiguous.
+ */
+HmiExpr.Parser.prototype.parseIf = function()
+{
+	this.next();
+
+	var condition = this.parseOr();
+
+	if (!this.eatOp('THEN'))
+	{
+		this.error('expected THEN');
+	}
+
+	var then = this.parseStatementsUntil(['ELSE', 'ENDIF']);
+	var otherwise = [];
+
+	if (this.eatOp('ELSE'))
+	{
+		otherwise = this.parseStatementsUntil(['ENDIF']);
+	}
+
+	if (!this.eatOp('ENDIF'))
+	{
+		this.error('expected ENDIF');
+	}
+
+	return {type: 'if', condition: condition, then: then, otherwise: otherwise};
+};
+
+HmiExpr.Parser.prototype.atAnyOp = function(ops)
+{
+	for (var i = 0; i < ops.length; i++)
+	{
+		if (this.atOp(ops[i]))
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+HmiExpr.Parser.prototype.parseStatementsUntil = function(stops)
+{
+	var body = [];
+
+	while (this.peek().type !== HmiExpr.T.END && !this.atAnyOp(stops))
+	{
+		var before = this.i;
+		var statement = this.parseStatement();
+		body.push(statement);
+
+		// A branch's statements end in ';', but the last one before ELSE or
+		// ENDIF may omit it, and a nested IF needs none after its ENDIF.
+		if (!this.eatOp(';') && !this.atAnyOp(stops) &&
+			this.peek().type !== HmiExpr.T.END && statement.type !== 'if')
+		{
+			this.error('expected ;');
+		}
+
+		if (this.i === before)
+		{
+			this.i++;
+		}
+	}
+
+	return body;
 };
 
 HmiExpr.Parser.prototype.parseOr = function()
@@ -965,6 +1053,35 @@ HmiExpr.Evaluator.prototype.eval_assign = function(node)
 	}
 
 	return v;
+};
+
+/**
+ * A branch is taken only on trustworthy data.
+ *
+ * If the condition's quality is bad, NEITHER branch runs. An action script
+ * writes to tags, and acting on a value known to be unreliable is how an HMI
+ * ends up commanding equipment from a dead communications link. The statement
+ * reports bad quality instead.
+ */
+HmiExpr.Evaluator.prototype.eval_if = function(node)
+{
+	var cond = this.run(node.condition);
+
+	if (cond.quality <= HmiTypes.QUALITY_BAD)
+	{
+		return {value: null, quality: HmiTypes.QUALITY_BAD,
+			timestamp: cond.timestamp};
+	}
+
+	var body = (HmiExpr.truthy(cond.value)) ? node.then : node.otherwise;
+	var last = {value: null, quality: cond.quality, timestamp: cond.timestamp};
+
+	for (var i = 0; i < body.length; i++)
+	{
+		last = this.run(body[i]);
+	}
+
+	return last;
 };
 
 HmiExpr.Evaluator.prototype.eval_expr = function(node)
