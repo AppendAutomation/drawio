@@ -2582,6 +2582,28 @@ HmiSelfTest.testScriptFields = function(ui)
 		style.backgroundColor !== 'transparent',
 		'background = ' + style.backgroundColor);
 
+	// A mousedown on the field must keep its default behaviour, or the field
+	// never takes focus and the keystrokes land on the graph -- which starts a
+	// label edit and renames the very shape being configured.
+	HmiSelfTest.check('script.mousedownAllowed',
+		ui.isSelectionAllowed({target: a, srcElement: a}) === true,
+		'isSelectionAllowed said no for a TEXTAREA');
+
+	// And the stock rule still holds for everything else.
+	HmiSelfTest.check('script.canvasStillNotSelectable',
+		ui.isSelectionAllowed({target: graph.container,
+			srcElement: graph.container}) !== true,
+		'the canvas should not be treated as selectable text');
+
+	var inputs = panel.getElementsByTagName('input');
+
+	if (inputs.length > 0)
+	{
+		HmiSelfTest.check('script.inputsStillAllowed',
+			ui.isSelectionAllowed({target: inputs[0],
+				srcElement: inputs[0]}) === true);
+	}
+
 	// Dispatch the event rather than calling blur(): a programmatic blur does
 	// not reliably fire when the window itself is not focused, which is the
 	// usual state for an automated run.

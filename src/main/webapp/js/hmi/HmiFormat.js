@@ -26,6 +26,8 @@ HmiFormat.install = function()
 		return;
 	}
 
+	HmiFormat.installFocusFix();
+
 	var formatImmediateRefresh = Format.prototype.immediateRefresh;
 
 	Format.prototype.immediateRefresh = function()
@@ -36,6 +38,52 @@ HmiFormat.install = function()
 		{
 			this.hmiAddAnimationTab();
 		}));
+	};
+};
+
+/**
+ * Lets a textarea in the editor chrome take focus.
+ *
+ * EditorUi.isSelectionAllowed decides whether a mousedown keeps its default
+ * behaviour, and upstream allows only SELECT and INPUT:
+ *
+ *   return mxEvent.getSource(evt).nodeName == 'SELECT' ||
+ *       mxEvent.getSource(evt).nodeName == 'INPUT';
+ *
+ * Every textarea drawio ships lives in a dialog, so it never needed TEXTAREA
+ * in that list. Ours is in the format panel, where the default is suppressed:
+ * the field never takes focus, the keystrokes reach the graph instead, and
+ * typing starts a label edit -- so a script field silently renames the shape
+ * being edited.
+ *
+ * Overridden on the prototype, before any EditorUi exists, so drawio's own
+ * instance-level wrappers compose on top of this rather than around it.
+ */
+HmiFormat.installFocusFix = function()
+{
+	if (typeof EditorUi === 'undefined' ||
+		EditorUi.prototype.isSelectionAllowed == null)
+	{
+		return;
+	}
+
+	var editorUiIsSelectionAllowed = EditorUi.prototype.isSelectionAllowed;
+
+	EditorUi.prototype.isSelectionAllowed = function(evt)
+	{
+		var allowed = HmiLog.guard('focusFix', function()
+		{
+			var source = mxEvent.getSource(evt);
+
+			return source != null && source.nodeName === 'TEXTAREA';
+		}, false);
+
+		if (allowed)
+		{
+			return true;
+		}
+
+		return editorUiIsSelectionAllowed.apply(this, arguments);
 	};
 };
 
