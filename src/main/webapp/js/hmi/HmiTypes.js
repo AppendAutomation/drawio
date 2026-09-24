@@ -254,15 +254,20 @@ HmiTypes.defineLink = function(key, def)
 
 	// The value/movement family. Every bound is an expression, so a range can
 	// track the dictionary rather than being frozen at design time.
-	function ranged(key, code, family, label, outMin, outMax, a, b)
+	function ranged(key, code, family, label, outMin, outMax, a, b, extra)
 	{
 		def(key, {code: code, family: family, label: label, milestone: 2,
-			outMin: outMin, outMax: outMax,
+			outMin: outMin, outMax: outMax, extra: extra,
 			defaults: function()
 			{
 				var cfg = {expr: '', atMin: '0', atMax: '100'};
 				cfg[outMin] = '' + a;
 				cfg[outMax] = '' + b;
+
+				for (var k in (extra || {}))
+				{
+					cfg[k] = extra[k];
+				}
 
 				return cfg;
 			}});
@@ -272,10 +277,13 @@ HmiTypes.defineLink = function(key, def)
 		'offsetMin', 'offsetMax', -100, 100);
 	ranged('location.vertical', 531, 'movement', 'Location / Vertical',
 		'offsetMin', 'offsetMax', -100, 100);
+	// Size links also carry an anchor: the edge that stays put as the object
+	// grows. InTouch always scales from the top-left; a bargraph usually wants
+	// to grow upward instead, so the edge is a choice here.
 	ranged('size.width', 541, 'movement', 'Object Size / Width',
-		'pctMin', 'pctMax', 0, 100);
+		'pctMin', 'pctMax', 0, 100, {anchor: 'left'});
 	ranged('size.height', 551, 'movement', 'Object Size / Height',
-		'pctMin', 'pctMax', 0, 100);
+		'pctMin', 'pctMax', 0, 100, {anchor: 'top'});
 	ranged('percentFill.horizontal', 561, 'movement', 'Percent Fill / Horizontal',
 		'pctMin', 'pctMax', 0, 100);
 	ranged('percentFill.vertical', 571, 'movement', 'Percent Fill / Vertical',

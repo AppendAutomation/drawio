@@ -622,8 +622,16 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 		if (pct != null)
 		{
 			// Percent of the design size, as InTouch expresses it.
-			if (key === 'size.width') { visual.scaleX = pct / 100; }
-			else { visual.scaleY = pct / 100; }
+			if (key === 'size.width')
+			{
+				visual.scaleX = pct / 100;
+				visual.anchorX = cfg.anchor || 'left';
+			}
+			else
+			{
+				visual.scaleY = pct / 100;
+				visual.anchorY = cfg.anchor || 'top';
+			}
 		}
 	}
 	else if (key === 'percentFill.horizontal' || key === 'percentFill.vertical')
@@ -916,8 +924,8 @@ HmiRuntime.formatNumber = function(value, format)
 HmiRuntime.sameVisual = function(a, b)
 {
 	var keys = ['fillColor', 'strokeColor', 'fontColor', 'visible', 'label',
-		'rotation', 'dx', 'dy', 'scaleX', 'scaleY', 'fillPct', 'fillDir',
-		'disabled'];
+		'rotation', 'dx', 'dy', 'scaleX', 'scaleY', 'anchorX', 'anchorY',
+		'fillPct', 'fillDir', 'disabled'];
 
 	for (var i = 0; i < keys.length; i++)
 	{
@@ -1151,15 +1159,25 @@ HmiRuntime.prototype.applyGeometry = function(state)
 	var v = binding.visual;
 	var scale = this.graph.view.scale;
 
-	// Size scales about the top-left, as InTouch does.
+	// Size scales about the chosen edge. state.width/height still hold the
+	// design size at this point, so the opposite edge is held still by moving
+	// the origin by whatever the object lost.
 	if (v.scaleX != null)
 	{
-		state.width = state.width * v.scaleX;
+		var w0 = state.width;
+		state.width = w0 * v.scaleX;
+
+		if (v.anchorX === 'right') { state.x += (w0 - state.width); }
+		else if (v.anchorX === 'center') { state.x += (w0 - state.width) / 2; }
 	}
 
 	if (v.scaleY != null)
 	{
-		state.height = state.height * v.scaleY;
+		var h0 = state.height;
+		state.height = h0 * v.scaleY;
+
+		if (v.anchorY === 'bottom') { state.y += (h0 - state.height); }
+		else if (v.anchorY === 'center') { state.y += (h0 - state.height) / 2; }
 	}
 
 	// Offsets are authored in diagram units, so they follow the zoom.

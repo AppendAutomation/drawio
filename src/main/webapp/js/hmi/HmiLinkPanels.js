@@ -373,6 +373,25 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 			this.createExprField(cfg, def.outMin, RANGE_HINTS[def.outMin]));
 		this.addRow(content, RANGE_LABELS[def.outMax],
 			this.createExprField(cfg, def.outMax, RANGE_HINTS[def.outMax]));
+
+		if (key === 'size.height')
+		{
+			this.addRow(content, 'Grows from',
+				this.createSelectField(cfg, 'anchor', [
+					{value: 'top', label: 'Top downward'},
+					{value: 'bottom', label: 'Bottom upward'},
+					{value: 'center', label: 'Centre, both ways'}
+				]));
+		}
+		else if (key === 'size.width')
+		{
+			this.addRow(content, 'Grows from',
+				this.createSelectField(cfg, 'anchor', [
+					{value: 'left', label: 'Left rightward'},
+					{value: 'right', label: 'Right leftward'},
+					{value: 'center', label: 'Centre, both ways'}
+				]));
+		}
 	}
 
 	var movement = ['location.horizontal', 'location.vertical',

@@ -1861,6 +1861,48 @@ HmiSelfTest.testMovement = function(ui)
 		Math.abs(hState.height - design.h.height * 0.75) < 1,
 		'height = ' + hState.height + ', wanted ' + (design.h.height * 0.75));
 
+	// Default anchor is the top, so the top edge holds and it grows downward.
+	HmiSelfTest.check('m2.sizeAnchorTopHoldsTop',
+		Math.abs(hState.y - design.h.y) < 1,
+		'y moved by ' + (hState.y - design.h.y));
+
+	// Bottom anchor: the bottom edge holds and it grows upward, which is what
+	// a bargraph wants.
+	var hLinks = HmiProject.getCellLinks(graph, cells.h);
+	hLinks['size.height'].anchor = 'bottom';
+	HmiProject.setCellLinks(graph, cells.h, hLinks);
+	rt.rebind();
+	setLevel(50);
+
+	hState = graph.view.getState(cells.h);
+	var designBottom = design.h.y + design.h.height;
+
+	HmiSelfTest.check('m2.sizeAnchorBottomHoldsBottom',
+		Math.abs((hState.y + hState.height) - designBottom) < 1,
+		'bottom moved by ' + ((hState.y + hState.height) - designBottom));
+
+	HmiSelfTest.check('m2.sizeAnchorBottomStillScales',
+		Math.abs(hState.height - design.h.height * 0.75) < 1,
+		'height = ' + hState.height);
+
+	// Centre anchor: the middle holds.
+	hLinks['size.height'].anchor = 'center';
+	HmiProject.setCellLinks(graph, cells.h, hLinks);
+	rt.rebind();
+	setLevel(50);
+
+	hState = graph.view.getState(cells.h);
+	var designMiddle = design.h.y + design.h.height / 2;
+
+	HmiSelfTest.check('m2.sizeAnchorCentreHoldsCentre',
+		Math.abs((hState.y + hState.height / 2) - designMiddle) < 1,
+		'centre moved by ' + ((hState.y + hState.height / 2) - designMiddle));
+
+	hLinks['size.height'].anchor = 'top';
+	HmiProject.setCellLinks(graph, cells.h, hLinks);
+	rt.rebind();
+	setLevel(50);
+
 	// --- percent fill (the spike) ----------------------------------------
 
 	var fillState = graph.view.getState(cells.fillV);
