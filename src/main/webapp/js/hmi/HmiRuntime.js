@@ -184,7 +184,7 @@ HmiRuntime.prototype.bind = function()
 
 		for (var k = 0; k < keys.length; k++)
 		{
-			var deps = HmiRuntime.dependencies(links[keys[k]]);
+			var deps = this.dependencies(links[keys[k]]);
 
 			for (var d = 0; d < deps.length; d++)
 			{
@@ -209,35 +209,48 @@ HmiRuntime.prototype.bind = function()
 	}
 };
 
+/** Link config fields whose contents are expressions. */
+HmiRuntime.EXPR_FIELDS = ['expr', 'enableExpr', 'min', 'max', 'rateMs'];
+
 /**
- * Tag names a link config reads.
- *
- * Until HmiExpr lands, an expression is resolved as a bare tag reference with
- * an optional dotfield. Every call site goes through here and through
- * evaluate(), so introducing the real parser is a change to two functions.
+ * Tag names a link config reads, taken from the compiled expressions rather
+ * than pattern-matched out of the text, so a dependency cannot disagree with
+ * what evaluation actually reads.
  */
-HmiRuntime.dependencies = function(cfg)
+HmiRuntime.prototype.dependencies = function(cfg)
 {
 	var deps = [];
+	var that = this;
 
 	function add(src)
 	{
-		if (src == null || src === '')
+		if (src == null || src === '' || typeof src !== 'string')
 		{
 			return;
 		}
 
-		var name = HmiRuntime.baseTag(src);
+		var found = HmiExpr.compile(src, {project: that.project}).deps;
 
-		if (name != null && mxUtils.indexOf(deps, name) < 0)
+		for (var i = 0; i < found.length; i++)
 		{
-			deps.push(name);
+			if (mxUtils.indexOf(deps, found[i]) < 0)
+			{
+				deps.push(found[i]);
+			}
 		}
 	}
 
-	add(cfg.expr);
-	add(cfg.tag);
-	add(cfg.enableExpr);
+	for (var i = 0; i < HmiRuntime.EXPR_FIELDS.length; i++)
+	{
+		add(cfg[HmiRuntime.EXPR_FIELDS[i]]);
+	}
+
+	// A tag field holds a bare name, not an expression.
+	if (cfg.tag != null && cfg.tag !== '' &&
+		mxUtils.indexOf(deps, cfg.tag) < 0)
+	{
+		deps.push(cfg.tag);
+	}
 
 	if (cfg.bands != null)
 	{
@@ -247,14 +260,10 @@ HmiRuntime.dependencies = function(cfg)
 		}
 	}
 
-	add(cfg.min);
-	add(cfg.max);
-	add(cfg.rateMs);
-
 	return deps;
 };
 
-/** "Tank.Value" / "InTouch:Tank" -> "Tank"; a literal returns null. */
+/** "Tag.Value" / "InTouch:Tag" -> "Tag"; anything else returns null. */
 HmiRuntime.baseTag = function(src)
 {
 	var text = ('' + src).trim().replace(/^[Ii]n[Tt]ouch:/, '');
@@ -274,11 +283,10 @@ HmiRuntime.prototype.getValue = function(name)
 };
 
 /**
- * Evaluates a source string to {value, quality, timestamp}.
+ * Evaluates a source string through the expression engine.
  *
- * Quality is the minimum across operands and timestamp the maximum, so that a
- * single bad input makes the whole result bad and the link can show its
- * bad-quality treatment rather than a plausible-looking lie.
+ * Compilation is cached by source and dictionary revision, so the hot path is
+ * a tree walk, not a parse.
  */
 HmiRuntime.prototype.evaluate = function(src)
 {
@@ -287,54 +295,37 @@ HmiRuntime.prototype.evaluate = function(src)
 		return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
 	}
 
-	var text = ('' + src).trim();
+	var compiled = HmiExpr.compile('' + src, {project: this.project});
+	var result = compiled.eval(this.context());
 
-	// Numeric literal.
-	if (/^-?\d+(\.\d+)?$/.test(text))
+	if (result.error != null)
 	{
-		return {value: parseFloat(text), quality: HmiTypes.QUALITY_GOOD,
-			timestamp: Date.now()};
+		HmiLog.once('expr:' + src, result.error + ' in "' + src + '"');
 	}
 
-	// Quoted string literal.
-	if (/^"[^"]*"$/.test(text))
+	return result;
+};
+
+/** The evaluation context: how the engine reaches tag values. */
+HmiRuntime.prototype.context = function()
+{
+	if (this.ctx == null)
 	{
-		return {value: text.substring(1, text.length - 1),
-			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+		var that = this;
+
+		this.ctx = {
+			read: function(name, field) { return that.readField(name, field); },
+			write: function(name, value)
+			{
+				var writes = {};
+				writes[name] = value;
+				that.driver.write(writes);
+			},
+			now: function() { return Date.now(); }
+		};
 	}
 
-	var negate = false;
-
-	if (/^NOT\s+/i.test(text))
-	{
-		negate = true;
-		text = text.replace(/^NOT\s+/i, '');
-	}
-
-	var base = HmiRuntime.baseTag(text);
-
-	if (base == null)
-	{
-		return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
-	}
-
-	var field = null;
-	var dot = text.indexOf('.');
-
-	if (dot >= 0)
-	{
-		field = text.substring(dot + 1);
-	}
-
-	var res = this.readField(base, field);
-
-	if (negate)
-	{
-		res = {value: !HmiRuntime.truthy(res.value), quality: res.quality,
-			timestamp: res.timestamp};
-	}
-
-	return res;
+	return this.ctx;
 };
 
 HmiRuntime.prototype.readField = function(name, field)
@@ -366,9 +357,12 @@ HmiRuntime.prototype.readField = function(name, field)
 		return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
 	}
 
+	// Alarm state is a later milestone; the fields answer false rather than
+	// bad quality so an expression using them stays evaluable today.
 	var map = {Name: tag.name, MinEU: tag.minEU, MaxEU: tag.maxEU,
 		MinRaw: tag.minRaw, MaxRaw: tag.maxRaw, EngUnits: tag.engUnits,
-		Comment: tag.comment};
+		Comment: tag.comment, InAlarm: false, AlarmMostUrgentInAlarm: false,
+		Acked: true};
 
 	if (map[field] !== undefined)
 	{

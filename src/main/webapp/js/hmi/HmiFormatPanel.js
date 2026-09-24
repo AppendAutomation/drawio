@@ -361,6 +361,8 @@ HmiFormatPanel.prototype.createExprField = function(cfg, field, placeholder)
 	var input = this.createTextField(cfg, field, placeholder);
 	input.className = 'hmiInput hmiExpr';
 
+	var that = this;
+
 	var validate = function()
 	{
 		if (typeof HmiExpr === 'undefined' || input.value === '')
@@ -371,7 +373,10 @@ HmiFormatPanel.prototype.createExprField = function(cfg, field, placeholder)
 			return;
 		}
 
-		var compiled = HmiExpr.compile(input.value);
+		// Compiled against the dictionary, so an unknown tag or dotfield is
+		// caught here rather than showing up as a dead animation at runtime.
+		var compiled = HmiExpr.compile(input.value,
+			{project: that.editorUi.hmiProject});
 
 		if (compiled.errors.length > 0)
 		{

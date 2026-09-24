@@ -10,6 +10,16 @@ HmiProject = function()
 	this.accessNames = [];
 	this.tags = [];
 	this.tagIndex = {};
+
+	// Bumped whenever the dictionary changes. Compilation resolves tag names
+	// against it, so a compiled expression cached before an edit must not be
+	// served afterwards.
+	this.revision = 0;
+};
+
+HmiProject.prototype.touch = function()
+{
+	this.revision++;
 };
 
 HmiProject.FORMAT_VERSION = '1';
@@ -38,6 +48,8 @@ HmiProject.prototype.reindex = function()
 	{
 		this.tagIndex[this.tags[i].name.toLowerCase()] = this.tags[i];
 	}
+
+	this.touch();
 };
 
 HmiProject.prototype.addTag = function(tag)
@@ -49,6 +61,7 @@ HmiProject.prototype.addTag = function(tag)
 
 	this.tags.push(tag);
 	this.tagIndex[tag.name.toLowerCase()] = tag;
+	this.touch();
 
 	return tag;
 };
@@ -61,6 +74,7 @@ HmiProject.prototype.removeTag = function(name)
 	{
 		this.tags.splice(mxUtils.indexOf(this.tags, tag), 1);
 		delete this.tagIndex[name.toLowerCase()];
+		this.touch();
 	}
 
 	return tag;

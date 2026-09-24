@@ -36,6 +36,7 @@ HmiSelfTest.run = function(ui)
 
 	try
 	{
+		HmiSelfTest.testExpressions();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
@@ -379,6 +380,28 @@ HmiSelfTest.testRuntime = function(ui)
 	HmiProject.setCellLinks(graph, readout, {
 		'valueDisplay': {kind: 'analog', expr: 'Tank_Level', format: '0.0',
 			prefix: '', suffix: ' %'}
+	});
+
+	// A band boundary that is an expression over the dictionary, which is the
+	// whole reason for having an engine rather than literal thresholds.
+	var tank = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		tank = graph.insertVertex(graph.getDefaultParent(), null, '',
+			260, 80, 120, 60);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, tank, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: 'Tank_Level.MaxEU * 0.9', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]}
 	});
 
 	var designFill = graph.getCellStyle(tank)[mxConstants.STYLE_FILLCOLOR];
@@ -1222,6 +1245,28 @@ HmiSelfTest.runLive = function(ui)
 			prefix: '', suffix: ' %'}
 	});
 
+	// A band boundary that is an expression over the dictionary, which is the
+	// whole reason for having an engine rather than literal thresholds.
+	var tank = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		tank = graph.insertVertex(graph.getDefaultParent(), null, '',
+			260, 80, 120, 60);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, tank, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: 'Tank_Level.MaxEU * 0.9', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]}
+	});
+
 	HmiProject.setCellLinks(graph, button, {
 		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle'}
 	});
@@ -1271,6 +1316,43 @@ HmiSelfTest.runLive = function(ui)
 		HmiSelfTest.check('live.valueDisplayRenders',
 			label != null && /\d/.test(label) && label.indexOf('%') >= 0,
 			'label = ' + label);
+
+		// Tank_Level.MaxEU * 0.9 is 90, so 50 is under the band and 95 over.
+		rt.applyBatch({'Tank_Level': {value: 50,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+		rt.flush();
+
+		var tankState = graph.view.getState(tank);
+
+		HmiSelfTest.check('live.expressionBandUnder',
+			tankState != null && tankState.shape != null &&
+			tankState.shape.fill === '#00CC00',
+			'fill = ' + ((tankState != null && tankState.shape != null) ?
+				tankState.shape.fill : 'none'));
+
+		rt.applyBatch({'Tank_Level': {value: 95,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+		rt.flush();
+
+		HmiSelfTest.check('live.expressionBandOver',
+			tankState.shape.fill === '#CC0000',
+			'fill = ' + tankState.shape.fill);
+
+		// Changing MaxEU in the dictionary must move the threshold, which only
+		// works if the compile cache is keyed on the dictionary revision.
+		project.getTag('Tank_Level').maxEU = 200;
+		project.touch();
+		rt.applyBatch({'Tank_Level': {value: 95,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
+		rt.flush();
+
+		HmiSelfTest.check('live.thresholdFollowsDictionary',
+			tankState.shape.fill === '#00CC00',
+			'after MaxEU 100 -> 200 the threshold should be 180; fill = ' +
+			tankState.shape.fill);
+
+		project.getTag('Tank_Level').maxEU = 100;
+		project.touch();
 
 		// --- touch path -----------------------------------------------------
 
@@ -1414,4 +1496,244 @@ HmiSelfTest.clickCell = function(graph, cell)
 			target.dispatchEvent(new MouseEvent('mouse' + phases[i], opts));
 		}
 	}
+};
+
+/**
+ * Expression engine. Table driven, because the value of a parser test is in
+ * breadth of cases rather than depth of any one.
+ */
+HmiSelfTest.testExpressions = function()
+{
+	var project = HmiSelfTest.sampleProject();
+
+	// Extra tags for the lexer traps.
+	project.addTag(HmiProject.createTag('Android', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('ORbit', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('NOTch', 'MemoryInteger'));
+
+	var values = {
+		'tank_level': {value: 40, quality: HmiTypes.QUALITY_GOOD, timestamp: 100},
+		'pump1_run': {value: 1, quality: HmiTypes.QUALITY_GOOD, timestamp: 200},
+		'recipe_name': {value: 'Blue', quality: HmiTypes.QUALITY_GOOD, timestamp: 50},
+		'android': {value: 7, quality: HmiTypes.QUALITY_GOOD, timestamp: 10},
+		'orbit': {value: 3, quality: HmiTypes.QUALITY_GOOD, timestamp: 10},
+		'notch': {value: 2, quality: HmiTypes.QUALITY_GOOD, timestamp: 10}
+	};
+
+	var written = {};
+
+	var ctx = {
+		read: function(name, field)
+		{
+			var live = values[name.toLowerCase()];
+
+			if (live == null)
+			{
+				return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+			}
+
+			if (field == null || field === 'Value')
+			{
+				return live;
+			}
+
+			var tag = project.getTag(name);
+			var map = {Name: name, MinEU: (tag != null) ? tag.minEU : null,
+				MaxEU: (tag != null) ? tag.maxEU : null,
+				Quality: live.quality, TimeDate: live.timestamp};
+
+			return {value: map[field], quality: HmiTypes.QUALITY_GOOD,
+				timestamp: Date.now()};
+		},
+		write: function(name, value) { written[name] = value; },
+		now: function() { return Date.now(); }
+	};
+
+	// [source, expected value]  -- expected undefined means "expect an error"
+	var cases = [
+		// literals and arithmetic
+		['1', 1], ['1.5', 1.5], ['-3', -3], ['2 + 3 * 4', 14],
+		['(2 + 3) * 4', 20], ['10 / 4', 2.5], ['7 MOD 3', 1],
+		['2 ** 3', 8], ['2 ** 3 ** 2', 512], ['- 2 ** 2', -4],
+		['"hello"', 'hello'], ['"a" + "b"', 'ab'], ['"n=" + 5', 'n=5'],
+
+		// tag references and dotfields
+		['Tank_Level', 40], ['Tank_Level.Value', 40], ['Tank_Level.MaxEU', 100],
+		['Tank_Level.MaxEU * 0.9', 90], ['InTouch:Tank_Level', 40],
+		['tank_level', 40],
+
+		// comparison
+		['Tank_Level > 30', true], ['Tank_Level >= 40', true],
+		['Tank_Level < 30', false], ['Tank_Level == 40', true],
+		['Tank_Level <> 40', false], ['"10" > 9', true],
+		['Recipe_Name == "Blue"', true],
+
+		// boolean words, any case
+		['Pump1_Run AND Tank_Level > 30', true],
+		['Pump1_Run and Tank_Level > 90', false],
+		['Pump1_Run OR Tank_Level > 90', true],
+		['NOT Pump1_Run', false], ['not (Tank_Level > 90)', true],
+
+		// precedence: OR below AND
+		['Pump1_Run OR Pump1_Run AND 0', true],
+
+		// the lexer traps: tags whose names begin with a word operator
+		['Android', 7], ['Android + 1', 8], ['ORbit', 3], ['NOTch', 2],
+		['Android AND ORbit', true],
+
+		// comments
+		['1 + {this is a comment} 2', 3],
+		['{leading} Tank_Level', 40],
+
+		// functions
+		['Abs(-5)', 5], ['Min(3, 9)', 3], ['Max(3, 9)', 9],
+		['Round(2.6)', 3], ['Int(2.6)', 2], ['Sqrt(9)', 3],
+		['Text(7, "000")', '007'],
+
+		// errors
+		['Tank_Level +', undefined],
+		['NoSuchTag', undefined],
+		['Tank_Level.Nonsense', undefined],
+		['Abs(1, 2)', undefined],
+		['NoSuchFunction(1)', undefined],
+		['1 + ', undefined],
+		['(1 + 2', undefined],
+		['"unterminated', undefined],
+		['{unterminated', undefined],
+		['Tank_Level = 5', undefined]
+	];
+
+	var failures = [];
+
+	for (var i = 0; i < cases.length; i++)
+	{
+		var src = cases[i][0];
+		var want = cases[i][1];
+		var compiled = HmiExpr.compile(src, {project: project});
+
+		if (want === undefined)
+		{
+			if (compiled.errors.length === 0)
+			{
+				failures.push(src + ' should not compile');
+			}
+
+			continue;
+		}
+
+		if (compiled.errors.length > 0)
+		{
+			failures.push(src + ' :: ' + compiled.errors[0].message);
+			continue;
+		}
+
+		var got = compiled.eval(ctx);
+
+		if (got.value !== want)
+		{
+			failures.push(src + ' = ' + JSON.stringify(got.value) +
+				', wanted ' + JSON.stringify(want));
+		}
+	}
+
+	HmiSelfTest.check('expr.table', failures.length === 0,
+		failures.join(' | '));
+
+	// --- dependencies -----------------------------------------------------
+
+	var deps = HmiExpr.compile('Tank_Level.MaxEU * 0.9 + Android',
+		{project: project}).deps;
+
+	HmiSelfTest.check('expr.deps',
+		deps.length === 2 && mxUtils.indexOf(deps, 'Tank_Level') >= 0 &&
+		mxUtils.indexOf(deps, 'Android') >= 0, deps.join(','));
+
+	// --- quality and timestamp -------------------------------------------
+
+	values['tank_level'] = {value: 40, quality: HmiTypes.QUALITY_BAD,
+		timestamp: 999};
+
+	var bad = HmiExpr.compile('Tank_Level + Android', {project: project})
+		.eval(ctx);
+
+	HmiSelfTest.check('expr.qualityIsWorstInput',
+		bad.quality === HmiTypes.QUALITY_BAD, 'quality = ' + bad.quality);
+	HmiSelfTest.check('expr.timestampIsNewest', bad.timestamp === 999,
+		'timestamp = ' + bad.timestamp);
+	HmiSelfTest.check('expr.badQualityStillComputes', bad.value === 47,
+		'value = ' + bad.value);
+
+	values['tank_level'] = {value: 40, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: 100};
+
+	// Both sides of a logical are evaluated, so quality cannot depend on
+	// which branch happened to decide the answer.
+	values['android'] = {value: 1, quality: HmiTypes.QUALITY_BAD, timestamp: 5};
+
+	var shortCircuit = HmiExpr.compile('Tank_Level > 90 AND Android',
+		{project: project}).eval(ctx);
+
+	HmiSelfTest.check('expr.noShortCircuitQuality',
+		shortCircuit.quality === HmiTypes.QUALITY_BAD,
+		'quality = ' + shortCircuit.quality);
+
+	values['android'] = {value: 7, quality: HmiTypes.QUALITY_GOOD, timestamp: 10};
+
+	// --- runtime failures degrade, never throw ---------------------------
+
+	var divZero = HmiExpr.compile('Tank_Level / 0', {project: project})
+		.eval(ctx);
+
+	HmiSelfTest.check('expr.divideByZero',
+		divZero.quality === HmiTypes.QUALITY_BAD && divZero.error != null,
+		'got ' + JSON.stringify(divZero));
+
+	var notNumber = HmiExpr.compile('Recipe_Name * 2', {project: project})
+		.eval(ctx);
+
+	HmiSelfTest.check('expr.stringArithmeticIsBad',
+		notNumber.quality === HmiTypes.QUALITY_BAD,
+		'got ' + JSON.stringify(notNumber));
+
+	// --- scripts ----------------------------------------------------------
+
+	var script = HmiExpr.compile('Tank_Level = 55; Pump1_Run = 1;',
+		{project: project, mode: 'script'});
+
+	HmiSelfTest.check('expr.scriptCompiles', script.errors.length === 0,
+		(script.errors[0] || {}).message);
+	HmiSelfTest.check('expr.scriptWrites',
+		script.writes.length === 2 &&
+		mxUtils.indexOf(script.writes, 'Tank_Level') >= 0,
+		script.writes.join(','));
+
+	written = {};
+	script.eval(ctx);
+
+	HmiSelfTest.check('expr.scriptAssigns',
+		written['Tank_Level'] === 55 && written['Pump1_Run'] === 1,
+		JSON.stringify(written));
+
+	var badTarget = HmiExpr.compile('Tank_Level.MaxEU = 5',
+		{project: project, mode: 'script'});
+
+	HmiSelfTest.check('expr.cannotAssignToDotfield',
+		badTarget.errors.length > 0);
+
+	// --- cache ------------------------------------------------------------
+
+	var a = HmiExpr.compile('Tank_Level + 1', {project: project});
+	var b = HmiExpr.compile('Tank_Level + 1', {project: project});
+
+	HmiSelfTest.check('expr.cacheReturnsSame', a === b);
+
+	// A dictionary edit must not be served a stale compile: this expression
+	// is an error now and valid afterwards.
+	var before = HmiExpr.compile('LaterTag', {project: project});
+	project.addTag(HmiProject.createTag('LaterTag', 'MemoryReal'));
+	var after = HmiExpr.compile('LaterTag', {project: project});
+
+	HmiSelfTest.check('expr.cacheInvalidatesOnEdit',
+		before.errors.length > 0 && after.errors.length === 0,
+		'before=' + before.errors.length + ' after=' + after.errors.length);
 };
