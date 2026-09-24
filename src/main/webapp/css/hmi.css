@@ -150,12 +150,20 @@
 	background-color: rgba(221, 0, 0, 0.06);
 }
 
+/*
+ * drawio gives an input a field background but leaves textarea transparent
+ * (.geEditor input:not(svg *, .geButton) in grapheditor.css). Left alone, a
+ * script box sits on the panel background while every field around it is
+ * filled, which reads as greyed out -- it looks disabled even though it is
+ * perfectly editable. Match the inputs.
+ */
 .hmiScript
 {
 	font-family: monospace;
 	font-size: 11px;
 	resize: vertical;
 	min-height: 48px;
+	background-color: light-dark(var(--field-color), var(--dark-toolbar-color));
 }
 
 .hmiColor
@@ -217,12 +225,20 @@
 /* Dark mode: drawio sets [data-theme] / .geDarkMode on the document. */
 [data-theme="dark"] .hmiChip,
 [data-theme="dark"] .hmiInput,
-[data-theme="dark"] .hmiScript
+[data-theme="dark"] /*
+ * drawio gives an input a field background but leaves textarea transparent
+ * (.geEditor input:not(svg *, .geButton) in grapheditor.css). Left alone, a
+ * script box sits on the panel background while every field around it is
+ * filled, which reads as greyed out -- it looks disabled even though it is
+ * perfectly editable. Match the inputs.
+ */
+.hmiScript
 {
 	font-family: monospace;
 	font-size: 11px;
 	resize: vertical;
 	min-height: 48px;
+	background-color: light-dark(var(--field-color), var(--dark-toolbar-color));
 }
 
 .hmiColor

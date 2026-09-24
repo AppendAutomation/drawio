@@ -49,6 +49,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testMovement(ui);
 		HmiSelfTest.testM2Interaction(ui);
 		HmiSelfTest.testDiscreteText(ui);
+		HmiSelfTest.testScriptFields(ui);
 	}
 	catch (e)
 	{
@@ -2495,6 +2496,104 @@ HmiSelfTest.testDiscreteText = function(ui)
 
 	HmiSelfTest.check('valueDisplay.discreteKeepsAffixes',
 		show(wrapped, 1) === 'V1 OPEN!', show(wrapped, 1));
+
+	HmiSelfTest.clearDraft(ui);
+};
+
+/** The Action Script editors must actually be editable. */
+HmiSelfTest.testScriptFields = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Btn',
+			60, 620, 100, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'pushbutton.action': HmiTypes.LINKS['pushbutton.action'].defaults()
+	});
+
+	ui.hmiUiState = {expanded: {'pushbutton.action': true}};
+	ui.format.collapsedSections = {};
+	graph.setSelectionCell(cell);
+	ui.format.immediateRefresh();
+
+	var strip = ui.format.container.firstChild;
+
+	if (strip == null || strip.childNodes.length !== 4)
+	{
+		HmiSelfTest.check('script.tab', false, 'no Animation tab');
+
+		return;
+	}
+
+	strip.childNodes[3].click();
+
+	var panel = ui.format.container.childNodes[4];
+	var areas = panel.getElementsByTagName('textarea');
+
+	HmiSelfTest.check('script.fieldsRendered', areas.length === 3,
+		'found ' + areas.length + ' script fields');
+
+	if (areas.length === 0)
+	{
+		return;
+	}
+
+	var a = areas[0];
+	var style = window.getComputedStyle(a);
+
+	HmiSelfTest.check('script.notDisabled', !a.disabled && !a.readOnly,
+		'disabled=' + a.disabled + ' readOnly=' + a.readOnly);
+	HmiSelfTest.check('script.acceptsPointer',
+		style.pointerEvents !== 'none',
+		'pointer-events = ' + style.pointerEvents);
+	HmiSelfTest.check('script.hasSize',
+		a.offsetHeight > 0 && a.offsetWidth > 0,
+		a.offsetWidth + 'x' + a.offsetHeight);
+	HmiSelfTest.check('script.visible',
+		style.visibility !== 'hidden' && style.display !== 'none',
+		'visibility=' + style.visibility + ' display=' + style.display);
+
+	// Typing into it must reach the model.
+	a.focus();
+
+	HmiSelfTest.check('script.focusable', document.activeElement === a,
+		'active element is ' +
+		((document.activeElement != null) ?
+			document.activeElement.nodeName : 'none'));
+
+	// A textarea must not be transparent here: it would read as disabled
+	// beside the filled input fields around it.
+	HmiSelfTest.check('script.looksEditable',
+		style.backgroundColor !== 'rgba(0, 0, 0, 0)' &&
+		style.backgroundColor !== 'transparent',
+		'background = ' + style.backgroundColor);
+
+	// Dispatch the event rather than calling blur(): a programmatic blur does
+	// not reliably fire when the window itself is not focused, which is the
+	// usual state for an automated run.
+	a.value = 'Pump1_Run = 1;';
+	a.dispatchEvent(new Event('input', {bubbles: true}));
+	a.dispatchEvent(new FocusEvent('blur'));
+
+	var back = HmiProject.getCellLinks(graph, cell)['pushbutton.action'];
+
+	HmiSelfTest.check('script.commitsOnBlur',
+		back != null && back.onDown === 'Pump1_Run = 1;',
+		'stored ' + ((back != null) ? JSON.stringify(back.onDown) : 'nothing'));
 
 	HmiSelfTest.clearDraft(ui);
 };
