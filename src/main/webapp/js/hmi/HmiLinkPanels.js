@@ -220,7 +220,14 @@
 		this.addRow(content, mxResources.get('hmiExpression'),
 			this.createExprField(cfg, 'expr', 'tag or expression'));
 
-		if (cfg.kind != 'string')
+		if (cfg.kind === 'discrete')
+		{
+			this.addRow(content, 'On text',
+				this.createTextField(cfg, 'onText', "tag's On message"));
+			this.addRow(content, 'Off text',
+				this.createTextField(cfg, 'offText', "tag's Off message"));
+		}
+		else if (cfg.kind != 'string')
 		{
 			this.addRow(content, mxResources.get('hmiFormat'),
 				this.createTextField(cfg, 'format', 'e.g. 0.0'));

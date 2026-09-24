@@ -48,6 +48,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testPanelLayout(ui);
 		HmiSelfTest.testMovement(ui);
 		HmiSelfTest.testM2Interaction(ui);
+		HmiSelfTest.testDiscreteText(ui);
 	}
 	catch (e)
 	{
@@ -2420,4 +2421,80 @@ HmiSelfTest.hasFileType = function(types, ext)
 	}
 
 	return false;
+};
+
+/** Discrete Value Display text, and where it comes from. */
+HmiSelfTest.testDiscreteText = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+
+	var project = HmiSelfTest.sampleProject();
+	project.getTag('Pump1_Run').onMsg = 'RUNNING';
+	project.getTag('Pump1_Run').offMsg = 'STOPPED';
+	ui.hmiProject = project;
+
+	var sim = new HmiSimulator(project);
+	var rt = new HmiRuntime({graph: graph, project: project, driver: sim});
+	rt.project = project;
+	rt.values = {};
+
+	function show(cfg, value)
+	{
+		rt.values['pump1_run'] = {value: value,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+		rt.values['tank_level'] = {value: 80,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+
+		return rt.formatValue(cfg);
+	}
+
+	// With no link text, the tag's messages are used.
+	var fromTag = {kind: 'discrete', expr: 'Pump1_Run', prefix: '', suffix: ''};
+
+	HmiSelfTest.check('valueDisplay.discreteUsesTagMessages',
+		show(fromTag, 1) === 'RUNNING' && show(fromTag, 0) === 'STOPPED',
+		show(fromTag, 1) + ' / ' + show(fromTag, 0));
+
+	// The link's own text overrides the tag.
+	var override = {kind: 'discrete', expr: 'Pump1_Run',
+		onText: 'OPEN', offText: 'CLOSED', prefix: '', suffix: ''};
+
+	HmiSelfTest.check('valueDisplay.discreteLinkTextWins',
+		show(override, 1) === 'OPEN' && show(override, 0) === 'CLOSED',
+		show(override, 1) + ' / ' + show(override, 0));
+
+	// One side only: the other still falls back.
+	var partial = {kind: 'discrete', expr: 'Pump1_Run', onText: 'OPEN',
+		offText: '', prefix: '', suffix: ''};
+
+	HmiSelfTest.check('valueDisplay.discretePartialOverride',
+		show(partial, 1) === 'OPEN' && show(partial, 0) === 'STOPPED',
+		show(partial, 1) + ' / ' + show(partial, 0));
+
+	// An expression is not a tag, so there are no messages to borrow -- this
+	// is exactly when the link's own text has to work.
+	var expr = {kind: 'discrete', expr: 'Tank_Level > 50',
+		onText: 'HIGH', offText: 'LOW', prefix: '', suffix: ''};
+
+	HmiSelfTest.check('valueDisplay.discreteOnExpression',
+		show(expr, 0) === 'HIGH',
+		'expression form gave ' + show(expr, 0));
+
+	// With neither, a plain default rather than nothing.
+	var bare = {kind: 'discrete', expr: 'Tank_Level > 50', prefix: '',
+		suffix: ''};
+
+	HmiSelfTest.check('valueDisplay.discreteFallsBackToOnOff',
+		bare != null && show(bare, 0) === 'On',
+		show(bare, 0));
+
+	// Prefix and suffix still apply.
+	var wrapped = {kind: 'discrete', expr: 'Pump1_Run', onText: 'OPEN',
+		offText: 'CLOSED', prefix: 'V1 ', suffix: '!'};
+
+	HmiSelfTest.check('valueDisplay.discreteKeepsAffixes',
+		show(wrapped, 1) === 'V1 OPEN!', show(wrapped, 1));
+
+	HmiSelfTest.clearDraft(ui);
 };

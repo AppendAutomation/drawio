@@ -198,7 +198,8 @@ HmiTypes.defineLink = function(key, def)
 	def('valueDisplay', {code: 611, family: 'value', label: 'Value Display', milestone: 1,
 		defaults: function()
 		{
-			return {kind: 'analog', expr: '', format: '0.0', prefix: '', suffix: ''};
+			return {kind: 'analog', expr: '', format: '0.0', prefix: '',
+				suffix: '', onText: '', offText: ''};
 		}});
 
 	// --- touch links

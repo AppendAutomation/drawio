@@ -866,10 +866,18 @@ HmiRuntime.prototype.formatValue = function(cfg)
 
 	if (cfg.kind === 'discrete')
 	{
+		// The link's own text wins, then the tag's messages, then a plain
+		// default. The link has to be able to override: the expression need
+		// not be a bare tag at all -- "Level > 50" has no messages to borrow --
+		// and one bit can read Open/Closed on one object and Running/Stopped
+		// on another.
 		var tag = this.project.getTag(HmiRuntime.baseTag(cfg.expr));
-		text = (HmiRuntime.truthy(r.value)) ?
-			((tag != null && tag.onMsg) ? tag.onMsg : 'On') :
+		var on = (cfg.onText) ? cfg.onText :
+			((tag != null && tag.onMsg) ? tag.onMsg : 'On');
+		var off = (cfg.offText) ? cfg.offText :
 			((tag != null && tag.offMsg) ? tag.offMsg : 'Off');
+
+		text = (HmiRuntime.truthy(r.value)) ? on : off;
 	}
 	else if (cfg.kind === 'string')
 	{
