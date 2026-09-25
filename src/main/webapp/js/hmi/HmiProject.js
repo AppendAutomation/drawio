@@ -73,6 +73,11 @@ HmiProject.WINDOW_TYPES = ['replace', 'overlay', 'popup'];
 
 HmiProject.TITLE_BAR_HEIGHT = 24;
 
+/** Window scripts, stored as child elements so multi-line text stays legible. */
+HmiProject.WINDOW_SCRIPTS = ['onShow', 'whileShowing', 'onHide'];
+
+HmiProject.DEFAULT_WINDOW_EVERY_MS = '1000';
+
 /**
  * The display properties of a window, with defaults filled in. Never null.
  *
@@ -91,7 +96,12 @@ HmiProject.prototype.getWindow = function(pageId)
 		x: (w.x != null) ? w.x : 0,
 		y: (w.y != null) ? w.y : 0,
 		width: (w.width != null) ? w.width : this.settings.width,
-		height: (w.height != null) ? w.height : this.settings.height
+		height: (w.height != null) ? w.height : this.settings.height,
+		onShow: w.onShow || '',
+		whileShowing: w.whileShowing || '',
+		everyMs: (w.everyMs != null && w.everyMs !== '') ? w.everyMs :
+			HmiProject.DEFAULT_WINDOW_EVERY_MS,
+		onHide: w.onHide || ''
 	};
 };
 
@@ -112,6 +122,22 @@ HmiProject.prototype.setWindow = function(pageId, props)
 		{
 			w[dims[i]] = v;
 		}
+	}
+
+	for (var i = 0; i < HmiProject.WINDOW_SCRIPTS.length; i++)
+	{
+		var key = HmiProject.WINDOW_SCRIPTS[i];
+
+		if (props[key] != null && props[key] !== '')
+		{
+			w[key] = '' + props[key];
+		}
+	}
+
+	if (props.everyMs != null && props.everyMs !== '' &&
+		('' + props.everyMs) !== HmiProject.DEFAULT_WINDOW_EVERY_MS)
+	{
+		w.everyMs = '' + props.everyMs;
 	}
 
 	// Values equal to the defaults are not stored, so a window the user only
@@ -396,7 +422,7 @@ HmiProject.prototype.toXml = function(doc)
 		var node = doc.createElement('window');
 		node.setAttribute('page', ids[i]);
 
-		var keys = ['titleBar', 'type', 'x', 'y', 'width', 'height'];
+		var keys = ['titleBar', 'type', 'x', 'y', 'width', 'height', 'everyMs'];
 
 		for (var j = 0; j < keys.length; j++)
 		{
@@ -404,6 +430,18 @@ HmiProject.prototype.toXml = function(doc)
 			{
 				node.setAttribute(keys[j], (w[keys[j]] === true) ?
 					'1' : '' + w[keys[j]]);
+			}
+		}
+
+		for (var j = 0; j < HmiProject.WINDOW_SCRIPTS.length; j++)
+		{
+			var key = HmiProject.WINDOW_SCRIPTS[j];
+
+			if (w[key] != null && w[key] !== '')
+			{
+				var script = doc.createElement(key);
+				script.appendChild(doc.createTextNode(w[key]));
+				node.appendChild(script);
 			}
 		}
 
@@ -537,6 +575,18 @@ HmiProject.fromXml = function(node)
 
 		if (n.getAttribute('titleBar') === '1') { w.titleBar = true; }
 		if (n.getAttribute('type')) { w.type = n.getAttribute('type'); }
+		if (n.getAttribute('everyMs')) { w.everyMs = n.getAttribute('everyMs'); }
+
+		for (var j = 0; j < HmiProject.WINDOW_SCRIPTS.length; j++)
+		{
+			var key = HmiProject.WINDOW_SCRIPTS[j];
+			var list = n.getElementsByTagName(key);
+
+			if (list.length > 0 && mxUtils.getTextContent(list[0]) !== '')
+			{
+				w[key] = mxUtils.getTextContent(list[0]);
+			}
+		}
 
 		var dims = ['x', 'y', 'width', 'height'];
 

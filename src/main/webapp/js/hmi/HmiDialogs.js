@@ -1373,6 +1373,27 @@ HmiDialogs.showWindowProps = function(ui, page)
 		preview.appendChild(rect);
 		fields.appendChild(preview);
 
+		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Scripts'));
+
+		var script = function(key, label)
+		{
+			HmiDialogs.scriptArea(fields, label, d[key], project, function(v)
+			{
+				d[key] = v;
+			}).setAttribute('data-hmi-prop', key);
+		};
+
+		script('onShow', 'On show');
+		script('whileShowing', 'While showing');
+
+		var every = HmiDialogs.field(fields, 'Every (ms)', d.everyMs,
+			function(v) { d.everyMs = v; });
+		every.setAttribute('data-hmi-prop', 'everyMs');
+		every.setAttribute('placeholder', HmiProject.DEFAULT_WINDOW_EVERY_MS);
+		mxEvent.addListener(every, 'input', function() { d.everyMs = every.value; });
+
+		script('onHide', 'On hide');
+
 		var refill = function()
 		{
 			for (var k in inputs)
@@ -1443,10 +1464,56 @@ HmiDialogs.showWindowProps = function(ui, page)
 	};
 
 	HmiDialogs.okCancel(ui, div, apply);
-	ui.showDialog(div, 460, 720, true, true);
+	ui.showDialog(div, 480, Math.max(480, Math.min(900, window.innerHeight - 60)),
+		true, true);
 };
 
 HmiDialogs.radioCounter = 0;
+
+/**
+ * A labelled QuickScript field, checked as it is typed. Reports every change,
+ * not only on blur, so OK never loses the last keystrokes.
+ */
+HmiDialogs.scriptArea = function(parent, label, value, project, onChange)
+{
+	var row = HmiDialogs.el('div', 'hmiFormRow hmiFormRowTop');
+	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
+
+	var area = document.createElement('textarea');
+	area.className = 'hmiInput hmiScript';
+	area.setAttribute('rows', '3');
+	area.setAttribute('placeholder', 'QuickScript statements');
+	area.value = (value != null) ? value : '';
+
+	var check = function()
+	{
+		var errors = (area.value !== '') ? HmiExpr.compile(area.value,
+			{project: project, mode: 'script'}).errors : [];
+
+		if (errors.length > 0)
+		{
+			area.classList.add('hmiInvalid');
+			area.setAttribute('title', errors[0].message);
+		}
+		else
+		{
+			area.classList.remove('hmiInvalid');
+			area.removeAttribute('title');
+		}
+	};
+
+	mxEvent.addListener(area, 'input', function()
+	{
+		check();
+		onChange(area.value);
+	});
+
+	check();
+	row.appendChild(area);
+	parent.appendChild(row);
+
+	return area;
+};
 
 /**
  * The bounds of a page's content, in page -- and so screen -- coordinates.

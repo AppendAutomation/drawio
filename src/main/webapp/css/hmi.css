@@ -774,3 +774,14 @@
 	bottom: 0;
 	background-color: rgba(0, 0, 0, 0.25);
 }
+
+.hmiFormRowTop
+{
+	align-items: flex-start;
+}
+
+.hmiFormRowTop .hmiScript
+{
+	flex: 1 1 auto;
+	box-sizing: border-box;
+}

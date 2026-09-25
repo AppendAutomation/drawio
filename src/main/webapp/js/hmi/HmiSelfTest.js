@@ -3415,6 +3415,15 @@ HmiSelfTest.testWindows = function(ui)
 	check('win.unsetSizeFollowsResolution',
 		back.getWindow('a').width === 800, '' + back.getWindow('a').width);
 
+	p.setWindow('s', {onShow: 'A = 1;\nB = 2;', whileShowing: '', onHide: 'C = 3;',
+		everyMs: '250'});
+	var ws = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument())).getWindow('s');
+
+	check('win.roundTripScripts', ws.onShow === 'A = 1;\nB = 2;' &&
+		ws.whileShowing === '' && ws.onHide === 'C = 3;' && ws.everyMs === '250',
+		JSON.stringify(ws));
+	check('win.defaultEveryMs', p.getWindow('b').everyMs === '1000');
+
 	var empty = new HmiProject();
 	check('win.emptyIsEmpty', empty.isEmpty());
 	empty.settings.width = 800;
@@ -3586,6 +3595,48 @@ HmiSelfTest.testWindows = function(ui)
 			ui.hmiRuntime.windows[0].page === ui.currentPage);
 		HmiMenus.stop(ui);
 
+		// --- window scripts -----------------------------------------------
+
+		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200,
+			width: 200, height: 100, onShow: 'Pump1_Run = 1;',
+			whileShowing: 'Tank_Level = Tank_Level + 1;', everyMs: '100',
+			onHide: 'Pump1_Run = 0;\nRecipe_Name = "closed";'});
+		project.settings.startup = [pb.getId()];
+		HmiMenus.start(ui);
+
+		var wm2 = ui.hmiRuntime;
+		var sim = wm2.driver;
+		sim.write({'Pump1_Run': 0});
+
+		var popup = wm2.show('WinC');
+
+		check('script.onShowRuns', sim.get('Pump1_Run').value == 1,
+			JSON.stringify(sim.get('Pump1_Run')));
+		check('script.whileShowingTimer', popup.whileTimer != null);
+
+		wm2.hide('WinC');
+
+		check('script.onHideRuns', sim.get('Pump1_Run').value == 0 &&
+			sim.get('Recipe_Name').value === 'closed',
+			JSON.stringify(sim.get('Recipe_Name')));
+		check('script.whileShowingStops', popup.whileTimer == null);
+
+		// A replace window closing it runs its On hide too.
+		wm2.show('WinC');
+		wm2.show('WinD');
+		check('script.onHideOnReplace', wm2.windowFor(pc) == null &&
+			sim.get('Pump1_Run').value == 0);
+
+		HmiMenus.stop(ui);
+		project.settings.startup = [];
+
+		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200,
+			width: 200, height: 100, onShow: 'Pump1_Run = ;'});
+		check('script.validateReports',
+			HmiMenus.checkWindowScripts(project, pc.getId()).length === 1 &&
+			HmiMenus.checkWindowScripts(project, pd.getId()).length === 0,
+			HmiMenus.checkWindowScripts(project, pc.getId()).join(' | '));
+
 		// --- validation ---------------------------------------------------
 
 		project.setWindow(pb.getId(), {x: 900, y: 0, width: 300, height: 100});
@@ -3628,12 +3679,25 @@ HmiSelfTest.testWindows = function(ui)
 		wInput.value = '320';
 		wInput.dispatchEvent(new Event('input'));
 
+		var onShowArea = dlg.querySelector('[data-hmi-prop="onShow"]');
+		onShowArea.value = 'Pump1_Run = 1;';
+		onShowArea.dispatchEvent(new Event('input'));
+
+		var badArea = dlg.querySelector('[data-hmi-prop="onHide"]');
+		badArea.value = 'Pump1_Run = ;';
+		badArea.dispatchEvent(new Event('input'));
+		check('dlg.scriptChecked', badArea.classList.contains('hmiInvalid'));
+		badArea.value = '';
+		badArea.dispatchEvent(new Event('input'));
+
 		dlg.querySelector('.hmiOk').click();
 
 		var wa2 = project.getWindow(pa.getId());
 		check('dlg.windowApplied', wa2.titleBar === true &&
 			wa2.type === 'overlay' && wa2.width === 320 &&
 			wa2.height === 480, JSON.stringify(wa2));
+		check('dlg.scriptApplied', wa2.onShow === 'Pump1_Run = 1;' &&
+			wa2.onHide === '', JSON.stringify(wa2));
 
 		// --- canvas frame -------------------------------------------------
 

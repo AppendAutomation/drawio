@@ -584,6 +584,15 @@ HmiMenus.validate = function(ui)
 				problems.push({page: ui.pages[i].getName(), cell: null,
 					link: mxResources.get('hmiWindowProps'), message: msg});
 			}
+
+			var scripts = HmiMenus.checkWindowScripts(project,
+				ui.pages[i].getId());
+
+			for (var j = 0; j < scripts.length; j++)
+			{
+				problems.push({page: ui.pages[i].getName(), cell: null,
+					link: 'Window script', message: scripts[j]});
+			}
 		}
 	}
 
@@ -603,6 +612,38 @@ HmiMenus.hasPage = function(ui, name)
 	}
 
 	return false;
+};
+
+/** Compile errors in a window's scripts, labelled by which script. */
+HmiMenus.checkWindowScripts = function(project, pageId)
+{
+	var w = project.getWindow(pageId);
+	var labels = {onShow: 'On show', whileShowing: 'While showing',
+		onHide: 'On hide'};
+	var errors = [];
+
+	for (var key in labels)
+	{
+		if (w[key])
+		{
+			var compiled = HmiExpr.compile(w[key],
+				{project: project, mode: 'script'});
+
+			for (var i = 0; i < compiled.errors.length; i++)
+			{
+				errors.push(labels[key] + ': ' + compiled.errors[i].message);
+			}
+		}
+	}
+
+	var every = HmiMenus.checkLink(project, {rateMs: w.everyMs});
+
+	for (var i = 0; i < every.length; i++)
+	{
+		errors.push(every[i].replace(/^Rate/, 'Every (ms)'));
+	}
+
+	return errors;
 };
 
 /** A window that does not fit on the target screen, or null. */

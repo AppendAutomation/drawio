@@ -625,6 +625,23 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	win.runtime = runtime;
 	runtime.start();
 
+	// Window scripts run in the window's own runtime, so they read the same
+	// values its objects show and write through the same shared driver.
+	runtime.runScript(props.onShow);
+
+	if (props.whileShowing)
+	{
+		var rate = Math.max(50, runtime.number(props.everyMs, 1000));
+
+		win.whileTimer = window.setInterval(function()
+		{
+			HmiLog.guard('window.whileShowing', function()
+			{
+				runtime.runScript(props.whileShowing);
+			});
+		}, rate);
+	}
+
 	return win;
 };
 
@@ -679,8 +696,16 @@ HmiWindowManager.prototype.close = function(win)
 
 	this.windows.splice(i, 1);
 
+	if (win.whileTimer != null)
+	{
+		window.clearInterval(win.whileTimer);
+		win.whileTimer = null;
+	}
+
 	if (win.runtime != null)
 	{
+		// Before the runtime stops, while it can still write.
+		win.runtime.runScript(win.props.onHide);
 		win.runtime.stop();
 		win.runtime.driver.disconnect();
 	}
