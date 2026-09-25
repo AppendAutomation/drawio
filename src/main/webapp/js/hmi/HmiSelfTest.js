@@ -51,6 +51,8 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testM2Interaction(ui);
 		HmiSelfTest.testDiscreteText(ui);
 		HmiSelfTest.testScriptFields(ui);
+		HmiSelfTest.testAnimationClipboard(ui);
+		HmiSelfTest.testKeypad(ui);
 	}
 	catch (e)
 	{
@@ -2787,4 +2789,239 @@ HmiSelfTest.testConditionals = function()
 		keywordish.errors.length === 0 &&
 		mxUtils.indexOf(keywordish.deps, 'IFace_Ready') >= 0,
 		(keywordish.errors[0] || {}).message || keywordish.deps.join(','));
+};
+
+/** Copy / Paste / Delete Animation, and the on-screen keypad. */
+HmiSelfTest.testAnimationClipboard = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var source = null;
+	var target = null;
+	var other = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		source = graph.insertVertex(graph.getDefaultParent(), null, 'A',
+			40, 700, 80, 40);
+		target = graph.insertVertex(graph.getDefaultParent(), null, 'B',
+			140, 700, 80, 40);
+		other = graph.insertVertex(graph.getDefaultParent(), null, 'C',
+			240, 700, 80, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, source, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: '50', color: '#00CC00'}, {max: null, color: '#CC0000'}]},
+		'visibility': {expr: 'Pump1_Run', sense: 'visible'}
+	});
+
+	// The target already has animation of its own, plus a colour link that
+	// conflicts with what is about to be pasted.
+	HmiProject.setCellLinks(graph, target, {
+		'blink': HmiTypes.LINKS['blink'].defaults(),
+		'fillColor.discrete': {expr: 'Pump1_Run', on: '#111111', off: '#222222'}
+	});
+
+	HmiClipboard.links = null;
+
+	// --- menu items -------------------------------------------------------
+
+	var items = HmiSelfTest.collectMenuItems(ui, source);
+
+	HmiSelfTest.check('clip.menuItemsPresent',
+		items['Copy Animation'] != null && items['Paste Animation'] != null &&
+		items['Delete Animation'] != null,
+		Object.keys(items).join(', '));
+
+	HmiSelfTest.check('clip.copyEnabledWithLinks',
+		items['Copy Animation'] === true);
+	HmiSelfTest.check('clip.pasteDisabledWhenEmpty',
+		items['Paste Animation'] === false,
+		'paste should be disabled with an empty clipboard');
+
+	var bare = HmiSelfTest.collectMenuItems(ui, other);
+
+	HmiSelfTest.check('clip.copyDisabledWithoutLinks',
+		bare['Copy Animation'] === false,
+		'copy should be disabled on an object with no animation');
+
+	// --- copy -------------------------------------------------------------
+
+	HmiMenus.copyAnimation(ui, [source]);
+
+	HmiSelfTest.check('clip.copied',
+		HmiClipboard.links != null &&
+		HmiClipboard.links['fillColor.analog'] != null,
+		JSON.stringify(HmiClipboard.links));
+
+	// The clipboard must be a snapshot, not a live reference.
+	var live = HmiProject.getCellLinks(graph, source);
+	live['fillColor.analog'].expr = 'Changed_After_Copy';
+	HmiProject.setCellLinks(graph, source, live);
+
+	HmiSelfTest.check('clip.copyIsSnapshot',
+		HmiClipboard.links['fillColor.analog'].expr === 'Tank_Level',
+		'clipboard now holds ' +
+		HmiClipboard.links['fillColor.analog'].expr);
+
+	// --- paste ------------------------------------------------------------
+
+	HmiMenus.pasteAnimation(ui, [target]);
+
+	var pasted = HmiProject.getCellLinks(graph, target);
+
+	HmiSelfTest.check('clip.pasteAdds',
+		pasted['fillColor.analog'] != null &&
+		pasted['visibility'] != null,
+		Object.keys(pasted).join(','));
+
+	// Merge, not replace: what the target already had survives.
+	HmiSelfTest.check('clip.pasteKeepsExisting',
+		pasted['blink'] != null,
+		'paste discarded the blink link that was already there');
+
+	// But a conflicting colour link is cleared, as the panel does.
+	HmiSelfTest.check('clip.pasteResolvesColourConflict',
+		pasted['fillColor.discrete'] == null,
+		'discrete and analog fill colour cannot both stand');
+
+	// --- paste onto several -----------------------------------------------
+
+	HmiMenus.pasteAnimation(ui, [other]);
+
+	HmiSelfTest.check('clip.pasteToAnother',
+		HmiProject.getCellLinks(graph, other)['fillColor.analog'] != null);
+
+	// Pasting must deep copy, or two objects share one config object.
+	var a = HmiProject.getCellLinks(graph, target);
+	a['fillColor.analog'].expr = 'Only_On_Target';
+	HmiProject.setCellLinks(graph, target, a);
+
+	HmiSelfTest.check('clip.pasteIsIndependent',
+		HmiProject.getCellLinks(graph, other)['fillColor.analog'].expr ===
+			'Tank_Level',
+		'editing one pasted copy changed the other');
+
+	// --- delete -----------------------------------------------------------
+
+	HmiMenus.deleteAnimation(ui, [target]);
+
+	HmiSelfTest.check('clip.deleteClearsAll',
+		Object.keys(HmiProject.getCellLinks(graph, target)).length === 0,
+		Object.keys(HmiProject.getCellLinks(graph, target)).join(','));
+
+	HmiSelfTest.check('clip.deleteLeavesOthers',
+		Object.keys(HmiProject.getCellLinks(graph, other)).length > 0,
+		'delete reached beyond its target');
+
+	// One undoable step per command, so a paste over several objects is one
+	// undo rather than one per object.
+	var before = ui.editor.undoManager.history.length;
+	HmiMenus.pasteAnimation(ui, [target, other]);
+
+	HmiSelfTest.check('clip.pasteIsOneUndo',
+		ui.editor.undoManager.history.length === before + 1,
+		'history grew by ' +
+		(ui.editor.undoManager.history.length - before));
+
+	HmiSelfTest.clearDraft(ui);
+};
+
+/** Builds the cell context menu and reports each item's enabled state. */
+HmiSelfTest.collectMenuItems = function(ui, cell)
+{
+	var found = {};
+
+	var fake = {
+		smartSeparators: true,
+		hideShortcuts: true,
+		addItem: function(title, image, funct, parent, iconCls, enabled)
+		{
+			found[title] = (enabled !== false);
+
+			return document.createElement('div');
+		},
+		addSeparator: function() {},
+		addCheckmark: function() {}
+	};
+
+	ui.editor.graph.setSelectionCell(cell);
+	HmiMenus.addAnimationItems(ui, fake, cell);
+
+	return found;
+};
+
+/** The on-screen keypad has to exist when the option is on. */
+HmiSelfTest.testKeypad = function(ui)
+{
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var sim = new HmiSimulator(ui.hmiProject);
+	ui.hmiRuntime = new HmiRuntime({graph: ui.editor.graph,
+		project: ui.hmiProject, driver: sim});
+	ui.hmiRuntime.running = true;
+	ui.hmiRuntime.values = {'tank_level': {value: 10,
+		quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}};
+
+	HmiDialogs.showUserInput(ui, {kind: 'analog', tag: 'Tank_Level',
+		min: '0', max: '100', prompt: 'Setpoint', keypad: true});
+
+	var dlg = document.getElementsByClassName('hmiKeypad');
+
+	HmiSelfTest.check('keypad.shownWhenEnabled', dlg.length === 1,
+		'found ' + dlg.length + ' keypads');
+
+	if (dlg.length === 1)
+	{
+		var buttons = dlg[0].getElementsByTagName('button');
+
+		HmiSelfTest.check('keypad.hasAllKeys', buttons.length === 14,
+			'found ' + buttons.length + ' keys');
+
+		// Typing through the keypad must reach the field the OK button reads.
+		var input = null;
+		var inputs = dlg[0].parentNode.getElementsByTagName('input');
+
+		if (inputs.length > 0) { input = inputs[0]; }
+
+		if (input != null)
+		{
+			input.value = '';
+			buttons[0].click();
+			buttons[1].click();
+
+			HmiSelfTest.check('keypad.typesIntoField', input.value === '78',
+				'field holds ' + JSON.stringify(input.value));
+
+			// The sign key toggles rather than inserting a stray minus.
+			for (var i = 0; i < buttons.length; i++)
+			{
+				if (buttons[i].textContent === '-') { buttons[i].click(); }
+			}
+
+			HmiSelfTest.check('keypad.signToggles', input.value === '-78',
+				'field holds ' + JSON.stringify(input.value));
+		}
+	}
+
+	ui.hideDialog();
+
+	// And not offered at all when the option is off.
+	HmiDialogs.showUserInput(ui, {kind: 'analog', tag: 'Tank_Level',
+		prompt: 'Setpoint', keypad: false});
+
+	HmiSelfTest.check('keypad.hiddenWhenDisabled',
+		document.getElementsByClassName('hmiKeypad').length === 0);
+
+	ui.hideDialog();
+	ui.hmiRuntime = null;
 };

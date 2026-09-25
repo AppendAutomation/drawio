@@ -262,8 +262,13 @@
 
 		this.addRow(content, mxResources.get('hmiPrompt'),
 			this.createTextField(cfg, 'prompt', 'shown in the entry dialog'));
-		this.addRow(content, '', this.createCheckField(cfg, 'keypad',
-			'On-screen keypad'));
+
+		// Offered only where it exists, rather than shown and ignored.
+		if (cfg.kind === 'analog')
+		{
+			this.addRow(content, '', this.createCheckField(cfg, 'keypad',
+				'On-screen keypad'));
+		}
 	};
 
 	// ----------------------------------------------------------- pushbutton

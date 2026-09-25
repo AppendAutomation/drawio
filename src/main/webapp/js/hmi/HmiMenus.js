@@ -12,6 +12,200 @@ HmiMenus.install = function()
 	HmiMenus.installActions();
 	HmiMenus.installMenu();
 	HmiMenus.installKeys();
+	HmiMenus.installContextMenu();
+};
+
+// --------------------------------------------------------- context menu
+
+/**
+ * Animation clipboard.
+ *
+ * Deliberately separate from the system clipboard and from drawio's own cell
+ * clipboard: copying a shape already carries its animation with it, so this is
+ * for the other case -- taking the animation off one object and putting it on
+ * a different one without disturbing either shape.
+ */
+HmiClipboard = {links: null};
+
+HmiMenus.installContextMenu = function()
+{
+	if (typeof Menus === 'undefined' ||
+		Menus.prototype.addPopupMenuCellItems == null)
+	{
+		HmiLog.warn('addPopupMenuCellItems missing; context menu skipped');
+
+		return;
+	}
+
+	var addPopupMenuCellItems = Menus.prototype.addPopupMenuCellItems;
+
+	Menus.prototype.addPopupMenuCellItems = function(menu, cell, evt)
+	{
+		addPopupMenuCellItems.apply(this, arguments);
+
+		HmiLog.guard('contextMenu', mxUtils.bind(this, function()
+		{
+			HmiMenus.addAnimationItems(this.editorUi, menu, cell);
+		}));
+	};
+};
+
+/** The cells a context-menu action applies to. */
+HmiMenus.targetCells = function(ui, cell)
+{
+	var graph = ui.editor.graph;
+	var cells = graph.getSelectionCells();
+
+	// Right-clicking outside the selection acts on what was clicked, which is
+	// what every other item in this menu does.
+	if (cell != null && mxUtils.indexOf(cells, cell) < 0)
+	{
+		return [cell];
+	}
+
+	return cells;
+};
+
+HmiMenus.addAnimationItems = function(ui, menu, cell)
+{
+	var graph = ui.editor.graph;
+	var cells = HmiMenus.targetCells(ui, cell);
+
+	if (cells.length === 0)
+	{
+		return;
+	}
+
+	var withLinks = 0;
+
+	for (var i = 0; i < cells.length; i++)
+	{
+		if (Object.keys(HmiProject.getCellLinks(graph, cells[i])).length > 0)
+		{
+			withLinks++;
+		}
+	}
+
+	menu.addSeparator();
+
+	menu.addItem(mxResources.get('hmiCopyAnimation'), null, function()
+	{
+		HmiMenus.copyAnimation(ui, cells);
+	}, null, null, withLinks > 0);
+
+	menu.addItem(mxResources.get('hmiPasteAnimation'), null, function()
+	{
+		HmiMenus.pasteAnimation(ui, cells);
+	}, null, null, HmiClipboard.links != null);
+
+	menu.addItem(mxResources.get('hmiDeleteAnimation'), null, function()
+	{
+		HmiMenus.deleteAnimation(ui, cells);
+	}, null, null, withLinks > 0);
+};
+
+HmiMenus.copyAnimation = function(ui, cells)
+{
+	var graph = ui.editor.graph;
+
+	for (var i = 0; i < cells.length; i++)
+	{
+		var links = HmiProject.getCellLinks(graph, cells[i]);
+
+		if (Object.keys(links).length > 0)
+		{
+			// Deep copy, so editing the source afterwards cannot reach into
+			// what is waiting on the clipboard.
+			HmiClipboard.links = JSON.parse(JSON.stringify(links));
+			HmiLog.log('copied ' + Object.keys(links).length +
+				' animation link(s)');
+
+			return;
+		}
+	}
+};
+
+/**
+ * Merges the clipboard onto each target rather than replacing.
+ *
+ * Replacing would silently discard animation the target already had, which is
+ * a destructive reading of the word "paste". A link of the same type is
+ * overwritten, and a conflicting colour link is removed for the same reason
+ * the panel removes it: Discrete and Analog both drive one property, so
+ * holding both would make the result depend on evaluation order.
+ */
+HmiMenus.pasteAnimation = function(ui, cells)
+{
+	if (HmiClipboard.links == null)
+	{
+		return;
+	}
+
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+
+	model.beginUpdate();
+
+	try
+	{
+		for (var i = 0; i < cells.length; i++)
+		{
+			var links = HmiProject.getCellLinks(graph, cells[i]);
+
+			for (var key in HmiClipboard.links)
+			{
+				var def = HmiTypes.LINKS[key];
+
+				if (def != null)
+				{
+					var conflicts = HmiFormatPanel.conflictsWith(def);
+
+					for (var c = 0; c < conflicts.length; c++)
+					{
+						delete links[conflicts[c]];
+					}
+				}
+
+				links[key] = JSON.parse(JSON.stringify(HmiClipboard.links[key]));
+			}
+
+			HmiProject.setCellLinks(graph, cells[i], links);
+		}
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	if (ui.format != null)
+	{
+		ui.format.refresh();
+	}
+};
+
+HmiMenus.deleteAnimation = function(ui, cells)
+{
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+
+	model.beginUpdate();
+
+	try
+	{
+		for (var i = 0; i < cells.length; i++)
+		{
+			HmiProject.setCellLinks(graph, cells[i], {});
+		}
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	if (ui.format != null)
+	{
+		ui.format.refresh();
+	}
 };
 
 // -------------------------------------------------------------- actions

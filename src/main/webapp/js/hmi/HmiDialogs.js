@@ -970,6 +970,14 @@ HmiDialogs.showUserInput = function(ui, cfg)
 	{
 		input = HmiDialogs.field(body, 'Value',
 			(current.value != null) ? current.value : '', function() {});
+
+		// The keypad is for a touch screen with no keyboard, which is the
+		// whole reason the option exists. Offered only for analog entry;
+		// a full alphanumeric keyboard for string input is a separate thing.
+		if (cfg.keypad && cfg.kind === 'analog')
+		{
+			body.appendChild(HmiDialogs.keypad(input));
+		}
 	}
 
 	body.appendChild(error);
@@ -1040,12 +1048,71 @@ HmiDialogs.showUserInput = function(ui, cfg)
 	}
 
 	div.appendChild(footer);
-	ui.showDialog(div, 380, 240, true, true);
+
+	var tall = (cfg.keypad && cfg.kind === 'analog');
+	ui.showDialog(div, 380, (tall) ? 480 : 240, true, true);
 
 	if (input != null)
 	{
 		window.setTimeout(function() { input.focus(); input.select(); }, 0);
 	}
+};
+
+/**
+ * A numeric keypad that types into the given field.
+ *
+ * Keys write through the field rather than to a value of their own, so the
+ * typed text, the keypad and the validation all read the same place and a
+ * touch user and a keyboard user can use the same dialog interchangeably.
+ */
+HmiDialogs.keypad = function(input)
+{
+	var pad = HmiDialogs.el('div', 'hmiKeypad');
+
+	var keys = ['7', '8', '9', '1', '2', '3', '4', '5', '6', '0', '.', '-'];
+
+	function press(key)
+	{
+		if (key === '-')
+		{
+			// Toggle the sign rather than inserting a stray minus, which is
+			// what a person means by the key on a numeric pad.
+			input.value = (input.value.charAt(0) === '-') ?
+				input.value.substring(1) : '-' + input.value;
+		}
+		else if (key === '.' && input.value.indexOf('.') >= 0)
+		{
+			return;
+		}
+		else
+		{
+			input.value += key;
+		}
+
+		input.focus();
+	}
+
+	for (var i = 0; i < keys.length; i++)
+	{
+		(function(key)
+		{
+			pad.appendChild(HmiDialogs.button(key, function() { press(key); }));
+		})(keys[i]);
+	}
+
+	pad.appendChild(HmiDialogs.button('\u232b', function()
+	{
+		input.value = input.value.substring(0, input.value.length - 1);
+		input.focus();
+	}));
+
+	pad.appendChild(HmiDialogs.button('CLR', function()
+	{
+		input.value = '';
+		input.focus();
+	}));
+
+	return pad;
 };
 
 // ---------------------------------------------------------- validation
