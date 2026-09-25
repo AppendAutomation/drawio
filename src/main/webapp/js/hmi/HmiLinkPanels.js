@@ -263,11 +263,12 @@
 		this.addRow(content, mxResources.get('hmiPrompt'),
 			this.createTextField(cfg, 'prompt', 'shown in the entry dialog'));
 
-		// Offered only where it exists, rather than shown and ignored.
-		if (cfg.kind === 'analog')
+		// Discrete entry is two buttons, so there is nothing to type on.
+		if (cfg.kind !== 'discrete')
 		{
 			this.addRow(content, '', this.createCheckField(cfg, 'keypad',
-				'On-screen keypad'));
+				(cfg.kind === 'analog') ?
+					'On-screen keypad' : 'On-screen keyboard'));
 		}
 	};
 

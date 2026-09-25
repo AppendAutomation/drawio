@@ -578,3 +578,39 @@
 	font-size: 16px;
 	cursor: pointer;
 }
+
+.hmiRange
+{
+	font-size: 12px;
+	color: gray;
+	margin: 2px 0 6px 138px;
+}
+
+/* ----------------------------------------------------------- keyboard */
+
+.hmiKeyboard
+{
+	margin-top: 10px;
+}
+
+.hmiKeyboardRow
+{
+	display: flex;
+	gap: 4px;
+	margin-bottom: 4px;
+	justify-content: center;
+}
+
+.hmiKeyboardRow button
+{
+	flex: 1 1 0;
+	min-width: 0;
+	padding: 10px 0;
+	font-size: 14px;
+	cursor: pointer;
+}
+
+.hmiKeyboardRow button.hmiKeySpace
+{
+	flex: 4 1 0;
+}

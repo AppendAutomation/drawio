@@ -53,6 +53,8 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testScriptFields(ui);
 		HmiSelfTest.testAnimationClipboard(ui);
 		HmiSelfTest.testKeypad(ui);
+		HmiSelfTest.testPanelFocus(ui);
+		HmiSelfTest.testInputExtras(ui);
 	}
 	catch (e)
 	{
@@ -2614,6 +2616,8 @@ HmiSelfTest.testScriptFields = function(ui)
 	a.dispatchEvent(new Event('input', {bubbles: true}));
 	a.dispatchEvent(new FocusEvent('blur'));
 
+	HmiSelfTest.blurAll(ui);
+
 	var back = HmiProject.getCellLinks(graph, cell)['pushbutton.action'];
 
 	HmiSelfTest.check('script.commitsOnBlur',
@@ -3024,4 +3028,287 @@ HmiSelfTest.testKeypad = function(ui)
 
 	ui.hideDialog();
 	ui.hmiRuntime = null;
+};
+
+/**
+ * Focus survives the panel rebuild that an edit triggers.
+ *
+ * Asynchronous, because the restore is deferred past the tab router. The
+ * pending debounced refresh is cancelled before each step, or a stray rebuild
+ * lands between the mousedown and the assertion.
+ */
+HmiSelfTest.testPanelFocus = function(ui)
+{
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = HmiSelfTest.sampleProject();
+
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'F',
+			40, 780, 80, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: '50', color: '#00CC00'}, {max: null, color: '#CC0000'}]},
+		'valueDisplay': HmiTypes.LINKS['valueDisplay'].defaults()
+	});
+
+	ui.hmiUiState = {expanded: {'fillColor.analog': true, 'valueDisplay': true}};
+	ui.format.collapsedSections = {};
+	ui.hmiFocus = null;
+	graph.setSelectionCell(cell);
+
+	HmiSelfTest.settleFormat(ui);
+
+	var strip = ui.format.container.firstChild;
+	strip.childNodes[3].click();
+
+	var panel = ui.format.container.childNodes[4];
+	var fields = panel.querySelectorAll('[data-hmi-focus]');
+
+	HmiSelfTest.check('focus.controlsIndexed', fields.length > 2,
+		'indexed ' + fields.length + ' controls');
+
+	if (fields.length < 3)
+	{
+		HmiSelfTest.finishFocus();
+
+		return;
+	}
+
+	// Aim at the third control, as a mousedown would.
+	var wanted = 2;
+	var target = panel.querySelector('[data-hmi-focus="' + wanted + '"]');
+	target.dispatchEvent(new MouseEvent('mousedown', {bubbles: true}));
+
+	HmiSelfTest.check('focus.mousedownRemembers',
+		ui.hmiFocus != null && ui.hmiFocus.index === wanted,
+		'remembered ' + JSON.stringify(ui.hmiFocus));
+
+	// Force the rebuild a commit causes, from the state the destroyed field
+	// leaves behind: nothing focused.
+	HmiSelfTest.blurAll(ui);
+	HmiSelfTest.settleFormat(ui);
+
+	window.setTimeout(function()
+	{
+		var restored = document.activeElement;
+
+		HmiSelfTest.check('focus.restoredAfterRebuild',
+			restored != null && restored.getAttribute != null &&
+			restored.getAttribute('data-hmi-focus') === '' + wanted,
+			'focus landed on ' +
+			((restored != null && restored.getAttribute != null) ?
+				restored.getAttribute('data-hmi-focus') : '' + restored));
+
+		// A rebuild long after the interaction must not yank focus back.
+		ui.hmiFocus = {index: wanted, start: 0, end: 0,
+			at: Date.now() - 60000};
+		HmiSelfTest.blurAll(ui);
+		HmiSelfTest.settleFormat(ui);
+
+		window.setTimeout(function()
+		{
+			var now = document.activeElement;
+
+			HmiSelfTest.check('focus.staleMemoryIgnored',
+				now == null || now.getAttribute == null ||
+				now.getAttribute('data-hmi-focus') == null,
+				'an old interaction reclaimed focus');
+
+			// And it declines to steal focus from wherever the user now is.
+			ui.hmiFocus = {index: wanted, start: 0, end: 0, at: Date.now()};
+			var elsewhere = document.createElement('input');
+			document.body.appendChild(elsewhere);
+			elsewhere.focus();
+			HmiSelfTest.settleFormat(ui);
+
+			window.setTimeout(function()
+			{
+				HmiSelfTest.check('focus.doesNotStealFromElsewhere',
+					document.activeElement === elsewhere,
+					'focus moved away from where the user was typing');
+
+				elsewhere.blur();
+				document.body.removeChild(elsewhere);
+				ui.hmiFocus = null;
+				HmiSelfTest.clearDraft(ui);
+				HmiSelfTest.finishFocus();
+			}, 30);
+		}, 30);
+	}, 30);
+};
+
+/** Rebuilds the format panel now, cancelling any debounced rebuild. */
+HmiSelfTest.settleFormat = function(ui)
+{
+	if (ui.format.pendingRefresh != null)
+	{
+		window.clearTimeout(ui.format.pendingRefresh);
+		ui.format.pendingRefresh = null;
+	}
+
+	ui.format.immediateRefresh();
+};
+
+/**
+ * Clears focus the way a destroyed field does.
+ *
+ * blur() alone is not enough: a node detached by an earlier rebuild can stay
+ * as document.activeElement, and blurring it does not move focus off. Focusing
+ * the graph container is both reliable and what actually happens in the app.
+ */
+HmiSelfTest.blurAll = function(ui)
+{
+	var active = document.activeElement;
+
+	if (active != null && active.blur != null && active !== document.body)
+	{
+		active.blur();
+	}
+
+	// Focusing the graph container is not enough -- it has no tabindex, so the
+	// call is a no-op and a detached node stays active. Focusing a throwaway
+	// input and removing it does reset activeElement to the body.
+	if (document.activeElement != null &&
+		document.activeElement !== document.body)
+	{
+		var tmp = document.createElement('input');
+		document.body.appendChild(tmp);
+		tmp.focus();
+		tmp.blur();
+		document.body.removeChild(tmp);
+	}
+};
+
+/** Reports the deferred focus assertions once they have run. */
+HmiSelfTest.finishFocus = function()
+{
+	var failed = 0;
+
+	for (var i = 0; i < HmiSelfTest.results.length; i++)
+	{
+		if (!HmiSelfTest.results[i].pass) { failed++; }
+	}
+
+	console.log('HMIFOCUS DONE total=' + HmiSelfTest.results.length +
+		' failed=' + failed);
+};
+
+/** User Input range display and the string keyboard. */
+HmiSelfTest.testInputExtras = function(ui)
+{
+	ui.hmiProject = HmiSelfTest.sampleProject();
+	ui.hmiProject.getTag('Tank_Level').engUnits = '%';
+
+	var sim = new HmiSimulator(ui.hmiProject);
+	var rt = new HmiRuntime({graph: ui.editor.graph,
+		project: ui.hmiProject, driver: sim});
+	rt.running = true;
+	rt.values = {'tank_level': {value: 10, quality: HmiTypes.QUALITY_GOOD,
+		timestamp: Date.now()}};
+	ui.hmiRuntime = rt;
+
+	// Limits are expressions, so they must show as the numbers enforced.
+	HmiSelfTest.check('range.bothBounds',
+		HmiDialogs.rangeText(rt, {tag: 'Tank_Level', min: '0',
+			max: 'Tank_Level.MaxEU'}) === 'Range: 0 to 100 %',
+		HmiDialogs.rangeText(rt, {tag: 'Tank_Level', min: '0',
+			max: 'Tank_Level.MaxEU'}));
+
+	HmiSelfTest.check('range.minOnly',
+		HmiDialogs.rangeText(rt, {tag: 'Tank_Level', min: '5', max: ''}) ===
+			'Minimum 5 %');
+	HmiSelfTest.check('range.maxOnly',
+		HmiDialogs.rangeText(rt, {tag: 'Tank_Level', min: '', max: '90'}) ===
+			'Maximum 90 %');
+	HmiSelfTest.check('range.noneGivesNothing',
+		HmiDialogs.rangeText(rt, {tag: 'Tank_Level', min: '', max: ''}) == null);
+
+	// Shown in the dialog itself.
+	HmiDialogs.showUserInput(ui, {kind: 'analog', tag: 'Tank_Level',
+		min: '0', max: '100', prompt: 'Setpoint', keypad: false});
+
+	HmiSelfTest.check('range.shownInDialog',
+		document.getElementsByClassName('hmiRange').length === 1,
+		'found ' + document.getElementsByClassName('hmiRange').length);
+
+	ui.hideDialog();
+
+	// String entry gets a keyboard, not a keypad.
+	HmiDialogs.showUserInput(ui, {kind: 'string', tag: 'Recipe_Name',
+		prompt: 'Recipe', keypad: true});
+
+	var boards = document.getElementsByClassName('hmiKeyboard');
+
+	HmiSelfTest.check('keyboard.shownForString', boards.length === 1,
+		'found ' + boards.length);
+
+	if (boards.length === 1)
+	{
+		var inputs = boards[0].parentNode.getElementsByTagName('input');
+		var field = (inputs.length > 0) ? inputs[0] : null;
+		var buttons = boards[0].getElementsByTagName('button');
+
+		if (field != null)
+		{
+			field.value = '';
+
+			// q then shift then q again: lower, then upper.
+			HmiSelfTest.clickKey(buttons, 'q');
+			HmiSelfTest.clickKey(buttons, '⇧');
+			HmiSelfTest.clickKey(buttons, 'Q');
+
+			HmiSelfTest.check('keyboard.shiftWorks', field.value === 'qQ',
+				'field holds ' + JSON.stringify(field.value));
+
+			HmiSelfTest.clickKey(buttons, 'space');
+
+			HmiSelfTest.check('keyboard.space', field.value === 'qQ ',
+				JSON.stringify(field.value));
+
+			HmiSelfTest.clickKey(buttons, 'CLR');
+
+			HmiSelfTest.check('keyboard.clear', field.value === '',
+				JSON.stringify(field.value));
+		}
+	}
+
+	ui.hideDialog();
+
+	// Discrete entry is two buttons, so it gets neither.
+	HmiDialogs.showUserInput(ui, {kind: 'discrete', tag: 'Pump1_Run',
+		prompt: 'Pump', keypad: true});
+
+	HmiSelfTest.check('keyboard.noneForDiscrete',
+		document.getElementsByClassName('hmiKeyboard').length === 0 &&
+		document.getElementsByClassName('hmiKeypad').length === 0);
+
+	ui.hideDialog();
+	ui.hmiRuntime = null;
+};
+
+HmiSelfTest.clickKey = function(buttons, label)
+{
+	for (var i = 0; i < buttons.length; i++)
+	{
+		if (buttons[i].textContent === label)
+		{
+			buttons[i].click();
+
+			return true;
+		}
+	}
+
+	return false;
 };

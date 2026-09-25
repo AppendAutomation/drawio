@@ -51,6 +51,145 @@ HmiFormatPanel.prototype.init = function()
 			this.addLinkSection(key, def);
 		}
 	}
+
+	this.installFocusMemory();
+};
+
+/**
+ * Keeps the caret where the user put it across a panel rebuild.
+ *
+ * Editing a field commits to the cell, which is a model change, which makes
+ * Format destroy and rebuild every panel. So clicking from one field to the
+ * next goes: mousedown on B, blur on A, commit, rebuild -- and the B the user
+ * aimed at is destroyed before it ever receives focus, which is why the first
+ * click appeared to do nothing and a second was needed.
+ *
+ * Upstream has the same problem and solves it by index, because a rebuild is
+ * deterministic for a given selection; the same approach is used here. The
+ * intent is captured on MOUSEDOWN, which fires before the blur that triggers
+ * the rebuild -- capturing on focus would record the field being left rather
+ * than the one being aimed at.
+ */
+HmiFormatPanel.prototype.installFocusMemory = function()
+{
+	var ui = this.editorUi;
+	var container = this.container;
+	var controls = this.focusableControls();
+
+	for (var i = 0; i < controls.length; i++)
+	{
+		controls[i].setAttribute('data-hmi-focus', i);
+	}
+
+	var remember = function(evt)
+	{
+		var el = mxEvent.getSource(evt);
+
+		while (el != null && el !== container &&
+			(el.getAttribute == null || el.getAttribute('data-hmi-focus') == null))
+		{
+			el = el.parentNode;
+		}
+
+		if (el != null && el.getAttribute != null &&
+			el.getAttribute('data-hmi-focus') != null)
+		{
+			ui.hmiFocus = {
+				index: parseInt(el.getAttribute('data-hmi-focus'), 10),
+				start: el.selectionStart,
+				end: el.selectionEnd,
+				at: Date.now()
+			};
+		}
+	};
+
+	mxEvent.addListener(container, 'mousedown', remember, true);
+	mxEvent.addListener(container, 'focusin', remember);
+
+	// Deferred: this panel is still display:none right now -- the tab router
+	// reveals it after the constructor returns -- and focus() does nothing to
+	// a hidden element.
+	var that = this;
+	var pending = ui.hmiFocus;
+
+	window.setTimeout(function()
+	{
+		that.restoreFocusFrom(pending, controls);
+	}, 0);
+};
+
+HmiFormatPanel.prototype.focusableControls = function()
+{
+	var res = [];
+	var tags = ['input', 'select', 'textarea'];
+
+	for (var t = 0; t < tags.length; t++)
+	{
+		var found = this.container.getElementsByTagName(tags[t]);
+
+		for (var i = 0; i < found.length; i++)
+		{
+			res.push(found[i]);
+		}
+	}
+
+	// Document order, so the index survives a rebuild.
+	res.sort(function(a, b)
+	{
+		var pos = a.compareDocumentPosition(b);
+
+		if (pos & Node.DOCUMENT_POSITION_FOLLOWING) { return -1; }
+		if (pos & Node.DOCUMENT_POSITION_PRECEDING) { return 1; }
+
+		return 0;
+	});
+
+	return res;
+};
+
+HmiFormatPanel.prototype.restoreFocusFrom = function(state, controls)
+{
+	if (state == null || controls[state.index] == null)
+	{
+		return;
+	}
+
+	// Only ever reclaim focus that the rebuild itself took away: if the user
+	// has since landed somewhere else, leave them there.
+	// The typing shim inside the diagram container does not count: once the
+	// rebuild drops focus to the body the graph parks it there, and that is
+	// exactly the focus being reclaimed.
+	var active = document.activeElement;
+	var name = (active != null) ? active.nodeName : '';
+	var graph = this.editorUi.editor.graph;
+
+	if ((name === 'INPUT' || name === 'TEXTAREA' || name === 'SELECT') &&
+		!graph.container.contains(active))
+	{
+		return;
+	}
+
+	// And only while the interaction is still live, so a rebuild minutes later
+	// cannot yank focus into the panel unprompted.
+	if (Date.now() - state.at > 2000)
+	{
+		return;
+	}
+
+	var el = controls[state.index];
+	el.focus();
+
+	if (el.setSelectionRange != null && state.start != null)
+	{
+		try
+		{
+			el.setSelectionRange(state.start, state.end);
+		}
+		catch (e)
+		{
+			// Not every input type supports a selection range.
+		}
+	}
 };
 
 HmiFormatPanel.prototype.hmiCreateNotice = function(text)

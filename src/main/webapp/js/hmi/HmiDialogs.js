@@ -971,12 +971,25 @@ HmiDialogs.showUserInput = function(ui, cfg)
 		input = HmiDialogs.field(body, 'Value',
 			(current.value != null) ? current.value : '', function() {});
 
-		// The keypad is for a touch screen with no keyboard, which is the
-		// whole reason the option exists. Offered only for analog entry;
-		// a full alphanumeric keyboard for string input is a separate thing.
-		if (cfg.keypad && cfg.kind === 'analog')
+		// Show the limits rather than only enforcing them: being told a value
+		// is out of range after typing it is a poor substitute for knowing the
+		// range beforehand.
+		if (cfg.kind === 'analog')
 		{
-			body.appendChild(HmiDialogs.keypad(input));
+			var range = HmiDialogs.rangeText(rt, cfg);
+
+			if (range != null)
+			{
+				body.appendChild(HmiDialogs.el('div', 'hmiRange', range));
+			}
+		}
+
+		// The on-screen input is for a touch screen with no keyboard, which is
+		// the whole reason the option exists.
+		if (cfg.keypad)
+		{
+			body.appendChild((cfg.kind === 'analog') ?
+				HmiDialogs.keypad(input) : HmiDialogs.keyboard(input));
 		}
 	}
 
@@ -1049,13 +1062,145 @@ HmiDialogs.showUserInput = function(ui, cfg)
 
 	div.appendChild(footer);
 
-	var tall = (cfg.keypad && cfg.kind === 'analog');
-	ui.showDialog(div, 380, (tall) ? 480 : 240, true, true);
+	var height = 260;
+
+	if (cfg.keypad && cfg.kind === 'analog') { height = 500; }
+	else if (cfg.keypad && cfg.kind !== 'discrete') { height = 420; }
+
+	ui.showDialog(div, (cfg.keypad && cfg.kind === 'string') ? 560 : 380,
+		height, true, true);
 
 	if (input != null)
 	{
 		window.setTimeout(function() { input.focus(); input.select(); }, 0);
 	}
+};
+
+/**
+ * "Range: 0 to 100 %" for the limits the link actually enforces.
+ *
+ * The bounds are expressions, so they are evaluated here rather than printed
+ * literally -- a limit written Tank_Level.MaxEU has to show as the number the
+ * operator will be held to.
+ */
+HmiDialogs.rangeText = function(rt, cfg)
+{
+	if (rt == null)
+	{
+		return null;
+	}
+
+	var lo = (cfg.min != null && cfg.min !== '') ?
+		parseFloat(rt.evaluate(cfg.min).value) : NaN;
+	var hi = (cfg.max != null && cfg.max !== '') ?
+		parseFloat(rt.evaluate(cfg.max).value) : NaN;
+
+	if (isNaN(lo) && isNaN(hi))
+	{
+		return null;
+	}
+
+	var tag = (rt.project != null) ? rt.project.getTag(cfg.tag) : null;
+	var units = (tag != null && tag.engUnits) ? ' ' + tag.engUnits : '';
+
+	if (isNaN(hi))
+	{
+		return 'Minimum ' + lo + units;
+	}
+
+	if (isNaN(lo))
+	{
+		return 'Maximum ' + hi + units;
+	}
+
+	return 'Range: ' + lo + ' to ' + hi + units;
+};
+
+/**
+ * An on-screen keyboard for string entry.
+ *
+ * Deliberately a plain QWERTY rather than a full keyboard: this is for a touch
+ * panel with no hardware keyboard, where the job is entering a recipe or batch
+ * name, not writing prose.
+ */
+HmiDialogs.keyboard = function(input)
+{
+	var wrap = HmiDialogs.el('div', 'hmiKeyboard');
+	var shifted = false;
+	var keys = [];
+
+	var rows = [
+		'1234567890',
+		'qwertyuiop',
+		'asdfghjkl',
+		'zxcvbnm'
+	];
+
+	function type(ch)
+	{
+		input.value += (shifted) ? ch.toUpperCase() : ch;
+		input.focus();
+	}
+
+	function relabel()
+	{
+		for (var i = 0; i < keys.length; i++)
+		{
+			var ch = keys[i].hmiChar;
+			keys[i].innerText = (shifted) ? ch.toUpperCase() : ch;
+		}
+	}
+
+	for (var r = 0; r < rows.length; r++)
+	{
+		var row = HmiDialogs.el('div', 'hmiKeyboardRow');
+
+		for (var c = 0; c < rows[r].length; c++)
+		{
+			(function(ch)
+			{
+				var btn = HmiDialogs.button(ch, function() { type(ch); });
+				btn.hmiChar = ch;
+				keys.push(btn);
+				row.appendChild(btn);
+			})(rows[r].charAt(c));
+		}
+
+		wrap.appendChild(row);
+	}
+
+	var last = HmiDialogs.el('div', 'hmiKeyboardRow');
+
+	last.appendChild(HmiDialogs.button('\u21e7', function()
+	{
+		shifted = !shifted;
+		relabel();
+		input.focus();
+	}));
+
+	var space = HmiDialogs.button('space', function() { type(' '); });
+	space.className += ' hmiKeySpace';
+	last.appendChild(space);
+
+	last.appendChild(HmiDialogs.button('-', function() { type('-'); }));
+	last.appendChild(HmiDialogs.button('_', function() { type('_'); }));
+	last.appendChild(HmiDialogs.button('.', function() { type('.'); }));
+
+	last.appendChild(HmiDialogs.button('\u232b', function()
+	{
+		input.value = input.value.substring(0, input.value.length - 1);
+		input.focus();
+	}));
+
+	last.appendChild(HmiDialogs.button('CLR', function()
+	{
+		input.value = '';
+		input.focus();
+	}));
+
+	wrap.appendChild(last);
+
+	return wrap;
 };
 
 /**
