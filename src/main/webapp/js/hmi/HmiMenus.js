@@ -13,6 +13,7 @@ HmiMenus.install = function()
 	HmiMenus.installMenu();
 	HmiMenus.installKeys();
 	HmiMenus.installContextMenu();
+	HmiMenus.installPageMenu();
 };
 
 // --------------------------------------------------------- context menu
@@ -232,6 +233,16 @@ HmiMenus.installActions = function()
 				HmiMenus.showAccessNames(ui);
 			});
 
+			this.addAction('hmiAppSettings...', function()
+			{
+				HmiDialogs.showAppSettings(ui);
+			});
+
+			this.addAction('hmiWindowProps...', function()
+			{
+				HmiDialogs.showWindowProps(ui, ui.currentPage);
+			});
+
 			this.addAction('hmiValidate', function()
 			{
 				HmiMenus.validate(ui);
@@ -276,7 +287,8 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
-					'hmiAccessNames', '-', 'hmiValidate', '-'], parent);
+					'hmiAccessNames', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'-', 'hmiValidate', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
@@ -297,6 +309,46 @@ HmiMenus.installMenu = function()
 		next.splice((at >= 0) ? at : next.length, 0, 'hmi');
 		Menus.prototype.defaultMenuItems = next;
 	}
+};
+
+// ------------------------------------------------------------ page menu
+
+/**
+ * Window Properties on a page tab's context menu, for the page right-clicked
+ * rather than the one showing.
+ */
+HmiMenus.installPageMenu = function()
+{
+	var createPageMenu = EditorUi.prototype.createPageMenu;
+
+	if (createPageMenu == null)
+	{
+		return;
+	}
+
+	EditorUi.prototype.createPageMenu = function(page, label)
+	{
+		var fn = createPageMenu.apply(this, arguments);
+		var ui = this;
+
+		return function(menu, parent)
+		{
+			fn.apply(this, arguments);
+
+			HmiLog.guard('pageMenu', function()
+			{
+				if (ui.editor.graph.isEnabled())
+				{
+					menu.addSeparator(parent);
+					menu.addItem(mxResources.get('hmiWindowProps') + '...', null,
+						function()
+						{
+							HmiDialogs.showWindowProps(ui, page);
+						}, parent);
+				}
+			});
+		};
+	};
 };
 
 // ------------------------------------------------------------------ keys
@@ -348,65 +400,22 @@ HmiMenus.start = function(ui)
 
 	HmiLog.guard('run.start', function()
 	{
-		var driver = new HmiSimulator(project);
-
-		ui.hmiRuntime = new HmiRuntime({
-			graph: ui.editor.graph,
-			project: project,
-			driver: driver
-		});
-
-		// The runtime is deliberately ignorant of dialogs, so user input is
-		// injected here rather than reached for from inside the engine.
-		ui.hmiRuntime.onUserInput = function(cfg, binding)
+		// Pages deleted since their properties were set must not linger in
+		// the startup list, where they would silently open nothing.
+		if (ui.pages != null)
 		{
-			HmiDialogs.showUserInput(ui, cfg);
-		};
+			var ids = [];
 
-		// A "window" in InTouch is a page here. Showing one selects it; hiding
-		// returns to the page that was showing before, which is the closest
-		// honest equivalent without a real popup window manager.
-		ui.hmiRuntime.onWindow = function(action, name)
-		{
-			HmiLog.guard('window', function()
+			for (var i = 0; i < ui.pages.length; i++)
 			{
-				if (ui.pages == null)
-				{
-					return;
-				}
+				ids.push(ui.pages[i].getId());
+			}
 
-				if (action === 'hide')
-				{
-					if (ui.hmiPreviousPage != null)
-					{
-						ui.selectPage(ui.hmiPreviousPage);
-						ui.hmiPreviousPage = null;
-					}
+			project.prunePages(ids);
+		}
 
-					return;
-				}
-
-				for (var i = 0; i < ui.pages.length; i++)
-				{
-					var page = ui.pages[i];
-					var pageName = (page.getName != null) ? page.getName() : null;
-
-					if (pageName === name && page !== ui.currentPage)
-					{
-						ui.hmiPreviousPage = ui.currentPage;
-						ui.selectPage(page);
-
-						// A new page means new cells, so rebind to them.
-						ui.hmiRuntime.rebind();
-
-						return;
-					}
-				}
-
-				HmiLog.once('window:' + name, 'no page named "' + name + '"');
-			});
-		};
-
+		ui.hmiRuntime = new HmiWindowManager(ui, project,
+			new HmiSimulator(project));
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
@@ -539,6 +548,14 @@ HmiMenus.validate = function(ui)
 			{
 				var errors = HmiMenus.checkLink(project, links[key]);
 
+				if ((key === 'showWindow' || key === 'hideWindow') &&
+					links[key].window && ui.pages != null &&
+					!HmiMenus.hasPage(ui, links[key].window))
+				{
+					errors.push('No window (page) named "' +
+						links[key].window + '"');
+				}
+
 				for (var e = 0; e < errors.length; e++)
 				{
 					problems.push({page: pageName, cell: cell,
@@ -556,7 +573,58 @@ HmiMenus.validate = function(ui)
 		ui.currentPage.getName() : 'Page';
 	walk(graph.getDefaultParent(), pageName);
 
+	if (project != null && ui.pages != null)
+	{
+		for (var i = 0; i < ui.pages.length; i++)
+		{
+			var msg = HmiMenus.checkWindow(project, ui.pages[i].getId());
+
+			if (msg != null)
+			{
+				problems.push({page: ui.pages[i].getName(), cell: null,
+					link: mxResources.get('hmiWindowProps'), message: msg});
+			}
+		}
+	}
+
 	HmiDialogs.showValidation(ui, problems);
+};
+
+HmiMenus.hasPage = function(ui, name)
+{
+	var lower = ('' + name).toLowerCase();
+
+	for (var i = 0; i < ui.pages.length; i++)
+	{
+		if (('' + ui.pages[i].getName()).toLowerCase() === lower)
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+/** A window that does not fit on the target screen, or null. */
+HmiMenus.checkWindow = function(project, pageId)
+{
+	var w = project.getWindow(pageId);
+	var res = project.settings;
+
+	if (w.width <= 0 || w.height <= 0)
+	{
+		return 'Window has no area (' + w.width + ' x ' + w.height + ')';
+	}
+
+	if (w.x < 0 || w.y < 0 || w.x + w.width > res.width ||
+		w.y + w.height > res.height)
+	{
+		return 'Window (' + w.x + ', ' + w.y + ', ' + w.width + ' x ' +
+			w.height + ') extends past the ' + res.width + ' x ' +
+			res.height + ' screen';
+	}
+
+	return null;
 };
 
 HmiMenus.checkLink = function(project, cfg)

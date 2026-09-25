@@ -1,5 +1,6 @@
 /**
- * The HMI project model: access names plus the tag dictionary.
+ * The HMI project model: access names, the tag dictionary, the application
+ * settings and the display properties of each window (page).
  *
  * Serialization lives entirely behind toXml/fromXml so that if the
  * <hmiProject> child of <mxfile> ever proves unable to survive a save path,
@@ -10,6 +11,11 @@ HmiProject = function()
 	this.accessNames = [];
 	this.tags = [];
 	this.tagIndex = {};
+
+	// Windows are pages, keyed by page id rather than name so that renaming a
+	// page keeps its properties and its place in the startup list.
+	this.settings = HmiProject.defaultSettings();
+	this.windows = {};
 
 	// Compilation resolves tag names against this dictionary, so the expression
 	// cache is keyed on both of these. The uid is needed as well as the
@@ -34,7 +40,126 @@ HmiProject.CELL_ATTRIBUTE = 'hmi';
 
 HmiProject.prototype.isEmpty = function()
 {
-	return this.tags.length === 0 && this.accessNames.length === 0;
+	var d = HmiProject.defaultSettings();
+
+	return this.tags.length === 0 && this.accessNames.length === 0 &&
+		this.settings.width === d.width && this.settings.height === d.height &&
+		this.settings.startup.length === 0 &&
+		Object.keys(this.windows).length === 0;
+};
+
+// ------------------------------------------------------ application settings
+
+/** Target screen resolutions offered in Application Settings. */
+HmiProject.RESOLUTIONS = [
+	[640, 480], [800, 480], [800, 600], [1024, 600], [1024, 768],
+	[1280, 720], [1280, 800], [1280, 1024], [1366, 768], [1440, 900],
+	[1600, 900], [1680, 1050], [1920, 1080], [1920, 1200]];
+
+HmiProject.defaultSettings = function()
+{
+	return {width: 1024, height: 768, startup: []};
+};
+
+// ---------------------------------------------------------------- windows
+
+/**
+ * Window types, as in InTouch. A replace window closes every window it
+ * overlaps when it opens; an overlay window opens on top of them; a popup
+ * opens on top of everything and is modal -- nothing beneath it can be touched
+ * until it closes.
+ */
+HmiProject.WINDOW_TYPES = ['replace', 'overlay', 'popup'];
+
+HmiProject.TITLE_BAR_HEIGHT = 24;
+
+/**
+ * The display properties of a window, with defaults filled in. Never null.
+ *
+ * An unset width or height follows the screen resolution, so a window nobody
+ * has configured fills the screen, and keeps filling it when the resolution
+ * changes.
+ */
+HmiProject.prototype.getWindow = function(pageId)
+{
+	var w = this.windows[pageId] || {};
+
+	return {
+		titleBar: w.titleBar === true,
+		type: (mxUtils.indexOf(HmiProject.WINDOW_TYPES, w.type) >= 0) ?
+			w.type : 'replace',
+		x: (w.x != null) ? w.x : 0,
+		y: (w.y != null) ? w.y : 0,
+		width: (w.width != null) ? w.width : this.settings.width,
+		height: (w.height != null) ? w.height : this.settings.height
+	};
+};
+
+HmiProject.prototype.setWindow = function(pageId, props)
+{
+	var w = {};
+
+	if (props.titleBar) { w.titleBar = true; }
+	if (props.type != null && props.type !== 'replace') { w.type = props.type; }
+
+	var dims = ['x', 'y', 'width', 'height'];
+
+	for (var i = 0; i < dims.length; i++)
+	{
+		var v = parseInt(props[dims[i]], 10);
+
+		if (!isNaN(v))
+		{
+			w[dims[i]] = v;
+		}
+	}
+
+	// Values equal to the defaults are not stored, so a window the user only
+	// looked at does not freeze today's resolution into the file.
+	if (w.x === 0) { delete w.x; }
+	if (w.y === 0) { delete w.y; }
+	if (w.width === this.settings.width) { delete w.width; }
+	if (w.height === this.settings.height) { delete w.height; }
+
+	if (Object.keys(w).length === 0)
+	{
+		delete this.windows[pageId];
+	}
+	else
+	{
+		this.windows[pageId] = w;
+	}
+};
+
+/** Drops the properties and startup entries of pages that no longer exist. */
+HmiProject.prototype.prunePages = function(pageIds)
+{
+	var live = {};
+
+	for (var i = 0; i < pageIds.length; i++)
+	{
+		live[pageIds[i]] = true;
+	}
+
+	for (var id in this.windows)
+	{
+		if (!live[id])
+		{
+			delete this.windows[id];
+		}
+	}
+
+	var startup = [];
+
+	for (var i = 0; i < this.settings.startup.length; i++)
+	{
+		if (live[this.settings.startup[i]])
+		{
+			startup.push(this.settings.startup[i]);
+		}
+	}
+
+	this.settings.startup = startup;
 };
 
 // --------------------------------------------------------------------- tags
@@ -249,6 +374,44 @@ HmiProject.prototype.toXml = function(doc)
 
 	root.appendChild(tags);
 
+	var settings = doc.createElement('settings');
+	settings.setAttribute('width', this.settings.width);
+	settings.setAttribute('height', this.settings.height);
+
+	for (var i = 0; i < this.settings.startup.length; i++)
+	{
+		var node = doc.createElement('startup');
+		node.setAttribute('page', this.settings.startup[i]);
+		settings.appendChild(node);
+	}
+
+	root.appendChild(settings);
+
+	var windows = doc.createElement('windows');
+	var ids = Object.keys(this.windows).sort();
+
+	for (var i = 0; i < ids.length; i++)
+	{
+		var w = this.windows[ids[i]];
+		var node = doc.createElement('window');
+		node.setAttribute('page', ids[i]);
+
+		var keys = ['titleBar', 'type', 'x', 'y', 'width', 'height'];
+
+		for (var j = 0; j < keys.length; j++)
+		{
+			if (w[keys[j]] != null)
+			{
+				node.setAttribute(keys[j], (w[keys[j]] === true) ?
+					'1' : '' + w[keys[j]]);
+			}
+		}
+
+		windows.appendChild(node);
+	}
+
+	root.appendChild(windows);
+
 	return root;
 };
 
@@ -333,6 +496,61 @@ HmiProject.fromXml = function(node)
 	for (var i = 0; i < tags.length; i++)
 	{
 		project.tags.push(HmiProject.tagFromXml(tags[i]));
+	}
+
+	var settings = node.getElementsByTagName('settings');
+
+	if (settings.length > 0)
+	{
+		var w = parseInt(settings[0].getAttribute('width'), 10);
+		var h = parseInt(settings[0].getAttribute('height'), 10);
+
+		if (w > 0) { project.settings.width = w; }
+		if (h > 0) { project.settings.height = h; }
+
+		var startup = settings[0].getElementsByTagName('startup');
+
+		for (var i = 0; i < startup.length; i++)
+		{
+			var id = startup[i].getAttribute('page');
+
+			if (id)
+			{
+				project.settings.startup.push(id);
+			}
+		}
+	}
+
+	var windows = node.getElementsByTagName('window');
+
+	for (var i = 0; i < windows.length; i++)
+	{
+		var n = windows[i];
+		var id = n.getAttribute('page');
+
+		if (!id)
+		{
+			continue;
+		}
+
+		var w = {};
+
+		if (n.getAttribute('titleBar') === '1') { w.titleBar = true; }
+		if (n.getAttribute('type')) { w.type = n.getAttribute('type'); }
+
+		var dims = ['x', 'y', 'width', 'height'];
+
+		for (var j = 0; j < dims.length; j++)
+		{
+			var v = parseInt(n.getAttribute(dims[j]), 10);
+
+			if (!isNaN(v))
+			{
+				w[dims[j]] = v;
+			}
+		}
+
+		project.windows[id] = w;
 	}
 
 	project.reindex();

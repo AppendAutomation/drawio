@@ -614,3 +614,163 @@
 {
 	flex: 4 1 0;
 }
+
+/* ------------------------------------------------ settings and windows */
+
+.hmiStartupList
+{
+	max-height: 200px;
+	overflow: auto;
+}
+
+.hmiStartupRow
+{
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 3px 0;
+	cursor: pointer;
+}
+
+.hmiStartupName
+{
+	flex: 1 1 auto;
+}
+
+.hmiStartupInfo
+{
+	font-size: 11px;
+	color: gray;
+	white-space: nowrap;
+}
+
+.hmiRadioRow
+{
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	margin: 6px 0;
+	cursor: pointer;
+}
+
+.hmiRadioText
+{
+	display: flex;
+	flex-direction: column;
+}
+
+.hmiRadioHint
+{
+	font-size: 11px;
+	color: gray;
+}
+
+.hmiWindowButtons .geBtn
+{
+	margin: 0;
+	min-width: 0;
+	padding: 0 10px;
+}
+
+.hmiScreenPreview
+{
+	position: relative;
+	margin: 10px 0 0 138px;
+	background-color: #202020;
+	border: 1px solid #808080;
+	overflow: hidden;
+}
+
+.hmiScreenPreviewWindow
+{
+	position: absolute;
+	box-sizing: border-box;
+	background-color: rgba(255, 255, 255, 0.85);
+	border: 1px solid #1a73e8;
+	border-top-color: #1a73e8;
+}
+
+/* The simulated device screen covering the diagram area in run mode. Below
+   dialogs, so user input and the log still appear over it. */
+.hmiScreenBackdrop
+{
+	position: fixed;
+	z-index: 900;
+	overflow: hidden;
+	background-color: #3a3a3a;
+}
+
+.hmiScreen
+{
+	position: absolute;
+	overflow: hidden;
+	background-color: #000;
+	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+}
+
+.hmiWindow
+{
+	position: absolute;
+	box-sizing: border-box;
+	overflow: hidden;
+}
+
+.hmiWindowPopup
+{
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55);
+}
+
+.hmiWindowTitle
+{
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	display: flex;
+	align-items: center;
+	padding: 0 6px;
+	box-sizing: border-box;
+	background-color: #1f4e8c;
+	color: #fff;
+	font-family: Helvetica, Arial, sans-serif;
+	user-select: none;
+}
+
+.hmiWindowTitleText
+{
+	flex: 1 1 auto;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.hmiWindowClose
+{
+	padding: 0 4px;
+	cursor: pointer;
+	font-size: 1.2em;
+}
+
+.hmiWindowClose:hover
+{
+	background-color: #c42b1c;
+}
+
+.hmiWindowContent
+{
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	overflow: hidden;
+}
+
+.hmiModalBlocker
+{
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: 0;
+	bottom: 0;
+	background-color: rgba(0, 0, 0, 0.25);
+}

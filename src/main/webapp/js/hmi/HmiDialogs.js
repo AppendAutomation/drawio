@@ -931,15 +931,558 @@ HmiDialogs.showAccessNames = function(ui)
 	ui.showDialog(div, 520, 460, true, true);
 };
 
+// -------------------------------------------------- application settings
+
+/**
+ * The target device's screen and the windows that open when the application
+ * starts. Changes are made to a copy and applied on OK, so Cancel means it.
+ */
+HmiDialogs.showAppSettings = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var pages = ui.pages || [];
+	var width = project.settings.width;
+	var height = project.settings.height;
+	var startup = {};
+
+	for (var i = 0; i < project.settings.startup.length; i++)
+	{
+		startup[project.settings.startup[i]] = true;
+	}
+
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		mxResources.get('hmiAppSettings')));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Target screen'));
+
+	var options = [];
+
+	for (var i = 0; i < HmiProject.RESOLUTIONS.length; i++)
+	{
+		var r = HmiProject.RESOLUTIONS[i];
+		options.push({value: r[0] + 'x' + r[1], label: r[0] + ' × ' + r[1]});
+	}
+
+	options.push({value: 'custom', label: 'Custom'});
+
+	var presetOf = function()
+	{
+		for (var i = 0; i < HmiProject.RESOLUTIONS.length; i++)
+		{
+			var r = HmiProject.RESOLUTIONS[i];
+
+			if (r[0] === width && r[1] === height)
+			{
+				return r[0] + 'x' + r[1];
+			}
+		}
+
+		return 'custom';
+	};
+
+	var preset = HmiDialogs.select(body, 'Resolution', presetOf(), options,
+		function(v)
+		{
+			if (v !== 'custom')
+			{
+				var wh = v.split('x');
+				width = parseInt(wh[0], 10);
+				height = parseInt(wh[1], 10);
+				wInput.value = width;
+				hInput.value = height;
+			}
+		});
+
+	var dimension = function(v)
+	{
+		var n = parseInt(v, 10);
+
+		return (!isNaN(n) && n >= 100 && n <= 10000) ? n : null;
+	};
+
+	var wInput = HmiDialogs.field(body, 'Width (px)', width, function() {},
+		'number');
+	var hInput = HmiDialogs.field(body, 'Height (px)', height, function() {},
+		'number');
+
+	var sync = function()
+	{
+		var w = dimension(wInput.value);
+		var h = dimension(hInput.value);
+
+		if (w != null) { width = w; }
+		if (h != null) { height = h; }
+
+		preset.value = presetOf();
+	};
+
+	mxEvent.addListener(wInput, 'input', sync);
+	mxEvent.addListener(hInput, 'input', sync);
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Startup windows'));
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Opened in page order when the application starts, each on top of ' +
+		'the last. A replace window closes any earlier one it overlaps. With ' +
+		'none ticked, the page being edited opens.'));
+
+	var list = HmiDialogs.el('div', 'hmiFormBox hmiStartupList');
+
+	for (var i = 0; i < pages.length; i++)
+	{
+		(function(page)
+		{
+			var id = page.getId();
+			var w = project.getWindow(id);
+			var row = HmiDialogs.el('label', 'hmiStartupRow');
+			var box = document.createElement('input');
+			box.setAttribute('type', 'checkbox');
+			box.setAttribute('data-hmi-page', id);
+
+			if (startup[id])
+			{
+				box.setAttribute('checked', 'checked');
+			}
+
+			mxEvent.addListener(box, 'change', function()
+			{
+				startup[id] = box.checked;
+			});
+
+			row.appendChild(box);
+			row.appendChild(HmiDialogs.el('span', 'hmiStartupName',
+				page.getName()));
+			row.appendChild(HmiDialogs.el('span', 'hmiStartupInfo',
+				HmiDialogs.windowSummary(w)));
+			list.appendChild(row);
+		})(pages[i]);
+	}
+
+	if (pages.length === 0)
+	{
+		list.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'No pages.'));
+	}
+
+	body.appendChild(list);
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	body.appendChild(error);
+	div.appendChild(body);
+
+	var apply = function()
+	{
+		var w = dimension(wInput.value);
+		var h = dimension(hInput.value);
+
+		if (w == null || h == null)
+		{
+			error.innerText = 'Width and height must be whole numbers from ' +
+				'100 to 10000.';
+
+			return false;
+		}
+
+		var ids = [];
+
+		for (var i = 0; i < pages.length; i++)
+		{
+			if (startup[pages[i].getId()])
+			{
+				ids.push(pages[i].getId());
+			}
+		}
+
+		var s = project.settings;
+		var changed = s.width !== w || s.height !== h ||
+			s.startup.join('\n') !== ids.join('\n');
+
+		// Windows left at full-screen size follow the new resolution, since
+		// an unset size means "the screen".
+		s.width = w;
+		s.height = h;
+		s.startup = ids;
+
+		if (changed)
+		{
+			project.touch();
+			ui.editor.setModified(true);
+		}
+
+		return true;
+	};
+
+	HmiDialogs.okCancel(ui, div, apply);
+	ui.showDialog(div, 460, 480, true, true);
+};
+
+/** "Popup, title bar, 400 × 300 at 10, 20" */
+HmiDialogs.windowSummary = function(w)
+{
+	var type = {replace: 'Replace', overlay: 'Overlay', popup: 'Popup'}[w.type];
+
+	return type + ((w.titleBar) ? ', title bar' : '') + ', ' +
+		w.width + ' × ' + w.height + ' at ' + w.x + ', ' + w.y;
+};
+
+/** Cancel and OK. OK closes only when apply() returns true. */
+HmiDialogs.okCancel = function(ui, div, apply)
+{
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function()
+	{
+		ui.hideDialog();
+	}));
+
+	var ok = HmiDialogs.button(mxResources.get('ok'), function()
+	{
+		if (apply())
+		{
+			ui.hideDialog();
+		}
+	}, true);
+
+	ok.className += ' hmiOk';
+	footer.appendChild(ok);
+	div.appendChild(footer);
+};
+
+// ------------------------------------------------------ window properties
+
+/**
+ * How a window (page) is displayed when it opens at run time. The window
+ * picker switches between pages without losing edits: every page edited is
+ * kept as a draft and all of them are applied on OK.
+ */
+HmiDialogs.showWindowProps = function(ui, page)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var pages = ui.pages || [];
+
+	if (page == null)
+	{
+		page = ui.currentPage;
+	}
+
+	if (page == null)
+	{
+		return;
+	}
+
+	var drafts = {};
+	var current = page;
+
+	var draftFor = function(p)
+	{
+		var id = p.getId();
+
+		if (drafts[id] == null)
+		{
+			drafts[id] = project.getWindow(id);
+		}
+
+		return drafts[id];
+	};
+
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		mxResources.get('hmiWindowProps')));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	var fields = HmiDialogs.el('div');
+	var error = HmiDialogs.el('div', 'hmiError');
+
+	var options = [];
+
+	for (var i = 0; i < pages.length; i++)
+	{
+		options.push({value: pages[i].getId(), label: pages[i].getName()});
+	}
+
+	if (options.length > 1)
+	{
+		HmiDialogs.select(body, 'Window', page.getId(), options, function(v)
+		{
+			for (var i = 0; i < pages.length; i++)
+			{
+				if (pages[i].getId() === v)
+				{
+					current = pages[i];
+					render();
+				}
+			}
+		});
+	}
+	else
+	{
+		body.appendChild(HmiDialogs.el('div', 'hmiHint', page.getName()));
+	}
+
+	body.appendChild(fields);
+	body.appendChild(error);
+	div.appendChild(body);
+
+	var render = function()
+	{
+		fields.innerText = '';
+		error.innerText = '';
+
+		var d = draftFor(current);
+		var res = project.settings;
+
+		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Appearance'));
+
+		var tb = HmiDialogs.field(fields, 'Title bar', d.titleBar, function(v)
+		{
+			d.titleBar = v;
+			update();
+		}, 'checkbox');
+		tb.setAttribute('data-hmi-prop', 'titleBar');
+
+		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Type'));
+
+		var types = [
+			{value: 'replace', label: 'Replace',
+				hint: 'Closes any window it overlaps when it opens.'},
+			{value: 'overlay', label: 'Overlay',
+				hint: 'Opens on top of other windows and leaves them open.'},
+			{value: 'popup', label: 'Popup (modal)',
+				hint: 'Stays on top of every other window, and nothing ' +
+					'beneath it can be touched until it closes.'}];
+
+		var group = 'hmiWinType' + (++HmiDialogs.radioCounter);
+
+		for (var i = 0; i < types.length; i++)
+		{
+			(function(t)
+			{
+				var row = HmiDialogs.el('label', 'hmiRadioRow');
+				var radio = document.createElement('input');
+				radio.setAttribute('type', 'radio');
+				radio.setAttribute('name', group);
+				radio.setAttribute('value', t.value);
+
+				if (d.type === t.value)
+				{
+					radio.setAttribute('checked', 'checked');
+				}
+
+				mxEvent.addListener(radio, 'change', function()
+				{
+					if (radio.checked)
+					{
+						d.type = t.value;
+					}
+				});
+
+				row.appendChild(radio);
+
+				var text = HmiDialogs.el('span', 'hmiRadioText');
+				text.appendChild(HmiDialogs.el('span', 'hmiRadioLabel', t.label));
+				text.appendChild(HmiDialogs.el('span', 'hmiRadioHint', t.hint));
+				row.appendChild(text);
+				fields.appendChild(row);
+			})(types[i]);
+		}
+
+		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection',
+			'Position and size (screen is ' + res.width + ' × ' +
+			res.height + ')'));
+
+		var inputs = {};
+		var dims = [['x', 'Left (px)'], ['y', 'Top (px)'],
+			['width', 'Width (px)'], ['height', 'Height (px)']];
+
+		for (var i = 0; i < dims.length; i++)
+		{
+			(function(key, label)
+			{
+				var input = HmiDialogs.field(fields, label, d[key], function() {},
+					'number');
+				input.setAttribute('data-hmi-prop', key);
+				inputs[key] = input;
+
+				mxEvent.addListener(input, 'input', function()
+				{
+					var n = parseInt(input.value, 10);
+
+					if (!isNaN(n))
+					{
+						d[key] = n;
+					}
+
+					update();
+				});
+			})(dims[i][0], dims[i][1]);
+		}
+
+		var row = HmiDialogs.el('div', 'hmiFormRow hmiWindowButtons');
+		row.appendChild(HmiDialogs.el('span', 'hmiFormLabel'));
+
+		row.appendChild(HmiDialogs.button('Full Screen', function()
+		{
+			d.x = 0;
+			d.y = 0;
+			d.width = res.width;
+			d.height = res.height;
+			refill();
+		}));
+
+		row.appendChild(HmiDialogs.button('Fit to Content', function()
+		{
+			var size = HmiDialogs.pageContentSize(ui, current);
+
+			if (size != null)
+			{
+				d.width = size.width;
+				d.height = size.height + ((d.titleBar) ?
+					HmiProject.TITLE_BAR_HEIGHT : 0);
+				refill();
+			}
+		}));
+
+		row.appendChild(HmiDialogs.button('Center', function()
+		{
+			d.x = Math.max(0, Math.round((res.width - d.width) / 2));
+			d.y = Math.max(0, Math.round((res.height - d.height) / 2));
+			refill();
+		}));
+
+		fields.appendChild(row);
+
+		var preview = HmiDialogs.el('div', 'hmiScreenPreview');
+		var rect = HmiDialogs.el('div', 'hmiScreenPreviewWindow');
+		preview.appendChild(rect);
+		fields.appendChild(preview);
+
+		var refill = function()
+		{
+			for (var k in inputs)
+			{
+				inputs[k].value = d[k];
+			}
+
+			update();
+		};
+
+		var update = function()
+		{
+			var pw = 240;
+			var scale = pw / res.width;
+			preview.style.width = pw + 'px';
+			preview.style.height = Math.round(res.height * scale) + 'px';
+			rect.style.left = Math.round(d.x * scale) + 'px';
+			rect.style.top = Math.round(d.y * scale) + 'px';
+			rect.style.width = Math.max(1, Math.round(d.width * scale)) + 'px';
+			rect.style.height = Math.max(1, Math.round(d.height * scale)) + 'px';
+			rect.style.borderTopWidth = (d.titleBar) ?
+				Math.max(2, Math.round(HmiProject.TITLE_BAR_HEIGHT * scale)) +
+				'px' : '1px';
+
+			var msg = HmiMenus.checkWindow({settings: res,
+				getWindow: function() { return d; }}, current.getId());
+			error.innerText = (msg != null) ? msg + '.' : '';
+		};
+
+		update();
+	};
+
+	render();
+
+	var apply = function()
+	{
+		for (var id in drafts)
+		{
+			if (!(drafts[id].width > 0 && drafts[id].height > 0))
+			{
+				error.innerText = 'Width and height must be greater than zero.';
+
+				return false;
+			}
+		}
+
+		var changed = false;
+
+		for (var id in drafts)
+		{
+			var before = JSON.stringify(project.windows[id] || {});
+			project.setWindow(id, drafts[id]);
+
+			if (JSON.stringify(project.windows[id] || {}) !== before)
+			{
+				changed = true;
+			}
+		}
+
+		if (changed)
+		{
+			project.touch();
+			ui.editor.setModified(true);
+		}
+
+		return true;
+	};
+
+	HmiDialogs.okCancel(ui, div, apply);
+	ui.showDialog(div, 460, 720, true, true);
+};
+
+HmiDialogs.radioCounter = 0;
+
+/**
+ * The size a window needs to show all of a page's content, measured from the
+ * page origin, since the window's top-left is the page's origin.
+ */
+HmiDialogs.pageContentSize = function(ui, page)
+{
+	var model = HmiWindowManager.modelForPage(ui, page);
+	var graph = new Graph(document.createElement('div'), model);
+	var cells = [];
+	var root = model.getRoot();
+
+	for (var i = 0; i < model.getChildCount(root); i++)
+	{
+		var layer = model.getChildAt(root, i);
+
+		for (var j = 0; j < model.getChildCount(layer); j++)
+		{
+			cells.push(model.getChildAt(layer, j));
+		}
+	}
+
+	var bounds = (cells.length > 0) ?
+		graph.getBoundingBoxFromGeometry(cells, true) : null;
+	graph.destroy();
+
+	if (bounds == null)
+	{
+		return null;
+	}
+
+	return {width: Math.ceil(Math.max(0, bounds.x) + bounds.width),
+		height: Math.ceil(Math.max(0, bounds.y) + bounds.height)};
+};
+
 // ---------------------------------------------------------- user input
 
 /**
  * Runtime value entry. Validates against the link's min/max, which are
  * themselves expressions, so the limits can track engineering ranges.
  */
-HmiDialogs.showUserInput = function(ui, cfg)
+HmiDialogs.showUserInput = function(ui, cfg, runtime)
 {
-	var rt = ui.hmiRuntime;
+	var rt = (runtime != null) ? runtime : ui.hmiRuntime;
 
 	if (rt == null)
 	{
@@ -1291,6 +1834,11 @@ HmiDialogs.showValidation = function(ui, problems)
 				// this usable on a screen with hundreds of objects.
 				mxEvent.addListener(row, 'click', function()
 				{
+					if (p.cell == null)
+					{
+						return;
+					}
+
 					ui.hideDialog();
 					ui.editor.graph.setSelectionCell(p.cell);
 					ui.editor.graph.scrollCellToVisible(p.cell);

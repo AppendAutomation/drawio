@@ -53,6 +53,10 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testScriptFields(ui);
 		HmiSelfTest.testAnimationClipboard(ui);
 		HmiSelfTest.testKeypad(ui);
+		HmiSelfTest.testWindows(ui);
+
+		// Last: its assertions run deferred, and anything opened after it
+		// would take the focus it is checking.
 		HmiSelfTest.testPanelFocus(ui);
 		HmiSelfTest.testInputExtras(ui);
 	}
@@ -1308,7 +1312,25 @@ HmiSelfTest.runLive = function(ui)
 	// Let the simulator scan and the animation frames run for real.
 	window.setTimeout(function()
 	{
-		var rt = ui.hmiRuntime;
+		// Run mode animates a copy of the page in a window of its own; the
+		// copy keeps the cell ids, so the cells made above are found by id.
+		var win = (ui.hmiRuntime != null) ? ui.hmiRuntime.windows[0] : null;
+		var rt = (win != null) ? win.runtime : null;
+		var editorGraph = graph;
+		graph = (win != null) ? win.graph : editorGraph;
+
+		var inWindow = function(cell)
+		{
+			return graph.getModel().getCell(cell.id);
+		};
+
+		readout = inWindow(readout);
+		tank = inWindow(tank);
+		button = inWindow(button);
+		entry = inWindow(entry);
+
+		HmiSelfTest.check('live.opensWindow', win != null &&
+			win.graph !== editorGraph, 'no run window');
 
 		HmiSelfTest.check('live.driverProducedValues',
 			rt != null && rt.getValue('Tank_Level').value != null,
@@ -3311,4 +3333,321 @@ HmiSelfTest.clickKey = function(buttons, label)
 	}
 
 	return false;
+};
+
+
+/**
+ * Inserts a page with one vertex carrying the given links. insertPage selects
+ * the new page, so the caller switches back when done.
+ */
+HmiSelfTest.makePage = function(ui, name, links)
+{
+	var page = ui.insertPage();
+	page.setName(name);
+
+	var graph = ui.editor.graph;
+	var v = new mxCell(name, new mxGeometry(20, 30, 120, 40), 'rounded=1;');
+	v.vertex = true;
+	v.setId(name + '-cell');
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		graph.getModel().add(graph.getDefaultParent(), v);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	if (links != null)
+	{
+		HmiProject.setCellLinks(graph, v, links);
+	}
+
+	graph.background = '#eeeeee';
+
+	return page;
+};
+
+/** Application settings, window properties and the run-mode window manager. */
+HmiSelfTest.testWindows = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	// --- model ------------------------------------------------------------
+
+	var p = HmiSelfTest.sampleProject();
+
+	check('win.defaultResolution', p.settings.width === 1024 &&
+		p.settings.height === 768);
+
+	var d = p.getWindow('nope');
+
+	check('win.defaultFillsScreen', d.x === 0 && d.y === 0 &&
+		d.width === 1024 && d.height === 768 && d.type === 'replace' &&
+		d.titleBar === false, JSON.stringify(d));
+
+	p.setWindow('a', {titleBar: false, type: 'replace', x: 0, y: 0,
+		width: 1024, height: 768});
+
+	check('win.defaultsNotStored', p.windows['a'] == null,
+		JSON.stringify(p.windows['a']));
+
+	p.setWindow('b', {titleBar: true, type: 'popup', x: 10, y: 20,
+		width: 300, height: 200});
+	p.settings.width = 800;
+	p.settings.height = 480;
+	p.settings.startup = ['b', 'gone'];
+
+	var doc = mxUtils.createXmlDocument();
+	var back = HmiProject.fromXml(p.toXml(doc));
+	var wb = back.getWindow('b');
+
+	check('win.roundTripSettings', back.settings.width === 800 &&
+		back.settings.height === 480 &&
+		back.settings.startup.join(',') === 'b,gone',
+		JSON.stringify(back.settings));
+	check('win.roundTripWindow', wb.titleBar === true && wb.type === 'popup' &&
+		wb.x === 10 && wb.y === 20 && wb.width === 300 && wb.height === 200,
+		JSON.stringify(wb));
+	check('win.unsetSizeFollowsResolution',
+		back.getWindow('a').width === 800, '' + back.getWindow('a').width);
+
+	var empty = new HmiProject();
+	check('win.emptyIsEmpty', empty.isEmpty());
+	empty.settings.width = 800;
+	check('win.settingsMakeNonEmpty', !empty.isEmpty());
+
+	back.prunePages(['b']);
+	check('win.pruneStartup', back.settings.startup.join(',') === 'b');
+
+	// --- driver hub -------------------------------------------------------
+
+	var calls = [];
+	var fake = {
+		listeners: [],
+		connect: function() { calls.push('connect'); },
+		disconnect: function() { calls.push('disconnect'); },
+		subscribe: function(paths) { calls.push('sub:' + paths.join('+')); },
+		unsubscribe: function() { calls.push('unsub'); },
+		on: function(e, cb) { this.listeners.push(cb); },
+		off: function(e, cb)
+		{
+			this.listeners.splice(mxUtils.indexOf(this.listeners, cb), 1);
+		},
+		write: function() { return {}; },
+		status: function() { return 'connected'; }
+	};
+
+	var hub = new HmiDriverHub(fake);
+	var c1 = hub.client();
+	var c2 = hub.client();
+	var cb = function() {};
+	c1.on('change', cb);
+	c1.subscribe(['A', 'B'], 250);
+	c2.subscribe(['b', 'C'], 100);
+
+	check('hub.unionOfPaths', calls[calls.length - 1] === 'sub:A+B+C',
+		calls.join(' | '));
+
+	c1.disconnect();
+
+	check('hub.dropsDisconnected', calls[calls.length - 1] === 'sub:b+C' &&
+		fake.listeners.length === 0, calls.join(' | '));
+
+	c2.unsubscribe();
+	check('hub.unsubscribesWhenIdle', calls[calls.length - 1] === 'unsub');
+
+	// --- window manager ---------------------------------------------------
+
+	HmiSelfTest.resetGraph(ui);
+
+	var project = HmiSelfTest.sampleProject();
+	ui.hmiProject = project;
+
+	var home = ui.currentPage;
+	var display = {'valueDisplay': {kind: 'analog', expr: 'Tank_Level',
+		format: '0', prefix: '', suffix: ''}};
+
+	var pa = HmiSelfTest.makePage(ui, 'WinA', display);
+	var pb = HmiSelfTest.makePage(ui, 'WinB', null);
+	var pc = HmiSelfTest.makePage(ui, 'WinC', null);
+	var pd = HmiSelfTest.makePage(ui, 'WinD', null);
+	var made = [pa, pb, pc, pd];
+
+	ui.selectPage(home);
+
+	try
+	{
+		project.setWindow(pb.getId(), {titleBar: true, type: 'overlay',
+			x: 750, y: 550, width: 200, height: 150});
+		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200,
+			width: 200, height: 100});
+		project.setWindow(pd.getId(), {type: 'replace', x: 0, y: 0,
+			width: 700, height: 500});
+		project.settings.startup = [pb.getId(), pa.getId()];
+
+		HmiMenus.start(ui);
+
+		var wm = ui.hmiRuntime;
+		var names = function()
+		{
+			var res = [];
+
+			for (var i = 0; i < wm.windows.length; i++)
+			{
+				res.push(wm.windows[i].name);
+			}
+
+			return res.join(',');
+		};
+
+		check('wm.isWindowManager', wm instanceof HmiWindowManager);
+		check('wm.startupInPageOrder', names() === 'WinA,WinB', names());
+		check('wm.editorDisabled', !ui.editor.graph.isEnabled());
+		check('wm.screenShown',
+			document.getElementsByClassName('hmiScreen').length === 1);
+
+		var wa = wm.windowFor(pa);
+		var wb2 = wm.windowFor(pb);
+
+		check('wm.copyKeepsIds', wa != null &&
+			wa.graph.getModel().getCell('WinA-cell') != null &&
+			wa.graph !== ui.editor.graph);
+		check('wm.pageBackground', wa != null &&
+			wa.content.style.backgroundColor === 'rgb(238, 238, 238)',
+			(wa != null) ? wa.content.style.backgroundColor : 'n/a');
+		check('wm.titleBarShown', wb2 != null && wb2.title != null &&
+			wa.title == null);
+		check('wm.valuesReachWindow', wa != null &&
+			wa.runtime.getValue('Tank_Level').value != null,
+			(wa != null) ? JSON.stringify(wa.runtime.getValue('Tank_Level')) :
+				'n/a');
+
+		var scale = wm.scale;
+		check('wm.placedAtScale', wb2 != null &&
+			wb2.div.style.left === Math.round(750 * scale) + 'px' &&
+			wb2.div.style.width === Math.round(200 * scale) + 'px',
+			(wb2 != null) ? wb2.div.style.left + ' ' + wb2.div.style.width +
+				' @' + scale : 'n/a');
+
+		// Overlay leaves others alone.
+		check('wm.overlayKeepsOthers', wm.windows.length === 2);
+
+		// Popup: on top and modal.
+		var wc = wm.show('winc');
+
+		check('wm.showIgnoresCase', wc != null && wc.page === pc);
+		check('wm.popupOnTop', wc != null &&
+			parseInt(wc.div.style.zIndex, 10) >
+			parseInt(wb2.div.style.zIndex, 10));
+		check('wm.popupBlocks', wm.isBlocked(wa) && wm.isBlocked(wb2) &&
+			!wm.isBlocked(wc));
+
+		// An overlay opened while the popup is up still goes under it.
+		wm.hide('WinB');
+		wm.show('WinB');
+		check('wm.popupStaysOnTop', wm.isBlocked(wm.windowFor(pb)));
+
+		wm.hide('WinC');
+		check('wm.hideClosesPopup', wm.windowFor(pc) == null &&
+			!wm.isBlocked(wa), names());
+
+		// Replace closes what it overlaps: A (full screen) but not B, which
+		// sits outside 700 x 500.
+		wm.show('WinD');
+		check('wm.replaceClosesOverlapped', names() === 'WinB,WinD', names());
+
+		// The title bar's close button hides its window.
+		var closeBtn = wm.windowFor(pb).div.querySelector('.hmiWindowClose');
+		closeBtn.click();
+		check('wm.titleBarCloses', names() === 'WinD', names());
+
+		check('wm.unknownWindow', wm.show('NoSuchPage') == null);
+
+		HmiMenus.stop(ui);
+
+		check('wm.stopCleansUp', wm.windows.length === 0 &&
+			document.getElementsByClassName('hmiScreenBackdrop').length === 0 &&
+			ui.editor.graph.isEnabled() && wm.hub.clients.length === 0,
+			names() + ' clients=' + wm.hub.clients.length);
+
+		// No startup windows: the page being edited opens.
+		project.settings.startup = [];
+		HmiMenus.start(ui);
+		check('wm.fallsBackToCurrentPage', ui.hmiRuntime.windows.length === 1 &&
+			ui.hmiRuntime.windows[0].page === ui.currentPage);
+		HmiMenus.stop(ui);
+
+		// --- validation ---------------------------------------------------
+
+		project.setWindow(pb.getId(), {x: 900, y: 0, width: 300, height: 100});
+		check('win.validateOffScreen',
+			HmiMenus.checkWindow(project, pb.getId()) != null);
+		check('win.validateFits',
+			HmiMenus.checkWindow(project, pd.getId()) == null);
+
+		// --- dialogs ------------------------------------------------------
+
+		ui.editor.setModified(false);
+		HmiDialogs.showAppSettings(ui);
+
+		var dlg = ui.dialog.container;
+		var nums = dlg.querySelectorAll('input[type="number"]');
+		nums[0].value = '800';
+		nums[0].dispatchEvent(new Event('input'));
+		nums[1].value = '480';
+		nums[1].dispatchEvent(new Event('input'));
+
+		var select = dlg.querySelector('select');
+		check('dlg.presetFollowsSize', select.value === '800x480', select.value);
+
+		var box = dlg.querySelector('input[data-hmi-page="' + pc.getId() + '"]');
+		box.click();
+		dlg.querySelector('.hmiOk').click();
+
+		check('dlg.settingsApplied', project.settings.width === 800 &&
+			project.settings.height === 480 &&
+			project.settings.startup.join(',') === pc.getId(),
+			JSON.stringify(project.settings));
+		check('dlg.settingsMarkModified', ui.editor.modified === true);
+
+		HmiDialogs.showWindowProps(ui, pa);
+		dlg = ui.dialog.container;
+		dlg.querySelector('[data-hmi-prop="titleBar"]').click();
+		dlg.querySelector('input[type="radio"][value="overlay"]').click();
+
+		var wInput = dlg.querySelector('[data-hmi-prop="width"]');
+		wInput.value = '320';
+		wInput.dispatchEvent(new Event('input'));
+
+		dlg.querySelector('.hmiOk').click();
+
+		var wa2 = project.getWindow(pa.getId());
+		check('dlg.windowApplied', wa2.titleBar === true &&
+			wa2.type === 'overlay' && wa2.width === 320 &&
+			wa2.height === 480, JSON.stringify(wa2));
+
+		// Cancel discards.
+		HmiDialogs.showWindowProps(ui, pa);
+		dlg = ui.dialog.container;
+		dlg.querySelector('input[type="radio"][value="popup"]').click();
+		ui.hideDialog();
+		check('dlg.cancelDiscards',
+			project.getWindow(pa.getId()).type === 'overlay');
+	}
+	finally
+	{
+		if (HmiMenus.isRunning(ui))
+		{
+			HmiMenus.stop(ui);
+		}
+
+		for (var i = 0; i < made.length; i++)
+		{
+			ui.removePage(made[i]);
+		}
+	}
 };
