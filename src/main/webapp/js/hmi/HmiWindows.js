@@ -1,7 +1,9 @@
 /**
  * Run mode's window manager.
  *
- * A window is a page. Running opens the application's startup windows on a
+ * A window is a page, and page coordinates are screen coordinates: a window at
+ * (x, y) shows what is drawn at (x, y) on its page, which is what the frame on
+ * the editor canvas (HmiFrame) shows while designing. Running opens the application's startup windows on a
  * simulated device screen of the configured resolution, each in its own graph
  * with its own HmiRuntime, positioned and stacked according to its window
  * properties. The editor's own graph is never animated: it is disabled and
@@ -559,7 +561,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 		var close = document.createElement('span');
 		close.className = 'hmiWindowClose';
 		close.setAttribute('title', mxResources.get('close'));
-		mxUtils.write(close, '×');
+		mxUtils.write(close, '\u00D7');
 		title.appendChild(close);
 
 		mxEvent.addListener(close, 'click', function(evt)
@@ -651,13 +653,18 @@ HmiWindowManager.prototype.place = function(win)
 
 	win.content.style.top = tb + 'px';
 
-	if (win.graph != null && win.graph.view.scale !== s)
+	// Page coordinates are screen coordinates, so the content area shows the
+	// part of the page under it: the window's rectangle, less the title bar.
+	if (win.graph != null)
 	{
-		win.graph.view.scaleAndTranslate(s, 0, 0);
-	}
-	else if (win.graph != null)
-	{
-		win.graph.view.setTranslate(0, 0);
+		var tx = -p.x;
+		var ty = -(p.y + ((win.title != null) ? HmiProject.TITLE_BAR_HEIGHT : 0));
+		var view = win.graph.view;
+
+		if (view.scale !== s || view.translate.x !== tx || view.translate.y !== ty)
+		{
+			view.scaleAndTranslate(s, tx, ty);
+		}
 	}
 };
 

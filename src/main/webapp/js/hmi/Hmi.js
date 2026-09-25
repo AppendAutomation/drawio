@@ -25,6 +25,7 @@ Hmi.install = function()
 	HmiFile.install();
 	HmiFormat.install();
 	HmiMenus.install();
+	HmiFrame.install();
 	Hmi.captureUi();
 
 	HmiLog.log('drawio-desktop-hmi ' + Hmi.VERSION + ' installed');
@@ -45,6 +46,10 @@ Hmi.captureUi = function()
 		editorUiInit.apply(this, arguments);
 
 		Hmi.ui = this;
+
+		// Marks the editor's graph, the only one that gets the screen frame.
+		this.editor.graph.hmiUi = this;
+		HmiFrame.refresh(this);
 
 		if (typeof HmiSelfTest !== 'undefined')
 		{

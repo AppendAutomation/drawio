@@ -3527,6 +3527,11 @@ HmiSelfTest.testWindows = function(ui)
 				'n/a');
 
 		var scale = wm.scale;
+		check('wm.showsPageUnderWindow', wb2 != null &&
+			wb2.graph.view.translate.x === -750 &&
+			wb2.graph.view.translate.y === -(550 + HmiProject.TITLE_BAR_HEIGHT),
+			(wb2 != null) ? JSON.stringify(wb2.graph.view.translate) : 'n/a');
+
 		check('wm.placedAtScale', wb2 != null &&
 			wb2.div.style.left === Math.round(750 * scale) + 'px' &&
 			wb2.div.style.width === Math.round(200 * scale) + 'px',
@@ -3629,6 +3634,49 @@ HmiSelfTest.testWindows = function(ui)
 		check('dlg.windowApplied', wa2.titleBar === true &&
 			wa2.type === 'overlay' && wa2.width === 320 &&
 			wa2.height === 480, JSON.stringify(wa2));
+
+		// --- canvas frame -------------------------------------------------
+
+		project.settings.width = 800;
+		project.settings.height = 480;
+		project.setWindow(home.getId(), {titleBar: true, type: 'popup',
+			x: 100, y: 50, width: 300, height: 200});
+		HmiFrame.refresh(ui);
+
+		var frame = ui.hmiFrameGroup;
+		var gs = ui.editor.graph.view.scale;
+		var attr = function(node, name)
+		{
+			return parseFloat(node.getAttribute(name));
+		};
+
+		check('frame.inBackgroundPane', frame != null &&
+			frame.parentNode === ui.editor.graph.view.getBackgroundPane());
+		check('frame.screenSize', frame != null &&
+			attr(frame.screen, 'width') === Math.round(800 * gs) &&
+			attr(frame.screen, 'height') === Math.round(480 * gs),
+			(frame != null) ? frame.screen.getAttribute('width') + ' x ' +
+				frame.screen.getAttribute('height') + ' @' + gs : 'n/a');
+		check('frame.windowShown', frame != null &&
+			frame.window.style.display !== 'none' &&
+			attr(frame.window, 'width') === Math.round(300 * gs) &&
+			Math.round(attr(frame.window, 'x') - attr(frame.screen, 'x')) ===
+				Math.round(100 * gs));
+		check('frame.titleLine', frame != null &&
+			frame.titleLine.style.display !== 'none');
+
+		// Follows zoom.
+		ui.editor.graph.zoomTo(2);
+		ui.editor.graph.view.validateBackground();
+		check('frame.followsZoom', frame != null &&
+			attr(frame.screen, 'width') === Math.round(800 *
+				ui.editor.graph.view.scale), frame.screen.getAttribute('width'));
+		ui.editor.graph.zoomTo(gs);
+
+		// A plain full-screen window draws no dashed border.
+		project.setWindow(home.getId(), {});
+		HmiFrame.refresh(ui);
+		check('frame.fullScreenHidesWindow', frame.window.style.display === 'none');
 
 		// Cancel discards.
 		HmiDialogs.showWindowProps(ui, pa);

@@ -967,7 +967,7 @@ HmiDialogs.showAppSettings = function(ui)
 	for (var i = 0; i < HmiProject.RESOLUTIONS.length; i++)
 	{
 		var r = HmiProject.RESOLUTIONS[i];
-		options.push({value: r[0] + 'x' + r[1], label: r[0] + ' × ' + r[1]});
+		options.push({value: r[0] + 'x' + r[1], label: r[0] + ' \u00D7 ' + r[1]});
 	}
 
 	options.push({value: 'custom', label: 'Custom'});
@@ -1112,6 +1112,7 @@ HmiDialogs.showAppSettings = function(ui)
 		{
 			project.touch();
 			ui.editor.setModified(true);
+			HmiFrame.refresh(ui);
 		}
 
 		return true;
@@ -1121,13 +1122,13 @@ HmiDialogs.showAppSettings = function(ui)
 	ui.showDialog(div, 460, 480, true, true);
 };
 
-/** "Popup, title bar, 400 × 300 at 10, 20" */
+/** "Popup, title bar, 400 \u00D7 300 at 10, 20" */
 HmiDialogs.windowSummary = function(w)
 {
 	var type = {replace: 'Replace', overlay: 'Overlay', popup: 'Popup'}[w.type];
 
 	return type + ((w.titleBar) ? ', title bar' : '') + ', ' +
-		w.width + ' × ' + w.height + ' at ' + w.x + ', ' + w.y;
+		w.width + ' \u00D7 ' + w.height + ' at ' + w.x + ', ' + w.y;
 };
 
 /** Cancel and OK. OK closes only when apply() returns true. */
@@ -1297,8 +1298,12 @@ HmiDialogs.showWindowProps = function(ui, page)
 		}
 
 		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection',
-			'Position and size (screen is ' + res.width + ' × ' +
+			'Position and size (screen is ' + res.width + ' \u00D7 ' +
 			res.height + ')'));
+		fields.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'The window shows the part of the page inside it -- the dashed ' +
+			'border on the canvas. Moving the window does not move what is ' +
+			'drawn.'));
 
 		var inputs = {};
 		var dims = [['x', 'Left (px)'], ['y', 'Top (px)'],
@@ -1341,13 +1346,15 @@ HmiDialogs.showWindowProps = function(ui, page)
 
 		row.appendChild(HmiDialogs.button('Fit to Content', function()
 		{
-			var size = HmiDialogs.pageContentSize(ui, current);
+			var b = HmiDialogs.pageContentBounds(ui, current);
 
-			if (size != null)
+			if (b != null)
 			{
-				d.width = size.width;
-				d.height = size.height + ((d.titleBar) ?
-					HmiProject.TITLE_BAR_HEIGHT : 0);
+				var tb = (d.titleBar) ? HmiProject.TITLE_BAR_HEIGHT : 0;
+				d.x = Math.floor(b.x);
+				d.y = Math.floor(b.y) - tb;
+				d.width = Math.ceil(b.x + b.width) - d.x;
+				d.height = Math.ceil(b.y + b.height) - Math.floor(b.y) + tb;
 				refill();
 			}
 		}));
@@ -1429,6 +1436,7 @@ HmiDialogs.showWindowProps = function(ui, page)
 		{
 			project.touch();
 			ui.editor.setModified(true);
+			HmiFrame.refresh(ui);
 		}
 
 		return true;
@@ -1441,10 +1449,9 @@ HmiDialogs.showWindowProps = function(ui, page)
 HmiDialogs.radioCounter = 0;
 
 /**
- * The size a window needs to show all of a page's content, measured from the
- * page origin, since the window's top-left is the page's origin.
+ * The bounds of a page's content, in page -- and so screen -- coordinates.
  */
-HmiDialogs.pageContentSize = function(ui, page)
+HmiDialogs.pageContentBounds = function(ui, page)
 {
 	var model = HmiWindowManager.modelForPage(ui, page);
 	var graph = new Graph(document.createElement('div'), model);
@@ -1465,13 +1472,7 @@ HmiDialogs.pageContentSize = function(ui, page)
 		graph.getBoundingBoxFromGeometry(cells, true) : null;
 	graph.destroy();
 
-	if (bounds == null)
-	{
-		return null;
-	}
-
-	return {width: Math.ceil(Math.max(0, bounds.x) + bounds.width),
-		height: Math.ceil(Math.max(0, bounds.y) + bounds.height)};
+	return bounds;
 };
 
 // ---------------------------------------------------------- user input
