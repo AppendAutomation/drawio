@@ -381,16 +381,22 @@ HmiMenus.isRunning = function(ui)
 	return ui.hmiRuntime != null && ui.hmiRuntime.running;
 };
 
-HmiMenus.start = function(ui)
+/**
+ * options.runtime is the published package (HmiRuntimeApp): the screen fills
+ * the window, there is no banner or Stop, and a project without tags still
+ * shows its screens.
+ */
+HmiMenus.start = function(ui, options)
 {
 	if (HmiMenus.isRunning(ui))
 	{
 		return;
 	}
 
+	var runtime = options != null && options.runtime === true;
 	var project = ui.hmiProject;
 
-	if (project == null || project.tags.length === 0)
+	if (project == null || (project.tags.length === 0 && !runtime))
 	{
 		ui.showError(mxResources.get('error'),
 			mxResources.get('hmiNoTags'), mxResources.get('ok'));
@@ -423,7 +429,8 @@ HmiMenus.start = function(ui)
 			HmiMenus.updateDeviceStatus(ui, devices);
 		});
 
-		ui.hmiRuntime = new HmiWindowManager(ui, project, driver);
+		ui.hmiRunOnly = runtime;
+		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime});
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
@@ -431,7 +438,8 @@ HmiMenus.start = function(ui)
 
 HmiMenus.stop = function(ui)
 {
-	if (!HmiMenus.isRunning(ui))
+	// A published package runs until it exits
+	if (!HmiMenus.isRunning(ui) || ui.hmiRunOnly)
 	{
 		return;
 	}
@@ -488,6 +496,20 @@ HmiMenus.updateBanner = function(ui, running)
 
 	if (!running)
 	{
+		return;
+	}
+
+	// The runtime's screen is the whole window: only communication faults
+	// show, in a corner
+	if (ui.hmiRunOnly)
+	{
+		var status = document.createElement('div');
+		status.className = 'hmiRuntimeStatus';
+		status.style.display = 'none';
+		document.body.appendChild(status);
+		ui.hmiBanner = status;
+		ui.hmiBannerFaults = status;
+
 		return;
 	}
 

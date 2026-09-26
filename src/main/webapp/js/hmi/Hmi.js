@@ -51,6 +51,17 @@ Hmi.captureUi = function()
 		this.editor.graph.hmiUi = this;
 		HmiFrame.refresh(this);
 
+		// A published package: open its project straight into Run
+		if (HmiRuntimeApp.isActive())
+		{
+			var ui = this;
+
+			window.setTimeout(function()
+			{
+				HmiLog.guard('runtime.start', function() { HmiRuntimeApp.start(ui); });
+			}, 0);
+		}
+
 		if (typeof HmiSelfTest !== 'undefined')
 		{
 			HmiSelfTest.ui = this;

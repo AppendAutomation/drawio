@@ -182,7 +182,12 @@ HmiDriverClient.prototype.write = function(writes)
 
 // ------------------------------------------------------------ window manager
 
-HmiWindowManager = function(ui, project, driver)
+/**
+ * options.fit fills the whole browser window with the screen, scaling up as
+ * well as down (the published runtime); otherwise the screen sits in the
+ * diagram area at no more than 1:1.
+ */
+HmiWindowManager = function(ui, project, driver, options)
 {
 	this.ui = ui;
 	this.project = project;
@@ -191,6 +196,7 @@ HmiWindowManager = function(ui, project, driver)
 	this.windows = [];
 	this.running = false;
 	this.scale = 1;
+	this.fit = options != null && options.fit === true;
 };
 
 HmiWindowManager.prototype.start = function()
@@ -408,6 +414,7 @@ HmiWindowManager.prototype.createScreen = function()
 /**
  * Fits the device screen into the diagram area. Scaled down when it does not
  * fit, never up: a 800x480 panel shown at 1:1 is what the operator will see.
+ * The runtime (fit) fills the window instead, since there it is the panel.
  */
 HmiWindowManager.prototype.layout = function()
 {
@@ -416,7 +423,8 @@ HmiWindowManager.prototype.layout = function()
 		return;
 	}
 
-	var area = this.ui.diagramContainer.getBoundingClientRect();
+	var area = (this.fit) ? {left: 0, top: 0, width: window.innerWidth,
+		height: window.innerHeight} : this.ui.diagramContainer.getBoundingClientRect();
 	var b = this.backdrop.style;
 	b.left = area.left + 'px';
 	b.top = area.top + 'px';
@@ -424,8 +432,8 @@ HmiWindowManager.prototype.layout = function()
 	b.height = area.height + 'px';
 
 	var res = this.project.settings;
-	var pad = 16;
-	var scale = Math.min(1, (area.width - pad * 2) / res.width,
+	var pad = (this.fit) ? 0 : 16;
+	var scale = Math.min((this.fit) ? Infinity : 1, (area.width - pad * 2) / res.width,
 		(area.height - pad * 2) / res.height);
 	this.scale = Math.max(0.1, scale);
 

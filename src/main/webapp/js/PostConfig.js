@@ -33,14 +33,21 @@ window.ICON_SERVICE_PATH = null;
 	css.setAttribute('href', 'css/hmi.css');
 	head.appendChild(css);
 
-	// Hmi.js installs everything and must come last.
-	var files = (urlParams['dev'] == '1') ?
-		['HmiLog.js', 'HmiTypes.js', 'HmiProject.js', 'HmiFile.js',
-		 'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js',
-		 'HmiWindows.js', 'HmiFrame.js',
-		 'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
-		 'HmiDialogs.js', 'HmiMenus.js', 'HmiSelfTest.js', 'Hmi.js'] :
-		['hmi.js'];
+	// Hmi.js installs everything and must come last. The sources are loaded
+	// as they are in every build (there is no minified bundle); the self test
+	// only in dev/test runs.
+	var files = ['HmiLog.js', 'HmiTypes.js', 'HmiProject.js', 'HmiFile.js',
+		'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js',
+		'HmiWindows.js', 'HmiFrame.js',
+		'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
+		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js'];
+
+	if (urlParams['dev'] == '1' || urlParams['test'] == '1')
+	{
+		files.push('HmiSelfTest.js');
+	}
+
+	files.push('Hmi.js');
 
 	for (var i = 0; i < files.length; i++)
 	{

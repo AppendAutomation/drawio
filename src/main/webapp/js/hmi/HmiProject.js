@@ -45,6 +45,8 @@ HmiProject.prototype.isEmpty = function()
 	return this.tags.length === 0 && this.devices.length === 0 &&
 		this.settings.width === d.width && this.settings.height === d.height &&
 		this.settings.startup.length === 0 &&
+		JSON.stringify(this.settings.runtime) === JSON.stringify(d.runtime) &&
+		JSON.stringify(this.settings.publish) === JSON.stringify(d.publish) &&
 		Object.keys(this.windows).length === 0;
 };
 
@@ -58,7 +60,50 @@ HmiProject.RESOLUTIONS = [
 
 HmiProject.defaultSettings = function()
 {
-	return {width: 1024, height: 768, startup: []};
+	return {width: 1024, height: 768, startup: [],
+		runtime: HmiProject.defaultRuntime(), publish: {}};
+};
+
+/**
+ * How a published package runs on the target PC. The exit password is kept
+ * only as a salted SHA-256 hash (hex of SHA-256(salt + password)), which the
+ * package checks in its main process.
+ */
+HmiProject.WINDOW_MODES = ['kiosk', 'fullscreen', 'window'];
+HmiProject.EXIT_MODES = ['shortcut', 'password', 'never'];
+
+HmiProject.defaultRuntime = function()
+{
+	return {windowMode: 'kiosk', exit: 'shortcut', salt: '', hash: ''};
+};
+
+/** The options HMI > Publish remembers, as the attributes they are saved as. */
+HmiProject.PUBLISH_FIELDS = ['productName', 'version', 'scope', 'desktop',
+	'autostart', 'compression', 'output'];
+
+/** Hex SHA-256 of salt + password, resolved asynchronously (Web Crypto). */
+HmiProject.hashPassword = function(salt, password)
+{
+	var bytes = new TextEncoder().encode(salt + password);
+
+	return window.crypto.subtle.digest('SHA-256', bytes).then(function(buf)
+	{
+		return Array.prototype.map.call(new Uint8Array(buf), function(b)
+		{
+			return ('0' + b.toString(16)).slice(-2);
+		}).join('');
+	});
+};
+
+HmiProject.randomSalt = function()
+{
+	var bytes = new Uint8Array(16);
+	window.crypto.getRandomValues(bytes);
+
+	return Array.prototype.map.call(bytes, function(b)
+	{
+		return ('0' + b.toString(16)).slice(-2);
+	}).join('');
 };
 
 // ---------------------------------------------------------------- windows
@@ -520,6 +565,43 @@ HmiProject.prototype.toXml = function(doc)
 		settings.appendChild(node);
 	}
 
+	var rt = this.settings.runtime;
+	var drt = HmiProject.defaultRuntime();
+
+	if (JSON.stringify(rt) !== JSON.stringify(drt))
+	{
+		var node = doc.createElement('runtime');
+		node.setAttribute('windowMode', rt.windowMode);
+		node.setAttribute('exit', rt.exit);
+
+		if (rt.hash)
+		{
+			node.setAttribute('salt', rt.salt);
+			node.setAttribute('hash', rt.hash);
+		}
+
+		settings.appendChild(node);
+	}
+
+	var pub = this.settings.publish;
+
+	if (Object.keys(pub).length > 0)
+	{
+		var node = doc.createElement('publish');
+
+		for (var i = 0; i < HmiProject.PUBLISH_FIELDS.length; i++)
+		{
+			var key = HmiProject.PUBLISH_FIELDS[i];
+
+			if (pub[key] != null)
+			{
+				node.setAttribute(key, String(pub[key]));
+			}
+		}
+
+		settings.appendChild(node);
+	}
+
 	root.appendChild(settings);
 
 	var windows = doc.createElement('windows');
@@ -724,6 +806,38 @@ HmiProject.fromXml = function(node)
 			if (id)
 			{
 				project.settings.startup.push(id);
+			}
+		}
+
+		var runtime = settings[0].getElementsByTagName('runtime');
+
+		if (runtime.length > 0)
+		{
+			var rt = project.settings.runtime;
+			var mode = runtime[0].getAttribute('windowMode');
+			var exit = runtime[0].getAttribute('exit');
+
+			if (mxUtils.indexOf(HmiProject.WINDOW_MODES, mode) >= 0) { rt.windowMode = mode; }
+			if (mxUtils.indexOf(HmiProject.EXIT_MODES, exit) >= 0) { rt.exit = exit; }
+
+			rt.salt = runtime[0].getAttribute('salt') || '';
+			rt.hash = runtime[0].getAttribute('hash') || '';
+		}
+
+		var publish = settings[0].getElementsByTagName('publish');
+
+		if (publish.length > 0)
+		{
+			for (var i = 0; i < HmiProject.PUBLISH_FIELDS.length; i++)
+			{
+				var key = HmiProject.PUBLISH_FIELDS[i];
+				var v = publish[0].getAttribute(key);
+
+				if (v != null)
+				{
+					project.settings.publish[key] = (key === 'desktop' ||
+						key === 'autostart') ? v === 'true' : v;
+				}
 			}
 		}
 	}

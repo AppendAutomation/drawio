@@ -3433,6 +3433,40 @@ HmiSelfTest.testWindows = function(ui)
 	back.prunePages(['b']);
 	check('win.pruneStartup', back.settings.startup.join(',') === 'b');
 
+	// --- runtime and publish settings ----------------------------------
+
+	var rp = new HmiProject();
+	check('rt.defaults', rp.settings.runtime.windowMode === 'kiosk' &&
+		rp.settings.runtime.exit === 'shortcut' && rp.settings.runtime.hash === '');
+	check('rt.defaultsNotStored', rp.toXml(mxUtils.createXmlDocument())
+		.getElementsByTagName('runtime').length === 0);
+
+	rp.settings.runtime = {windowMode: 'window', exit: 'password', salt: 'c0ffee',
+		hash: '2215b729f4c90d85fa59cd2879117b33d1089521f38e987de839f1c2e45e795c'};
+	rp.settings.publish = {productName: 'Line 3', version: '1.2.0', scope: 'user',
+		desktop: true, autostart: false, compression: 'fast', output: '/tmp/out'};
+	check('rt.makesNonEmpty', !rp.isEmpty());
+
+	var rpXml = mxUtils.getXml(rp.toXml(mxUtils.createXmlDocument()));
+	var rb = HmiProject.fromXml(mxUtils.parseXml(rpXml).documentElement);
+
+	check('rt.roundTrip', JSON.stringify(rb.settings.runtime) ===
+		JSON.stringify(rp.settings.runtime), JSON.stringify(rb.settings.runtime));
+	check('rt.publishRoundTrip', JSON.stringify(rb.settings.publish) ===
+		JSON.stringify(rp.settings.publish), JSON.stringify(rb.settings.publish));
+
+	var badRt = mxUtils.parseXml('<hmiProject><settings><runtime windowMode="huge" ' +
+		'exit="whenever"/></settings></hmiProject>').documentElement;
+	check('rt.badModesIgnored', HmiProject.fromXml(badRt).settings.runtime.windowMode === 'kiosk' &&
+		HmiProject.fromXml(badRt).settings.runtime.exit === 'shortcut');
+
+	// Must match the package's check in src/main/runtime/RuntimeMode.js
+	HmiProject.hashPassword('c0ffee', 'secret').then(function(hash)
+	{
+		check('rt.hashMatchesMain', hash ===
+			'2215b729f4c90d85fa59cd2879117b33d1089521f38e987de839f1c2e45e795c', hash);
+	});
+
 	// --- driver hub -------------------------------------------------------
 
 	var calls = [];
@@ -3670,6 +3704,36 @@ HmiSelfTest.testWindows = function(ui)
 			project.settings.startup.join(',') === pc.getId(),
 			JSON.stringify(project.settings));
 		check('dlg.settingsMarkModified', ui.editor.modified === true);
+
+		HmiDialogs.showAppSettings(ui);
+		dlg = ui.dialog.container;
+		var exitSel = dlg.querySelector('[data-hmi-field="exit"]');
+		var pwInput = dlg.querySelector('[data-hmi-field="exitPassword"]');
+		check('dlg.passwordHiddenByDefault', pwInput.parentNode.style.display === 'none');
+		exitSel.value = 'password';
+		exitSel.dispatchEvent(new Event('change'));
+		check('dlg.passwordShown', pwInput.parentNode.style.display === '');
+		dlg.querySelector('.hmiOk').click();
+		check('dlg.passwordRequired', ui.dialog != null && ui.dialog.container === dlg &&
+			dlg.querySelector('.hmiError').innerText !== '');
+
+		pwInput.value = 'hunter2';
+		dlg.querySelectorAll('select')[1].value = 'window';
+		dlg.querySelectorAll('select')[1].dispatchEvent(new Event('change'));
+		dlg.querySelector('.hmiOk').click();
+
+		check('dlg.runtimeApplied', project.settings.runtime.windowMode === 'window' &&
+			project.settings.runtime.exit === 'password', JSON.stringify(project.settings.runtime));
+
+		window.setTimeout(function()
+		{
+			var rt = project.settings.runtime;
+			var saved = mxUtils.getXml(project.toXml(mxUtils.createXmlDocument()));
+
+			check('dlg.passwordHashed', /^[0-9a-f]{64}$/.test(rt.hash) && rt.salt.length === 32,
+				JSON.stringify(rt));
+			check('dlg.passwordNotStored', saved.indexOf('hunter2') < 0);
+		}, 1000);
 
 		HmiDialogs.showWindowProps(ui, pa);
 		dlg = ui.dialog.container;

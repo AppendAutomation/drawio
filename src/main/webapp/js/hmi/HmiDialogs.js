@@ -1408,6 +1408,45 @@ HmiDialogs.showAppSettings = function(ui)
 
 	body.appendChild(list);
 
+	// How a published package runs on the target PC (HMI > Publish)
+	var rt = project.settings.runtime;
+	var windowMode = rt.windowMode;
+	var exitMode = rt.exit;
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Runtime'));
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'How the published application runs on the target PC. Kiosk fills ' +
+		'the screen and hides the taskbar; Windows keys and Ctrl+Alt+Del ' +
+		'still work unless Windows itself is locked down. The exit shortcut ' +
+		'is Ctrl+Alt+Shift+Q.'));
+
+	HmiDialogs.select(body, 'Window', windowMode, [
+		{value: 'kiosk', label: 'Kiosk (full screen, locked)'},
+		{value: 'fullscreen', label: 'Full screen'},
+		{value: 'window', label: 'Window at the target resolution'}],
+		function(v) { windowMode = v; });
+
+	var pwRow;
+
+	var exitSelect = HmiDialogs.select(body, 'Exit', exitMode, [
+		{value: 'shortcut', label: 'Exit shortcut'},
+		{value: 'password', label: 'Exit shortcut and password'},
+		{value: 'never', label: 'Never (shut down Windows to stop)'}],
+		function(v)
+		{
+			exitMode = v;
+			pwRow.style.display = (v === 'password') ? '' : 'none';
+		});
+	exitSelect.setAttribute('data-hmi-field', 'exit');
+
+	var pwInput = HmiDialogs.field(body, 'Exit password', '', function() {},
+		'password');
+	pwInput.setAttribute('data-hmi-field', 'exitPassword');
+	pwInput.setAttribute('placeholder', (rt.hash) ? 'Unchanged' : '');
+	pwInput.setAttribute('autocomplete', 'new-password');
+	pwRow = pwInput.parentNode;
+	pwRow.style.display = (exitMode === 'password') ? '' : 'none';
+
 	var error = HmiDialogs.el('div', 'hmiError');
 	body.appendChild(error);
 	div.appendChild(body);
@@ -1425,6 +1464,15 @@ HmiDialogs.showAppSettings = function(ui)
 			return false;
 		}
 
+		var password = pwInput.value;
+
+		if (exitMode === 'password' && !password && !rt.hash)
+		{
+			error.innerText = 'Enter the exit password.';
+
+			return false;
+		}
+
 		var ids = [];
 
 		for (var i = 0; i < pages.length; i++)
@@ -1437,13 +1485,37 @@ HmiDialogs.showAppSettings = function(ui)
 
 		var s = project.settings;
 		var changed = s.width !== w || s.height !== h ||
-			s.startup.join('\n') !== ids.join('\n');
+			s.startup.join('\n') !== ids.join('\n') ||
+			rt.windowMode !== windowMode || rt.exit !== exitMode;
 
 		// Windows left at full-screen size follow the new resolution, since
 		// an unset size means "the screen".
 		s.width = w;
 		s.height = h;
 		s.startup = ids;
+		rt.windowMode = windowMode;
+		rt.exit = exitMode;
+
+		if (exitMode !== 'password')
+		{
+			changed = changed || rt.hash !== '';
+			rt.salt = '';
+			rt.hash = '';
+		}
+		else if (password)
+		{
+			// Only the hash is kept. Web Crypto is asynchronous, so the
+			// project is marked modified again once it has it.
+			var salt = HmiProject.randomSalt();
+
+			HmiProject.hashPassword(salt, password).then(function(hash)
+			{
+				rt.salt = salt;
+				rt.hash = hash;
+				project.touch();
+				ui.editor.setModified(true);
+			});
+		}
 
 		if (changed)
 		{
@@ -1456,7 +1528,7 @@ HmiDialogs.showAppSettings = function(ui)
 	};
 
 	HmiDialogs.okCancel(ui, div, apply);
-	ui.showDialog(div, 460, 480, true, true);
+	ui.showDialog(div, 460, 600, true, true);
 };
 
 /** "Popup, title bar, 400 \u00D7 300 at 10, 20" */

@@ -846,3 +846,61 @@
 	background-color: #b3261e;
 	cursor: help;
 }
+
+/* ------------------------------------------------ published runtime */
+
+/* The runtime's screen is the whole window (HmiRuntimeApp.js) */
+.hmiRuntimeMode
+{
+	background-color: #000;
+}
+
+.hmiRuntimeMode .hmiScreenBackdrop
+{
+	background-color: #000;
+}
+
+.hmiRuntimeMode .hmiScreen
+{
+	box-shadow: none;
+}
+
+.hmiRuntimeStatus
+{
+	position: fixed;
+	right: 6px;
+	bottom: 6px;
+	z-index: 10000;
+	padding: 3px 8px;
+	border-radius: 3px;
+	background-color: #b3261e;
+	color: #fff;
+	font-size: 12px;
+	font-weight: 600;
+	opacity: 0.9;
+	pointer-events: none;
+}
+
+.hmiRuntimeFailure
+{
+	position: fixed;
+	inset: 0;
+	z-index: 20000;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 12px;
+	padding: 32px;
+	background-color: #1e1e1e;
+	color: #eee;
+	font-size: 14px;
+	text-align: center;
+	white-space: pre-wrap;
+}
+
+.hmiRuntimeFailureTitle
+{
+	font-size: 20px;
+	font-weight: 600;
+}
