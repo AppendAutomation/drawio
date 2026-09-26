@@ -151,21 +151,26 @@ HmiRuntime.prototype.rebind = function()
 	this.graph.refresh();
 };
 
+/**
+ * The rate the runtime asks for: the fastest device's scan rate. The driver
+ * polls each device at its own rate (see HmiCommsDriver); this is what the
+ * simulator and memory tags follow.
+ */
 HmiRuntime.prototype.scanRateMs = function()
 {
-	var rate = 250;
+	var rate = null;
 
-	for (var i = 0; i < this.project.accessNames.length; i++)
+	for (var i = 0; i < this.project.devices.length; i++)
 	{
-		var r = this.project.accessNames[i].rateMs;
+		var r = this.project.devices[i].scanMs;
 
-		if (r > 0 && r < rate)
+		if (r > 0 && (rate == null || r < rate))
 		{
 			rate = r;
 		}
 	}
 
-	return rate;
+	return (rate != null) ? rate : 250;
 };
 
 // --------------------------------------------------------------- binding

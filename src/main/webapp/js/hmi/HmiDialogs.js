@@ -1,6 +1,6 @@
 /**
- * Dialogs: tag dictionary, access names, runtime user input, validation
- * results and the runtime log.
+ * Dialogs: tag dictionary, devices, runtime user input, validation results
+ * and the runtime log.
  *
  * All are plain DOM shown through ui.showDialog, following the pattern of
  * upstream's own EditDataDialog rather than introducing a UI framework.
@@ -339,17 +339,63 @@ HmiTagDialog.prototype.renderForm = function()
 	{
 		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'I/O'));
 
-		var names = [''];
+		var names = [{value: '', label: '(none)'}];
 
-		for (var i = 0; i < this.project.accessNames.length; i++)
+		for (var i = 0; i < this.project.devices.length; i++)
 		{
-			names.push(this.project.accessNames[i].id);
+			names.push(this.project.devices[i].name);
 		}
 
-		HmiDialogs.select(this.formDiv, 'Access name', tag.access, names,
-			function(v) { tag.access = v; });
-		HmiDialogs.field(this.formDiv, 'Item name', tag.item,
-			function(v) { tag.item = v; });
+		// Keep a device name that no longer exists visible rather than
+		// silently blanking the tag's binding.
+		if (tag.device && this.project.getDevice(tag.device) == null)
+		{
+			names.push({value: tag.device, label: tag.device + ' (missing)'});
+		}
+
+		HmiDialogs.select(this.formDiv, 'Device', tag.device || '', names, function(v)
+		{
+			tag.device = v;
+			that.markModified();
+			that.renderForm();
+		});
+
+		var device = this.project.getDevice(tag.device);
+
+		if (device != null && device.protocol === 'simulator')
+		{
+			this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+				'Simulated: the value comes from the simulator, not a device.'));
+		}
+		else
+		{
+			var def = (device != null) ? HmiProject.protocol(device.protocol) : null;
+			var note = HmiDialogs.el('div', 'hmiAddressNote');
+			var address = HmiDialogs.field(this.formDiv, 'Address', tag.address, function(v)
+			{
+				tag.address = ('' + v).trim();
+				that.markModified();
+				HmiDialogs.checkAddress(device, tag, note);
+			});
+
+			address.setAttribute('placeholder', (def != null && def.placeholder) ?
+				def.placeholder : 'Choose a device first');
+			address.setAttribute('data-hmi-prop', 'address');
+			this.formDiv.appendChild(note);
+
+			var timer = null;
+
+			mxEvent.addListener(address, 'input', function()
+			{
+				window.clearTimeout(timer);
+				timer = window.setTimeout(function()
+				{
+					HmiDialogs.checkAddress(device, {type: tag.type, address: address.value.trim()}, note);
+				}, 400);
+			});
+
+			HmiDialogs.checkAddress(device, tag, note);
+		}
 
 		if (HmiTypes.isAnalog(tag.type))
 		{
@@ -673,7 +719,7 @@ HmiTagDialog.prototype.markModified = function()
  * for bulk edits in a spreadsheet.
  */
 HmiTagDialog.CSV_FIELDS = ['name', 'type', 'comment', 'engUnits', 'initial',
-	'minEU', 'maxEU', 'minRaw', 'maxRaw', 'access', 'item', 'onMsg', 'offMsg'];
+	'minEU', 'maxEU', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg'];
 
 HmiTagDialog.prototype.exportCsv = function()
 {
@@ -867,7 +913,12 @@ HmiTextDialog = function(ui, title, text, hint, onAccept)
 
 // -------------------------------------------------------- access names
 
-HmiDialogs.showAccessNames = function(ui)
+/**
+ * HMI > Devices: each device is a logical name, where it is and how to talk
+ * to it. Tags name the device they read through, so a rename here follows
+ * into every tag, and a device still in use cannot be removed.
+ */
+HmiDialogs.showDevices = function(ui)
 {
 	if (ui.hmiProject == null)
 	{
@@ -875,52 +926,275 @@ HmiDialogs.showAccessNames = function(ui)
 	}
 
 	var project = ui.hmiProject;
+	var selected = project.devices[0] || null;
+
 	var div = HmiDialogs.el('div', 'hmiDialog');
-	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Access Names'));
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', mxResources.get('hmiDevices')));
 
-	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDevices');
+	var list = HmiDialogs.el('div', 'hmiTagList hmiDeviceList');
+	var form = HmiDialogs.el('div', 'hmiTagForm hmiDeviceForm');
+	body.appendChild(list);
+	body.appendChild(form);
+	div.appendChild(body);
 
-	var render = function()
+	var changed = function()
 	{
-		body.innerText = '';
+		project.touch();
+		ui.editor.setModified(true);
+	};
 
-		for (var i = 0; i < project.accessNames.length; i++)
+	var renderList = function()
+	{
+		list.innerText = '';
+
+		for (var i = 0; i < project.devices.length; i++)
 		{
-			(function(a)
+			(function(d)
 			{
-				var box = HmiDialogs.el('div', 'hmiFormBox');
-				HmiDialogs.field(box, 'Name', a.id, function(v) { a.id = v; });
-				HmiDialogs.select(box, 'Driver', a.driver,
-					['simulator', 'ethernetip'], function(v) { a.driver = v; });
-				HmiDialogs.field(box, 'Node (host or IP)', a.node,
-					function(v) { a.node = v; });
-				HmiDialogs.field(box, 'Topic / slot', a.topic,
-					function(v) { a.topic = v; });
-				HmiDialogs.field(box, 'Scan rate (ms)', a.rateMs,
-					function(v) { a.rateMs = parseInt(v, 10) || 250; });
-				body.appendChild(box);
-			})(project.accessNames[i]);
+				var row = HmiDialogs.el('div', 'hmiTagRow' + ((d === selected) ? ' hmiTagRowOn' : ''));
+				row.setAttribute('data-hmi-device', d.name);
+				row.appendChild(HmiDialogs.el('div', 'hmiTagName', d.name));
+				var def = HmiProject.protocol(d.protocol);
+				row.appendChild(HmiDialogs.el('div', 'hmiTagType',
+					((def != null) ? def.label : d.protocol) + (d.host ? ' — ' + d.host : '') +
+					(d.enabled === false ? ' (disabled)' : '')));
+
+				mxEvent.addListener(row, 'click', function()
+				{
+					selected = d;
+					renderList();
+					renderForm();
+				});
+
+				list.appendChild(row);
+			})(project.devices[i]);
 		}
 
-		if (project.accessNames.length === 0)
+		if (project.devices.length === 0)
 		{
-			body.appendChild(HmiDialogs.el('div', 'hmiEmpty',
-				'No access names defined.'));
+			list.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'No devices defined.'));
 		}
 	};
 
-	render();
-	div.appendChild(body);
+	var renderForm = function()
+	{
+		form.innerText = '';
+
+		if (selected == null)
+		{
+			form.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'Select a device, or add one.'));
+
+			return;
+		}
+
+		var d = selected;
+		var error = HmiDialogs.el('div', 'hmiError');
+
+		var name = HmiDialogs.field(form, 'Name', d.name, function(v)
+		{
+			v = ('' + v).trim();
+			error.innerText = '';
+
+			if (v === d.name)
+			{
+				return;
+			}
+
+			if (!/^[A-Za-z_][A-Za-z0-9_]{0,31}$/.test(v))
+			{
+				error.innerText = 'A name is a letter or _ followed by letters, digits or _.';
+				name.value = d.name;
+
+				return;
+			}
+
+			var other = project.getDevice(v);
+
+			if (other != null && other !== d)
+			{
+				error.innerText = 'There is already a device called ' + other.name + '.';
+				name.value = d.name;
+
+				return;
+			}
+
+			project.renameDevice(d.name, v);
+			changed();
+			renderList();
+		});
+		name.setAttribute('data-hmi-prop', 'name');
+
+		var protocols = HmiProject.PROTOCOLS.map(function(p) { return {value: p.value, label: p.label}; });
+
+		HmiDialogs.select(form, 'Protocol', d.protocol, protocols, function(v)
+		{
+			var fresh = HmiProject.createDevice(d.name, v);
+			d.protocol = v;
+			d.port = fresh.port;
+			d.options = fresh.options;
+			changed();
+			renderList();
+			renderForm();
+		}).setAttribute('data-hmi-prop', 'protocol');
+
+		var def = HmiProject.protocol(d.protocol);
+
+		if (d.protocol !== 'simulator')
+		{
+			form.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Connection'));
+
+			HmiDialogs.field(form, 'IP address or host', d.host, function(v)
+			{
+				d.host = ('' + v).trim();
+				changed();
+				renderList();
+			}).setAttribute('data-hmi-prop', 'host');
+
+			HmiDialogs.field(form, 'Port', d.port, function(v)
+			{
+				var n = parseInt(v, 10);
+				d.port = (n >= 1 && n <= 65535) ? n : def.port;
+				changed();
+			}, 'number').setAttribute('data-hmi-prop', 'port');
+
+			HmiDialogs.field(form, 'Timeout (ms)', d.timeoutMs, function(v)
+			{
+				d.timeoutMs = Math.max(100, parseInt(v, 10) || 3000);
+				changed();
+			}, 'number');
+
+			for (var i = 0; i < def.options.length; i++)
+			{
+				(function(o)
+				{
+					var value = (d.options[o.key] != null) ? d.options[o.key] : o.def;
+					var input;
+
+					if (o.type === 'bool')
+					{
+						input = HmiDialogs.field(form, o.label, value, function(v)
+						{
+							d.options[o.key] = !!v;
+							changed();
+						}, 'checkbox');
+					}
+					else if (o.type === 'select')
+					{
+						input = HmiDialogs.select(form, o.label, value, o.choices, function(v)
+						{
+							d.options[o.key] = v;
+							changed();
+						});
+					}
+					else
+					{
+						input = HmiDialogs.field(form, o.label, value, function(v)
+						{
+							var n = parseInt(v, 10);
+							d.options[o.key] = isNaN(n) ? o.def : n;
+							changed();
+						}, 'number');
+					}
+
+					input.setAttribute('data-hmi-prop', o.key);
+				})(def.options[i]);
+			}
+		}
+
+		form.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Polling'));
+
+		HmiDialogs.field(form, 'Scan rate (ms)', d.scanMs, function(v)
+		{
+			d.scanMs = Math.max(10, parseInt(v, 10) || 250);
+			changed();
+		}, 'number').setAttribute('data-hmi-prop', 'scanMs');
+
+		HmiDialogs.field(form, 'Enabled', d.enabled !== false, function(v)
+		{
+			d.enabled = !!v;
+			changed();
+			renderList();
+		}, 'checkbox');
+
+		var users = project.deviceUsers(d.name);
+		form.appendChild(HmiDialogs.el('div', 'hmiHint', (users.length === 0) ? 'No tags use this device.' :
+			(users.length === 1) ? '1 tag uses this device.' : users.length + ' tags use this device.'));
+
+		if (d.protocol !== 'simulator')
+		{
+			var probeRow = HmiDialogs.el('div', 'hmiFormRow');
+			probeRow.appendChild(HmiDialogs.el('span', 'hmiFormLabel'));
+			var result = HmiDialogs.el('div', 'hmiProbeResult');
+			var test = HmiDialogs.button('Test Connection', function()
+			{
+				result.className = 'hmiProbeResult';
+				result.innerText = 'Connecting…';
+
+				HmiComms.probe(d, function(r)
+				{
+					result.className = 'hmiProbeResult ' + (r.ok ? 'hmiProbeOk' : 'hmiProbeFail');
+					result.innerText = r.ok ? 'Connected in ' + Math.round(r.ms) + ' ms' : r.error;
+				});
+			});
+
+			test.setAttribute('data-hmi-action', 'probe');
+			probeRow.appendChild(test);
+			form.appendChild(probeRow);
+			form.appendChild(result);
+		}
+
+		form.appendChild(error);
+	};
+
+	renderList();
+	renderForm();
 
 	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
 
 	footer.appendChild(HmiDialogs.button('Add', function()
 	{
-		project.accessNames.push({id: 'PLC' + (project.accessNames.length + 1),
-			driver: 'simulator', node: '', topic: '', rateMs: 250});
-		render();
+		var n = project.devices.length + 1;
+
+		while (project.getDevice('PLC' + n) != null)
+		{
+			n++;
+		}
+
+		selected = HmiProject.createDevice('PLC' + n, 'logix');
+		project.devices.push(selected);
+		changed();
+		renderList();
+		renderForm();
 	}));
 
+	var remove = HmiDialogs.button('Remove', function()
+	{
+		if (selected == null)
+		{
+			return;
+		}
+
+		var users = project.deviceUsers(selected.name);
+
+		if (users.length > 0)
+		{
+			ui.showError(mxResources.get('error'), selected.name + ' is used by ' +
+				users.slice(0, 8).join(', ') + (users.length > 8 ? ' and ' + (users.length - 8) + ' more' : '') +
+				'. Point those tags at another device first.', mxResources.get('ok'));
+
+			return;
+		}
+
+		project.removeDevice(selected.name);
+		selected = project.devices[0] || null;
+		changed();
+		renderList();
+		renderForm();
+	});
+
+	remove.setAttribute('data-hmi-action', 'remove');
+	footer.appendChild(remove);
 	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
 	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
 	{
@@ -928,7 +1202,55 @@ HmiDialogs.showAccessNames = function(ui)
 	}, true));
 
 	div.appendChild(footer);
-	ui.showDialog(div, 520, 460, true, true);
+	ui.showDialog(div, 720, 600, true, true);
+};
+
+/**
+ * Checks an I/O tag's address with the comms server, which owns the address
+ * grammars, and shows what it made of it: the canonical spelling, or why it
+ * is wrong.
+ */
+HmiDialogs.checkAddress = function(device, tag, note)
+{
+	note.className = 'hmiAddressNote';
+	note.innerText = '';
+
+	if (device == null || device.protocol === 'simulator')
+	{
+		return;
+	}
+
+	if (!tag.address)
+	{
+		note.className = 'hmiAddressNote hmiAddressBad';
+		note.innerText = 'An address is required.';
+
+		return;
+	}
+
+	HmiComms.validate(device, [tag.address], HmiComms.dataTypeHint(tag), function(results, error)
+	{
+		if (error != null)
+		{
+			note.innerText = error;
+
+			return;
+		}
+
+		var r = results[0];
+
+		if (r.ok)
+		{
+			note.className = 'hmiAddressNote hmiAddressOk';
+			note.innerText = r.normalized + ((r.dataType && r.dataType !== 'Unknown') ?
+				' — ' + r.dataType : '') + (r.writable === false ? ', read-only' : '');
+		}
+		else
+		{
+			note.className = 'hmiAddressNote hmiAddressBad';
+			note.innerText = r.error;
+		}
+	});
 };
 
 // -------------------------------------------------- application settings

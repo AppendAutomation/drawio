@@ -1,5 +1,5 @@
 /**
- * The HMI project model: access names, the tag dictionary, the application
+ * The HMI project model: devices, the tag dictionary, the application
  * settings and the display properties of each window (page).
  *
  * Serialization lives entirely behind toXml/fromXml so that if the
@@ -8,7 +8,7 @@
  */
 HmiProject = function()
 {
-	this.accessNames = [];
+	this.devices = [];
 	this.tags = [];
 	this.tagIndex = {};
 
@@ -42,7 +42,7 @@ HmiProject.prototype.isEmpty = function()
 {
 	var d = HmiProject.defaultSettings();
 
-	return this.tags.length === 0 && this.accessNames.length === 0 &&
+	return this.tags.length === 0 && this.devices.length === 0 &&
 		this.settings.width === d.width && this.settings.height === d.height &&
 		this.settings.startup.length === 0 &&
 		Object.keys(this.windows).length === 0;
@@ -263,8 +263,8 @@ HmiProject.createTag = function(name, type)
 
 	if (HmiTypes.isIO(type))
 	{
-		tag.access = '';
-		tag.item = '';
+		tag.device = '';
+		tag.address = '';
 
 		if (HmiTypes.isAnalog(type))
 		{
@@ -276,19 +276,134 @@ HmiProject.createTag = function(name, type)
 	return tag;
 };
 
-// ------------------------------------------------------------ access names
+// ---------------------------------------------------------------- devices
 
-HmiProject.prototype.getAccessName = function(id)
+/**
+ * Protocols a device can speak, and the options each takes. The simulator is
+ * handled inside the HMI; the others by the hmi-comms server.
+ */
+HmiProject.PROTOCOLS = [
+	{value: 'simulator', label: 'Simulator', port: null, options: []},
+	{value: 'logix', label: 'EtherNet/IP (ControlLogix, CompactLogix)', port: 44818,
+		placeholder: 'Tag, Program:Main.Tag, Arr[3], Status.5',
+		options: [
+			{key: 'slot', label: 'Processor slot', type: 'int', def: 0},
+			{key: 'micro800', label: 'Micro800', type: 'bool', def: false}]},
+	{value: 'slc', label: 'SLC 500 / MicroLogix (PCCC)', port: 44818,
+		placeholder: 'N7:0, B3:1/4, F8:2, T4:0.ACC, ST9:0',
+		options: [
+			{key: 'maxGapElements', label: 'Largest gap in a read', type: 'int', def: 8},
+			{key: 'swapStringBytes', label: 'Swap string bytes', type: 'bool', def: false}]},
+	{value: 'modbus', label: 'Modbus TCP', port: 502,
+		placeholder: 'HR:0, HR:10:FLOAT, CO:5, HR:4.3',
+		options: [
+			{key: 'unitId', label: 'Unit id', type: 'int', def: 1},
+			{key: 'byteOrder', label: 'Byte order', type: 'select', def: 'BE',
+				choices: [{value: 'BE', label: 'ABCD (BE)'}, {value: 'MLE', label: 'CDAB (MLE)'},
+					{value: 'MBE', label: 'BADC (MBE)'}, {value: 'LE', label: 'DCBA (LE)'}]},
+			{key: 'maxGapRegisters', label: 'Largest gap in a read', type: 'int', def: 16}]}];
+
+HmiProject.protocol = function(value)
 {
-	for (var i = 0; i < this.accessNames.length; i++)
+	for (var i = 0; i < HmiProject.PROTOCOLS.length; i++)
 	{
-		if (this.accessNames[i].id === id)
+		if (HmiProject.PROTOCOLS[i].value === value)
 		{
-			return this.accessNames[i];
+			return HmiProject.PROTOCOLS[i];
 		}
 	}
 
 	return null;
+};
+
+HmiProject.createDevice = function(name, protocol)
+{
+	var def = HmiProject.protocol(protocol) || HmiProject.PROTOCOLS[0];
+	var device = {name: name, protocol: def.value, host: '', port: def.port,
+		timeoutMs: 3000, scanMs: 250, enabled: true, options: {}};
+
+	for (var i = 0; i < def.options.length; i++)
+	{
+		device.options[def.options[i].key] = def.options[i].def;
+	}
+
+	return device;
+};
+
+/** Device names are matched without regard to case. */
+HmiProject.prototype.getDevice = function(name)
+{
+	var lower = ('' + (name || '')).toLowerCase();
+
+	for (var i = 0; i < this.devices.length; i++)
+	{
+		if (this.devices[i].name.toLowerCase() === lower)
+		{
+			return this.devices[i];
+		}
+	}
+
+	return null;
+};
+
+/** Names of the tags that use a device. */
+HmiProject.prototype.deviceUsers = function(name)
+{
+	var lower = ('' + name).toLowerCase();
+	var res = [];
+
+	for (var i = 0; i < this.tags.length; i++)
+	{
+		if (this.tags[i].device != null && this.tags[i].device.toLowerCase() === lower)
+		{
+			res.push(this.tags[i].name);
+		}
+	}
+
+	return res;
+};
+
+/** Renames a device and every tag's reference to it. */
+HmiProject.prototype.renameDevice = function(oldName, newName)
+{
+	var device = this.getDevice(oldName);
+
+	if (device == null)
+	{
+		return;
+	}
+
+	var lower = oldName.toLowerCase();
+
+	for (var i = 0; i < this.tags.length; i++)
+	{
+		if (this.tags[i].device != null && this.tags[i].device.toLowerCase() === lower)
+		{
+			this.tags[i].device = newName;
+		}
+	}
+
+	device.name = newName;
+	this.touch();
+};
+
+HmiProject.prototype.removeDevice = function(name)
+{
+	var device = this.getDevice(name);
+
+	if (device != null)
+	{
+		this.devices.splice(mxUtils.indexOf(this.devices, device), 1);
+		this.touch();
+	}
+
+	return device;
+};
+
+/** The device an I/O tag reads through, or null. */
+HmiProject.prototype.deviceOf = function(tag)
+{
+	return (tag != null && HmiTypes.isIO(tag.type)) ? this.getDevice(tag.device) : null;
 };
 
 // -------------------------------------------------------------- cell links
@@ -373,23 +488,14 @@ HmiProject.prototype.toXml = function(doc)
 	var root = doc.createElement('hmiProject');
 	root.setAttribute('version', HmiProject.FORMAT_VERSION);
 
-	var names = doc.createElement('accessNames');
+	var devices = doc.createElement('devices');
 
-	for (var i = 0; i < this.accessNames.length; i++)
+	for (var i = 0; i < this.devices.length; i++)
 	{
-		var a = this.accessNames[i];
-		var node = doc.createElement('accessName');
-		node.setAttribute('id', a.id);
-		node.setAttribute('driver', a.driver);
-
-		if (a.node != null && a.node !== '') { node.setAttribute('node', a.node); }
-		if (a.topic != null && a.topic !== '') { node.setAttribute('topic', a.topic); }
-
-		node.setAttribute('rateMs', a.rateMs != null ? a.rateMs : 250);
-		names.appendChild(node);
+		devices.appendChild(HmiProject.deviceToXml(doc, this.devices[i]));
 	}
 
-	root.appendChild(names);
+	root.appendChild(devices);
 
 	var tags = doc.createElement('tags');
 
@@ -453,6 +559,73 @@ HmiProject.prototype.toXml = function(doc)
 	return root;
 };
 
+/**
+ * Options are written as attributes, in the order the protocol declares
+ * them, so a round trip is byte-stable.
+ */
+HmiProject.deviceToXml = function(doc, d)
+{
+	var node = doc.createElement('device');
+	node.setAttribute('name', d.name);
+	node.setAttribute('protocol', d.protocol);
+
+	if (d.host) { node.setAttribute('host', d.host); }
+	if (d.port != null && d.port !== '') { node.setAttribute('port', '' + d.port); }
+
+	node.setAttribute('timeoutMs', '' + (d.timeoutMs || 3000));
+	node.setAttribute('scanMs', '' + (d.scanMs || 250));
+
+	if (d.enabled === false) { node.setAttribute('enabled', '0'); }
+
+	var def = HmiProject.protocol(d.protocol);
+
+	if (def != null)
+	{
+		for (var i = 0; i < def.options.length; i++)
+		{
+			var v = d.options != null ? d.options[def.options[i].key] : null;
+
+			if (v != null && v !== '')
+			{
+				node.setAttribute(def.options[i].key, (v === true) ? '1' : (v === false) ? '0' : '' + v);
+			}
+		}
+	}
+
+	return node;
+};
+
+HmiProject.deviceFromXml = function(n)
+{
+	var d = HmiProject.createDevice(n.getAttribute('name') || '', n.getAttribute('protocol'));
+	d.host = n.getAttribute('host') || '';
+
+	var port = parseInt(n.getAttribute('port'), 10);
+	d.port = isNaN(port) ? d.port : port;
+	d.timeoutMs = parseInt(n.getAttribute('timeoutMs'), 10) || 3000;
+	d.scanMs = parseInt(n.getAttribute('scanMs'), 10) || 250;
+	d.enabled = n.getAttribute('enabled') !== '0';
+
+	var def = HmiProject.protocol(d.protocol);
+
+	if (def != null)
+	{
+		for (var i = 0; i < def.options.length; i++)
+		{
+			var o = def.options[i];
+			var v = n.getAttribute(o.key);
+
+			if (v != null)
+			{
+				d.options[o.key] = (o.type === 'bool') ? (v === '1' || v === 'true') :
+					(o.type === 'int') ? parseInt(v, 10) : v;
+			}
+		}
+	}
+
+	return d;
+};
+
 HmiProject.tagToXml = function(doc, tag)
 {
 	var node = doc.createElement('tag');
@@ -460,7 +633,7 @@ HmiProject.tagToXml = function(doc, tag)
 	// Written in a fixed order so that a round trip is byte-stable and files
 	// diff cleanly in git.
 	var scalars = ['name', 'type', 'comment', 'engUnits', 'initial',
-		'minEU', 'maxEU', 'minRaw', 'maxRaw', 'access', 'item',
+		'minEU', 'maxEU', 'minRaw', 'maxRaw', 'device', 'address',
 		'onMsg', 'offMsg', 'logged', 'retentive'];
 
 	for (var i = 0; i < scalars.length; i++)
@@ -515,18 +688,11 @@ HmiProject.fromXml = function(node)
 		return project;
 	}
 
-	var names = node.getElementsByTagName('accessName');
+	var devices = node.getElementsByTagName('device');
 
-	for (var i = 0; i < names.length; i++)
+	for (var i = 0; i < devices.length; i++)
 	{
-		var n = names[i];
-		project.accessNames.push({
-			id: n.getAttribute('id'),
-			driver: n.getAttribute('driver') || 'simulator',
-			node: n.getAttribute('node') || '',
-			topic: n.getAttribute('topic') || '',
-			rateMs: parseInt(n.getAttribute('rateMs') || '250', 10)
-		});
+		project.devices.push(HmiProject.deviceFromXml(devices[i]));
 	}
 
 	var tags = node.getElementsByTagName('tag');
@@ -612,7 +778,7 @@ HmiProject.tagFromXml = function(node)
 {
 	var tag = {name: node.getAttribute('name'), type: node.getAttribute('type')};
 
-	var strings = ['comment', 'engUnits', 'access', 'item', 'onMsg', 'offMsg'];
+	var strings = ['comment', 'engUnits', 'device', 'address', 'onMsg', 'offMsg'];
 
 	for (var i = 0; i < strings.length; i++)
 	{

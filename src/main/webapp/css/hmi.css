@@ -785,3 +785,56 @@
 	flex: 1 1 auto;
 	box-sizing: border-box;
 }
+
+/* ----------------------------------------------------------------- devices */
+
+.hmiDeviceList
+{
+	width: 260px;
+	flex: 0 0 auto;
+}
+
+.hmiDeviceList .hmiTagRow
+{
+	flex-direction: column;
+	gap: 2px;
+}
+
+.hmiDeviceList .hmiTagType
+{
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.hmiAddressNote
+{
+	font-size: 11px;
+	color: gray;
+	margin: -2px 0 6px 138px;
+	min-height: 14px;
+}
+
+.hmiAddressOk
+{
+	color: #188038;
+}
+
+.hmiAddressBad,
+.hmiProbeFail
+{
+	color: #d00;
+}
+
+.hmiProbeResult
+{
+	font-size: 12px;
+	margin: 2px 0 6px 138px;
+	min-height: 16px;
+	overflow-wrap: anywhere;
+}
+
+.hmiProbeOk
+{
+	color: #188038;
+}

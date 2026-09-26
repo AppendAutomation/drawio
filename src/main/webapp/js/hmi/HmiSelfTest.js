@@ -54,6 +54,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testAnimationClipboard(ui);
 		HmiSelfTest.testKeypad(ui);
 		HmiSelfTest.testWindows(ui);
+		HmiSelfTest.testDevices(ui);
 
 		// Last: its assertions run deferred, and anything opened after it
 		// would take the focus it is checking.
@@ -124,14 +125,13 @@ HmiSelfTest.sampleProject = function()
 {
 	var p = new HmiProject();
 
-	p.accessNames.push({id: 'PLC1', driver: 'simulator', node: '', topic: '',
-		rateMs: 250});
+	p.devices.push(HmiProject.createDevice('PLC1', 'simulator'));
 
 	var level = HmiProject.createTag('Tank_Level', 'IOReal');
 	level.comment = 'Day tank';
 	level.engUnits = '%';
-	level.access = 'PLC1';
-	level.item = 'N7:0';
+	level.device = 'PLC1';
+	level.address = 'N7:0';
 	level.alarms = {loLo: 5, low: 10, high: 90, hiHi: 95};
 	level.sim = {mode: 'sine', periodMs: '30000'};
 	p.addTag(level);
@@ -256,7 +256,7 @@ HmiSelfTest.testFileRoundTrip = function(ui)
 	HmiSelfTest.check('file.load.ioFields',
 		ui.hmiProject != null &&
 		ui.hmiProject.getTag('Tank_Level') != null &&
-		ui.hmiProject.getTag('Tank_Level').item === 'N7:0');
+		ui.hmiProject.getTag('Tank_Level').address === 'N7:0');
 
 	// The detector: dictionary stripped but the marker left behind.
 	var stripped = again.replace(/<hmiProject[\s\S]*?<\/hmiProject>/, '');
@@ -669,7 +669,7 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 		mxUtils.indexOf(Menus.prototype.defaultMenuItems, 'hmi') >= 0,
 		Menus.prototype.defaultMenuItems.join(','));
 
-	var actions = ['hmiTagDictionary', 'hmiAccessNames', 'hmiValidate',
+	var actions = ['hmiTagDictionary', 'hmiDevices', 'hmiValidate',
 		'hmiRun', 'hmiStop', 'hmiRuntimeLog'];
 	var missing = [];
 
@@ -1222,8 +1222,8 @@ HmiSelfTest.runLive = function(ui)
 
 	var graph = ui.editor.graph;
 	var project = new HmiProject();
-	project.accessNames.push({id: 'PLC1', driver: 'simulator', node: '',
-		topic: '', rateMs: 100});
+	project.devices.push(HmiProject.createDevice('PLC1', 'simulator'));
+	project.devices[0].scanMs = 100;
 
 	var level = HmiProject.createTag('Tank_Level', 'IOReal');
 	level.minEU = 0;
@@ -2146,8 +2146,8 @@ HmiSelfTest.testM2Interaction = function(ui)
 HmiSelfTest.testSimulation = function()
 {
 	var project = new HmiProject();
-	project.accessNames.push({id: 'PLC1', driver: 'simulator', node: '',
-		topic: '', rateMs: 100});
+	project.devices.push(HmiProject.createDevice('PLC1', 'simulator'));
+	project.devices[0].scanMs = 100;
 
 	var io = HmiProject.createTag('IO_Level', 'IOReal');
 	io.minEU = 0;
@@ -2321,7 +2321,7 @@ HmiSelfTest.verifyFile = function(ui, text)
 	HmiSelfTest.check('file.disk.ioFieldsReturn',
 		ui.hmiProject != null &&
 		ui.hmiProject.getTag('Tank_Level') != null &&
-		ui.hmiProject.getTag('Tank_Level').item === 'N7:0' &&
+		ui.hmiProject.getTag('Tank_Level').address === 'N7:0' &&
 		ui.hmiProject.getTag('Tank_Level').alarms.hiHi === 95);
 
 	// And the animations came back on the cell.
@@ -3761,5 +3761,155 @@ HmiSelfTest.testWindows = function(ui)
 		{
 			ui.removePage(made[i]);
 		}
+	}
+};
+
+
+/** Devices: the model, the dialog, the tag form's I/O section and validation. */
+HmiSelfTest.testDevices = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	// --- model ------------------------------------------------------------
+
+	var fresh = HmiFile.createDefaultProject();
+	check('dev.defaultIsSimulated', fresh.devices.length === 1 &&
+		fresh.devices[0].protocol === 'simulator');
+
+	var modbus = HmiProject.createDevice('Pump', 'modbus');
+	check('dev.protocolDefaults', modbus.port === 502 && modbus.options.unitId === 1 &&
+		modbus.options.byteOrder === 'BE', JSON.stringify(modbus));
+	check('dev.logixDefaults', HmiProject.createDevice('L', 'logix').port === 44818 &&
+		HmiProject.createDevice('L', 'logix').options.slot === 0);
+
+	var p = HmiSelfTest.sampleProject();
+	modbus.host = '10.0.0.9';
+	modbus.options.byteOrder = 'MLE';
+	modbus.scanMs = 500;
+	modbus.enabled = false;
+	p.devices.push(modbus);
+
+	var flow = HmiProject.createTag('Flow', 'IOReal');
+	flow.device = 'Pump';
+	flow.address = 'HR:10:FLOAT';
+	p.addTag(flow);
+
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	var bd = back.getDevice('pump');
+
+	check('dev.roundTrip', bd != null && bd.host === '10.0.0.9' && bd.port === 502 &&
+		bd.options.byteOrder === 'MLE' && bd.options.unitId === 1 && bd.scanMs === 500 &&
+		bd.enabled === false, JSON.stringify(bd));
+	check('dev.tagBindingRoundTrip', back.getTag('Flow').device === 'Pump' &&
+		back.getTag('Flow').address === 'HR:10:FLOAT');
+	check('dev.noAccessNamesWritten',
+		mxUtils.getXml(p.toXml(mxUtils.createXmlDocument())).indexOf('accessName') < 0);
+
+	check('dev.users', p.deviceUsers('PUMP').join(',') === 'Flow');
+	p.renameDevice('Pump', 'Transfer');
+	check('dev.renameFollowsIntoTags', p.getTag('Flow').device === 'Transfer' &&
+		p.getDevice('Pump') == null && p.getDevice('transfer') === modbus);
+	check('dev.deviceOf', p.deviceOf(p.getTag('Flow')) === modbus &&
+		p.deviceOf(p.getTag('Pump1_Run')) == null);
+
+	// --- dialog -------------------------------------------------------------
+
+	ui.hmiProject = p;
+	HmiDialogs.showDevices(ui);
+	var dlg = ui.dialog.container;
+
+	check('devDlg.lists', dlg.querySelectorAll('[data-hmi-device]').length === 2);
+
+	dlg.querySelector('[data-hmi-device="Transfer"]').click();
+	check('devDlg.showsOptions', dlg.querySelector('[data-hmi-prop="byteOrder"]') != null &&
+		dlg.querySelector('[data-hmi-prop="host"]').value === '10.0.0.9' &&
+		dlg.querySelector('[data-hmi-action="probe"]') != null);
+
+	var name = dlg.querySelector('[data-hmi-prop="name"]');
+	name.value = 'Pumps';
+	name.dispatchEvent(new Event('blur'));
+	check('devDlg.renameUpdatesTags', p.getTag('Flow').device === 'Pumps', p.getTag('Flow').device);
+
+	name = dlg.querySelector('[data-hmi-prop="name"]');
+	name.value = 'plc1';
+	name.dispatchEvent(new Event('blur'));
+	check('devDlg.refusesDuplicateName', p.getDevice('Pumps') === modbus &&
+		dlg.querySelector('.hmiError').innerText.indexOf('already') >= 0);
+
+	var shown = null;
+	var showError = ui.showError;
+	ui.showError = function(title, message) { shown = message; };
+	dlg.querySelector('[data-hmi-action="remove"]').click();
+	ui.showError = showError;
+	check('devDlg.removeBlockedWhileUsed', p.getDevice('Pumps') != null && shown != null &&
+		shown.indexOf('Flow') >= 0, shown);
+
+	var protocol = dlg.querySelector('[data-hmi-prop="protocol"]');
+	protocol.value = 'logix';
+	protocol.dispatchEvent(new Event('change'));
+	check('devDlg.protocolSwitchesOptions', modbus.protocol === 'logix' && modbus.port === 44818 &&
+		dlg.querySelector('[data-hmi-prop="slot"]') != null &&
+		dlg.querySelector('[data-hmi-prop="byteOrder"]') == null);
+
+	ui.hideDialog();
+
+	// --- tag form -------------------------------------------------------
+
+	var tags = new HmiTagDialog(ui);
+	tags.init();
+	tags.selected = p.getTag('Flow');
+	tags.renderForm();
+
+	var address = tags.formDiv.querySelector('[data-hmi-prop="address"]');
+	check('tagForm.addressField', address != null && address.value === 'HR:10:FLOAT' &&
+		address.getAttribute('placeholder').indexOf('Program:Main') >= 0);
+
+	tags.selected = p.getTag('Tank_Level');
+	tags.renderForm();
+	check('tagForm.simulatedHasNoAddress',
+		tags.formDiv.querySelector('[data-hmi-prop="address"]') == null &&
+		tags.formDiv.innerText.indexOf('Simulated') >= 0);
+
+	// --- validation -------------------------------------------------------
+
+	var orphan = HmiProject.createTag('Orphan', 'IOInteger');
+	orphan.device = 'Nowhere';
+	p.addTag(orphan);
+	var loose = HmiProject.createTag('Loose', 'IODiscrete');
+	p.addTag(loose);
+	var blank = HmiProject.createTag('Blank', 'IOInteger');
+	blank.device = 'Pumps';
+	p.addTag(blank);
+
+	var problems = [];
+	var jobs = HmiMenus.checkTags(p, problems);
+	var messages = problems.map(function(x) { return x.link + ': ' + x.message; }).join(' | ');
+
+	check('validate.unknownDevice', messages.indexOf('Orphan: No device named "Nowhere"') >= 0, messages);
+	check('validate.noDevice', messages.indexOf('Loose: I/O tag has no device') >= 0, messages);
+	check('validate.noAddress', messages.indexOf('Blank: No address') >= 0, messages);
+	check('validate.addressesBatchedPerDevice', jobs.length === 1 && jobs[0].tags.length === 1 &&
+		jobs[0].tags[0].name === 'Flow');
+
+	// --- the server itself, asynchronously --------------------------------
+
+	if (HmiComms.available())
+	{
+		HmiComms.validate(HmiProject.createDevice('M', 'modbus'), ['HR:10', '40001', 'HR:2'], 'REAL',
+			function(results, error)
+			{
+				check('comms.validateReachesServer', error == null && results != null && results.length === 3,
+					error || JSON.stringify(results));
+
+				if (results != null)
+				{
+					check('comms.validateNormalizes', results[0].normalized === 'HR:10:FLOAT:BE',
+						JSON.stringify(results[0]));
+					check('comms.validateExplains', results[1].ok === false &&
+						results[1].error.indexOf('HR:0') >= 0, JSON.stringify(results[1]));
+				}
+
+				console.log('HMICOMMS DONE');
+			});
 	}
 };

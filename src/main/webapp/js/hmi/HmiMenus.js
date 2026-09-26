@@ -228,9 +228,9 @@ HmiMenus.installActions = function()
 				HmiMenus.showTagDictionary(ui);
 			});
 
-			this.addAction('hmiAccessNames...', function()
+			this.addAction('hmiDevices...', function()
 			{
-				HmiMenus.showAccessNames(ui);
+				HmiMenus.showDevices(ui);
 			});
 
 			this.addAction('hmiAppSettings...', function()
@@ -287,7 +287,7 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
-					'hmiAccessNames', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'hmiDevices', '-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', '-'], parent);
 
 				this.addMenuItems(menu,
@@ -512,9 +512,9 @@ HmiMenus.showTagDictionary = function(ui)
 	HmiDialogs.showTagDictionary(ui);
 };
 
-HmiMenus.showAccessNames = function(ui)
+HmiMenus.showDevices = function(ui)
 {
-	HmiDialogs.showAccessNames(ui);
+	HmiDialogs.showDevices(ui);
 };
 
 HmiMenus.showLog = function(ui)
@@ -596,7 +596,124 @@ HmiMenus.validate = function(ui)
 		}
 	}
 
-	HmiDialogs.showValidation(ui, problems);
+	if (project == null)
+	{
+		HmiDialogs.showValidation(ui, problems);
+
+		return;
+	}
+
+	var pending = HmiMenus.checkTags(project, problems);
+
+	if (pending.length === 0 || !HmiComms.available())
+	{
+		HmiDialogs.showValidation(ui, problems);
+
+		return;
+	}
+
+	// Addresses are checked by the comms server, which owns the grammars:
+	// one request per device, then the results.
+	var left = pending.length;
+
+	var done = function()
+	{
+		if (--left === 0)
+		{
+			HmiDialogs.showValidation(ui, problems);
+		}
+	};
+
+	for (var i = 0; i < pending.length; i++)
+	{
+		(function(job)
+		{
+			HmiComms.validate(job.device, job.tags.map(function(t) { return t.address; }), null,
+				function(results, error)
+				{
+					for (var j = 0; j < job.tags.length; j++)
+					{
+						var r = (results != null) ? results[j] : null;
+
+						if (error != null)
+						{
+							problems.push(HmiMenus.tagProblem(job.tags[j], 'Address not checked: ' + error));
+						}
+						else if (r != null && !r.ok)
+						{
+							problems.push(HmiMenus.tagProblem(job.tags[j], r.error));
+						}
+					}
+
+					done();
+				});
+		})(pending[i]);
+	}
+};
+
+HmiMenus.tagProblem = function(tag, message)
+{
+	return {page: 'Tags', cell: null, link: tag.name, message: message};
+};
+
+/**
+ * Checks each I/O tag's device binding. Adds what is wrong to problems and
+ * returns, per device, the tags whose addresses the server should check.
+ */
+HmiMenus.checkTags = function(project, problems)
+{
+	var byDevice = {};
+	var jobs = [];
+
+	for (var i = 0; i < project.tags.length; i++)
+	{
+		var tag = project.tags[i];
+
+		if (!HmiTypes.isIO(tag.type))
+		{
+			continue;
+		}
+
+		if (!tag.device)
+		{
+			problems.push(HmiMenus.tagProblem(tag, 'I/O tag has no device'));
+
+			continue;
+		}
+
+		var device = project.getDevice(tag.device);
+
+		if (device == null)
+		{
+			problems.push(HmiMenus.tagProblem(tag, 'No device named "' + tag.device + '"'));
+
+			continue;
+		}
+
+		if (device.protocol === 'simulator')
+		{
+			continue;
+		}
+
+		if (!tag.address)
+		{
+			problems.push(HmiMenus.tagProblem(tag, 'No address on ' + device.name));
+
+			continue;
+		}
+
+		var key = device.name.toLowerCase();
+
+		if (byDevice[key] == null)
+		{
+			byDevice[key] = {device: device, tags: []};
+			jobs.push(byDevice[key]);
+		}
+
+		byDevice[key].tags.push(tag);
+	}
+
+	return jobs;
 };
 
 HmiMenus.hasPage = function(ui, name)

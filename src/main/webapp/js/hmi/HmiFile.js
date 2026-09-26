@@ -211,16 +211,13 @@ HmiFile.withHmiFilter = function(filters)
 };
 
 /**
- * A new project gets one simulator access name so that the driver model is
- * exercised from the first tag the user creates.
+ * A new project gets one simulated device, so I/O tags have somewhere to
+ * point and the screen runs before any hardware exists.
  */
 HmiFile.createDefaultProject = function()
 {
 	var project = new HmiProject();
-
-	project.accessNames.push({
-		id: 'PLC1', driver: 'simulator', node: '', topic: '', rateMs: 250
-	});
+	project.devices.push(HmiProject.createDevice('PLC1', 'simulator'));
 
 	return project;
 };
