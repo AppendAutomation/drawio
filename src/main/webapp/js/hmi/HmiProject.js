@@ -293,7 +293,7 @@ HmiProject.PROTOCOLS = [
 		placeholder: 'N7:0, B3:1/4, F8:2, T4:0.ACC, ST9:0',
 		options: [
 			{key: 'maxGapElements', label: 'Largest gap in a read', type: 'int', def: 118},
-			{key: 'swapStringBytes', label: 'Swap string bytes', type: 'bool', def: false}]},
+			{key: 'swapStringBytes', label: 'Swap string bytes', type: 'bool', def: true}]},
 	{value: 'modbus', label: 'Modbus TCP', port: 502,
 		placeholder: 'HR:0, HR:10:FLOAT, CO:5, HR:4.3',
 		options: [
