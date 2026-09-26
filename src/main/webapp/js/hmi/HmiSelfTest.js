@@ -3725,6 +3725,38 @@ HmiSelfTest.testWindows = function(ui)
 		check('dlg.runtimeApplied', project.settings.runtime.windowMode === 'window' &&
 			project.settings.runtime.exit === 'password', JSON.stringify(project.settings.runtime));
 
+		check('pub.nextVersion', HmiDialogs.nextVersion('1.0.9') === '1.0.10' &&
+			HmiDialogs.nextVersion('2') === '3' && HmiDialogs.nextVersion('') === '1.0.0' &&
+			HmiDialogs.nextVersion('x.y') === '1.0.0');
+
+		project.settings.publish = {productName: 'Line 3', version: '1.4.0', scope: 'machine',
+			desktop: true, output: '/nowhere'};
+		HmiDialogs.showPublishOptions(ui, {documents: '/docs'});
+		dlg = ui.dialog.container;
+
+		var pubField = function(name) { return dlg.querySelector('[data-hmi-field="' + name + '"]'); };
+
+		check('pub.remembersName', pubField('productName').value === 'Line 3', pubField('productName').value);
+		check('pub.suggestsNextVersion', pubField('version').value === '1.4.1', pubField('version').value);
+		check('pub.remembersScope', pubField('scope').value === 'machine' && pubField('desktop').checked &&
+			!pubField('autostart').checked);
+		check('pub.defaultCompression', pubField('compression').value === 'small');
+		check('pub.remembersOutput', pubField('output').innerText === '/nowhere');
+
+		pubField('version').value = 'v2';
+		dlg.querySelector('.hmiOk').click();
+		check('pub.badVersionRefused', dlg.querySelector('.hmiError').innerText.indexOf('version') >= 0 &&
+			dlg.querySelector('.hmiProgress').style.display === 'none');
+		ui.hideDialog();
+		check('pub.closeClearsListener', HmiDialogs.onPublishEvent == null);
+
+		project.settings.publish = {};
+		HmiDialogs.showPublishOptions(ui, {documents: '/docs'});
+		dlg = ui.dialog.container;
+		check('pub.defaults', pubField('version').value === '1.0.0' &&
+			pubField('scope').value === 'user' && pubField('output').innerText === '/docs');
+		ui.hideDialog();
+
 		window.setTimeout(function()
 		{
 			var rt = project.settings.runtime;

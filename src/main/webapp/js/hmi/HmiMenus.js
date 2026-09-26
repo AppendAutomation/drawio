@@ -248,6 +248,11 @@ HmiMenus.installActions = function()
 				HmiMenus.validate(ui);
 			});
 
+			this.addAction('hmiPublish...', function()
+			{
+				HmiDialogs.showPublish(ui);
+			});
+
 			this.addAction('hmiRun', function()
 			{
 				HmiMenus.start(ui);
@@ -288,7 +293,7 @@ HmiMenus.installMenu = function()
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
 					'hmiDevices', '-', 'hmiAppSettings', 'hmiWindowProps',
-					'-', 'hmiValidate', '-'], parent);
+					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
@@ -606,6 +611,15 @@ HmiMenus.showLog = function(ui)
  */
 HmiMenus.validate = function(ui)
 {
+	HmiMenus.collectProblems(ui, function(problems)
+	{
+		HmiDialogs.showValidation(ui, problems);
+	});
+};
+
+/** What Validate reports, handed to fn(problems) once addresses are checked. */
+HmiMenus.collectProblems = function(ui, fn)
+{
 	var graph = ui.editor.graph;
 	var project = ui.hmiProject;
 	var problems = [];
@@ -675,7 +689,7 @@ HmiMenus.validate = function(ui)
 
 	if (project == null)
 	{
-		HmiDialogs.showValidation(ui, problems);
+		fn(problems);
 
 		return;
 	}
@@ -684,7 +698,7 @@ HmiMenus.validate = function(ui)
 
 	if (pending.length === 0 || !HmiComms.available())
 	{
-		HmiDialogs.showValidation(ui, problems);
+		fn(problems);
 
 		return;
 	}
@@ -697,7 +711,7 @@ HmiMenus.validate = function(ui)
 	{
 		if (--left === 0)
 		{
-			HmiDialogs.showValidation(ui, problems);
+			fn(problems);
 		}
 	};
 

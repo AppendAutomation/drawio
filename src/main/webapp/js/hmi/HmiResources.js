@@ -14,6 +14,7 @@ HmiResources.install = function()
 		'hmiTagDictionary=Tag Dictionary',
 		'hmiDevices=Devices',
 		'hmiValidate=Validate Expressions',
+		'hmiPublish=Publish',
 		'hmiRun=Run',
 		'hmiStop=Stop',
 		'hmiRuntimeLog=Runtime Log',

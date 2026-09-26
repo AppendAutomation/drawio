@@ -78,8 +78,8 @@ HmiProject.defaultRuntime = function()
 };
 
 /** The options HMI > Publish remembers, as the attributes they are saved as. */
-HmiProject.PUBLISH_FIELDS = ['productName', 'version', 'scope', 'desktop',
-	'autostart', 'compression', 'output'];
+HmiProject.PUBLISH_FIELDS = ['productName', 'version', 'publisher', 'scope',
+	'desktop', 'autostart', 'compression', 'output'];
 
 /** Hex SHA-256 of salt + password, resolved asynchronously (Web Crypto). */
 HmiProject.hashPassword = function(salt, password)

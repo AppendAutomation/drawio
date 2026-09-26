@@ -2356,3 +2356,364 @@ HmiDialogs.showLog = function(ui)
 		(lines.length > 0) ? lines.join('\n') : 'Nothing logged.').container,
 		620, 420, true, true);
 };
+
+// ---------------------------------------------------------------- publish
+
+/**
+ * HMI > Publish: builds a Windows installer that runs this project in the
+ * desktop app's run-only mode, with the comms server (src/main/publish in the
+ * desktop app). Validation problems are offered for review first.
+ */
+HmiDialogs.showPublish = function(ui)
+{
+	if (window.electron == null || typeof window.electron.request !== 'function')
+	{
+		ui.showError(mxResources.get('hmiPublish'), 'Publish needs the desktop app.',
+			mxResources.get('ok'));
+
+		return;
+	}
+
+	if (HmiMenus.isRunning(ui))
+	{
+		HmiMenus.stop(ui);
+	}
+
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	HmiMenus.collectProblems(ui, function(problems)
+	{
+		if (problems.length === 0)
+		{
+			HmiDialogs.checkPublishTools(ui);
+		}
+		else
+		{
+			ui.confirm(problems.length + ((problems.length === 1) ? ' problem was' :
+				' problems were') + ' found in the project. Publish anyway?', function()
+			{
+				HmiDialogs.checkPublishTools(ui);
+			}, function()
+			{
+				HmiDialogs.showValidation(ui, problems);
+			}, 'Publish anyway', 'Review');
+		}
+	});
+};
+
+HmiDialogs.publishRequest = function(action, args)
+{
+	return new Promise(function(resolve, reject)
+	{
+		var msg = args || {};
+		msg.action = action;
+
+		window.electron.request(msg, resolve, function(message)
+		{
+			reject(new Error(message));
+		});
+	});
+};
+
+HmiDialogs.checkPublishTools = function(ui)
+{
+	HmiDialogs.publishRequest('hmiPublish.available').then(function(tools)
+	{
+		if (tools.error != null)
+		{
+			ui.showError(mxResources.get('hmiPublish'), tools.error, mxResources.get('ok'));
+		}
+		else
+		{
+			HmiDialogs.showPublishOptions(ui, tools);
+		}
+	})['catch'](function(e)
+	{
+		ui.showError(mxResources.get('hmiPublish'), e.message, mxResources.get('ok'));
+	});
+};
+
+/** "1.0.9" -> "1.0.10": the next publish suggests the next version. */
+HmiDialogs.nextVersion = function(v)
+{
+	var parts = String(v || '').split('.');
+	var last = parseInt(parts[parts.length - 1], 10);
+
+	if (!/^\d+(\.\d+){0,3}$/.test(v || '') || isNaN(last))
+	{
+		return '1.0.0';
+	}
+
+	parts[parts.length - 1] = String(last + 1);
+
+	return parts.join('.');
+};
+
+HmiDialogs.showPublishOptions = function(ui, tools)
+{
+	var project = ui.hmiProject;
+	var last = project.settings.publish;
+	var file = ui.getCurrentFile();
+	var title = (file != null) ? file.getTitle().replace(/\.drawio(-hmi)?$/i, '') : '';
+
+	var opts = {
+		productName: last.productName || title || 'HMI Application',
+		version: (last.version) ? HmiDialogs.nextVersion(last.version) : '1.0.0',
+		publisher: last.publisher || '',
+		scope: last.scope || 'user',
+		desktop: last.desktop === true,
+		autostart: last.autostart === true,
+		compression: last.compression || 'small',
+		output: last.output || tools.documents
+	};
+
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', mxResources.get('hmiPublish')));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Creates a Windows installer that runs this project full time on the ' +
+		'target PC, with the comms server. Window mode and exit are set in ' +
+		'Application Settings.'));
+
+	var inputs = [];
+	var track = function(el, field)
+	{
+		el.setAttribute('data-hmi-field', field);
+		inputs.push(el);
+
+		return el;
+	};
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Package'));
+	var nameInput = track(HmiDialogs.field(body, 'Product name', opts.productName,
+		function() {}), 'productName');
+	var versionInput = track(HmiDialogs.field(body, 'Version', opts.version,
+		function() {}), 'version');
+	var publisherInput = track(HmiDialogs.field(body, 'Publisher', opts.publisher,
+		function() {}), 'publisher');
+	publisherInput.setAttribute('placeholder', 'Optional');
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Installer'));
+	track(HmiDialogs.select(body, 'Install for', opts.scope, [
+		{value: 'user', label: 'The user who installs it'},
+		{value: 'machine', label: 'All users (needs administrator)'}],
+		function(v) { opts.scope = v; }), 'scope');
+	track(HmiDialogs.field(body, 'Desktop shortcut', opts.desktop,
+		function(v) { opts.desktop = v; }, 'checkbox'), 'desktop');
+	track(HmiDialogs.field(body, 'Start with Windows', opts.autostart,
+		function(v) { opts.autostart = v; }, 'checkbox'), 'autostart');
+	track(HmiDialogs.select(body, 'Compression', opts.compression, [
+		{value: 'small', label: 'Smaller installer (a few minutes)'},
+		{value: 'fast', label: 'Faster build (larger installer)'}],
+		function(v) { opts.compression = v; }), 'compression');
+
+	var outRow = HmiDialogs.el('div', 'hmiFormRow');
+	outRow.appendChild(HmiDialogs.el('label', 'hmiFormLabel', 'Save to'));
+	var outText = HmiDialogs.el('span', 'hmiPublishOutput', opts.output);
+	outText.setAttribute('title', opts.output);
+	outText.setAttribute('data-hmi-field', 'output');
+	outRow.appendChild(outText);
+	var browse = track(HmiDialogs.button('Browse...', function()
+	{
+		HmiDialogs.publishRequest('hmiPublish.chooseOutput', {defaultPath: opts.output})
+			.then(function(dir)
+		{
+			if (dir != null)
+			{
+				opts.output = dir;
+				outText.innerText = dir;
+				outText.setAttribute('title', dir);
+				error.innerText = '';
+			}
+		})['catch'](function(e)
+		{
+			error.innerText = e.message;
+		});
+	}), 'browse');
+	outRow.appendChild(browse);
+	body.appendChild(outRow);
+
+	// Simulated devices keep simulating in the package
+	var simulated = [];
+
+	for (var i = 0; i < project.devices.length; i++)
+	{
+		if (project.devices[i].protocol === 'simulator' &&
+			project.devices[i].enabled !== false)
+		{
+			simulated.push(project.devices[i].name);
+		}
+	}
+
+	if (simulated.length > 0)
+	{
+		body.appendChild(HmiDialogs.el('div', 'hmiHint hmiWarning',
+			'Simulated on the target PC too: ' + simulated.join(', ') + '.'));
+	}
+
+	var progress = HmiDialogs.el('div', 'hmiProgress');
+	var bar = HmiDialogs.el('div', 'hmiProgressBar');
+	progress.appendChild(bar);
+	progress.style.display = 'none';
+	body.appendChild(progress);
+
+	var status = HmiDialogs.el('div', 'hmiPublishStatus');
+	status.setAttribute('data-hmi-field', 'status');
+	body.appendChild(status);
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	body.appendChild(error);
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	var show = HmiDialogs.button('Show in folder', function()
+	{
+		HmiDialogs.publishRequest('hmiPublish.showFile', {path: built})['catch'](function(e)
+		{
+			error.innerText = e.message;
+		});
+	});
+	show.style.display = 'none';
+	footer.appendChild(show);
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+
+	var building = false;
+	var built = null;
+
+	var cancel = HmiDialogs.button(mxResources.get('cancel'), function()
+	{
+		if (building)
+		{
+			HmiDialogs.publishRequest('hmiPublish.cancel')['catch'](function() {});
+		}
+		else
+		{
+			ui.hideDialog();
+		}
+	});
+	footer.appendChild(cancel);
+
+	var publish = HmiDialogs.button(mxResources.get('hmiPublish'), function()
+	{
+		start();
+	}, true);
+	publish.className += ' hmiOk';
+	footer.appendChild(publish);
+	div.appendChild(footer);
+
+	var setBusy = function(busy)
+	{
+		building = busy;
+
+		for (var i = 0; i < inputs.length; i++)
+		{
+			inputs[i].disabled = busy;
+		}
+
+		publish.disabled = busy;
+		progress.style.display = (busy) ? '' : 'none';
+	};
+
+	HmiDialogs.onPublishEvent = function(ev)
+	{
+		bar.style.width = Math.max(0, Math.min(100, ev.percent)) + '%';
+
+		if (ev.stage === 'preparing' || ev.stage === 'compressing')
+		{
+			status.innerText = ev.message + '... ' + ev.percent + '%';
+		}
+	};
+
+	if (!HmiDialogs.publishListening)
+	{
+		HmiDialogs.publishListening = true;
+
+		window.electron.registerMsgListener('hmiPublishEvent', function(ev)
+		{
+			if (HmiDialogs.onPublishEvent != null)
+			{
+				HmiDialogs.onPublishEvent(ev);
+			}
+		});
+	}
+
+	var start = function()
+	{
+		error.innerText = '';
+		opts.productName = nameInput.value.trim();
+		opts.version = versionInput.value.trim();
+		opts.publisher = publisherInput.value.trim();
+
+		if (!opts.productName)
+		{
+			error.innerText = 'Enter a product name.';
+
+			return;
+		}
+
+		if (!/^\d{1,5}(\.\d{1,5}){0,3}$/.test(opts.version))
+		{
+			error.innerText = 'The version must be numbers separated by dots, such as 1.0.0.';
+
+			return;
+		}
+
+		var s = project.settings;
+		var xml = mxUtils.getXml(ui.getXmlFileData(true, false, true));
+
+		setBusy(true);
+		show.style.display = 'none';
+		status.innerText = 'Preparing...';
+		bar.style.width = '0%';
+
+		HmiDialogs.publishRequest('hmiPublish.build', {projectXml: xml, output: opts.output,
+			options: {productName: opts.productName, version: opts.version,
+				publisher: opts.publisher, scope: opts.scope, desktop: opts.desktop,
+				autostart: opts.autostart, compression: opts.compression,
+				width: s.width, height: s.height, runtime: s.runtime}}).then(function(path)
+		{
+			built = path;
+			setBusy(false);
+			status.innerText = 'Created ' + path;
+			show.style.display = '';
+			cancel.innerText = mxResources.get('close');
+			publish.style.display = 'none';
+
+			// Remembered with the project, so the next publish suggests the
+			// next version
+			var remembered = {};
+
+			for (var i = 0; i < HmiProject.PUBLISH_FIELDS.length; i++)
+			{
+				var key = HmiProject.PUBLISH_FIELDS[i];
+				remembered[key] = opts[key];
+			}
+
+			if (JSON.stringify(remembered) !== JSON.stringify(project.settings.publish))
+			{
+				project.settings.publish = remembered;
+				project.touch();
+				ui.editor.setModified(true);
+			}
+		})['catch'](function(e)
+		{
+			setBusy(false);
+			status.innerText = '';
+			error.innerText = (e.message === 'cancelled') ? 'Cancelled.' : e.message;
+		});
+	};
+
+	ui.showDialog(div, 500, 560, true, false, function()
+	{
+		HmiDialogs.onPublishEvent = null;
+
+		if (building)
+		{
+			HmiDialogs.publishRequest('hmiPublish.cancel')['catch'](function() {});
+		}
+	});
+};

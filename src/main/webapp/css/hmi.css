@@ -904,3 +904,43 @@
 	font-size: 20px;
 	font-weight: 600;
 }
+
+/* ------------------------------------------------------------ publish */
+
+.hmiPublishOutput
+{
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+}
+
+.hmiProgress
+{
+	height: 8px;
+	margin: 14px 0 6px 0;
+	border-radius: 4px;
+	background-color: rgba(128, 128, 128, 0.25);
+	overflow: hidden;
+}
+
+.hmiProgressBar
+{
+	width: 0;
+	height: 100%;
+	background-color: #1a73e8;
+	transition: width 0.3s;
+}
+
+.hmiPublishStatus
+{
+	font-size: 12px;
+	word-break: break-all;
+}
+
+.hmiWarning
+{
+	color: #b06000;
+}
