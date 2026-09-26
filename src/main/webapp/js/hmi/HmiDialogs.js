@@ -2463,6 +2463,7 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 		productName: last.productName || title || 'HMI Application',
 		version: (last.version) ? HmiDialogs.nextVersion(last.version) : '1.0.0',
 		publisher: last.publisher || '',
+		icon: last.icon || '',
 		scope: last.scope || 'user',
 		desktop: last.desktop === true,
 		autostart: last.autostart === true,
@@ -2496,6 +2497,44 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 	var publisherInput = track(HmiDialogs.field(body, 'Publisher', opts.publisher,
 		function() {}), 'publisher');
 	publisherInput.setAttribute('placeholder', 'Optional');
+
+	// The exe, shortcut and window icon; the app's own when none is chosen
+	var iconRow = HmiDialogs.el('div', 'hmiFormRow');
+	iconRow.appendChild(HmiDialogs.el('label', 'hmiFormLabel', 'Icon'));
+	var iconText = HmiDialogs.el('span', 'hmiPublishOutput');
+	iconText.setAttribute('data-hmi-field', 'icon');
+	iconRow.appendChild(iconText);
+
+	var showIcon = function()
+	{
+		iconText.innerText = opts.icon || 'Default';
+		iconText.setAttribute('title', opts.icon);
+		iconClear.style.display = (opts.icon) ? '' : 'none';
+	};
+
+	iconRow.appendChild(track(HmiDialogs.button('Browse...', function()
+	{
+		HmiDialogs.publishRequest('hmiPublish.chooseIcon').then(function(p)
+		{
+			if (p != null)
+			{
+				opts.icon = p;
+				showIcon();
+			}
+		})['catch'](function(e)
+		{
+			error.innerText = e.message;
+		});
+	}), 'iconBrowse'));
+
+	var iconClear = track(HmiDialogs.button('Clear', function()
+	{
+		opts.icon = '';
+		showIcon();
+	}), 'iconClear');
+	iconRow.appendChild(iconClear);
+	body.appendChild(iconRow);
+	showIcon();
 
 	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Installer'));
 	track(HmiDialogs.select(body, 'Install for', opts.scope, [
@@ -2671,6 +2710,7 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 		bar.style.width = '0%';
 
 		HmiDialogs.publishRequest('hmiPublish.build', {projectXml: xml, output: opts.output,
+			icon: opts.icon || null,
 			options: {productName: opts.productName, version: opts.version,
 				publisher: opts.publisher, scope: opts.scope, desktop: opts.desktop,
 				autostart: opts.autostart, compression: opts.compression,

@@ -3742,6 +3742,8 @@ HmiSelfTest.testWindows = function(ui)
 			!pubField('autostart').checked);
 		check('pub.defaultCompression', pubField('compression').value === 'small');
 		check('pub.remembersOutput', pubField('output').innerText === '/nowhere');
+		check('pub.defaultIcon', pubField('icon').innerText === 'Default' &&
+			pubField('iconClear').style.display === 'none');
 
 		pubField('version').value = 'v2';
 		dlg.querySelector('.hmiOk').click();
