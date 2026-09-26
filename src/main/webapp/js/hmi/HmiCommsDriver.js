@@ -159,9 +159,9 @@ HmiCommsDriver.tagConfig = function(tag)
 	var cfg = {id: tag.name, device: tag.device, address: tag.address || '',
 		dataType: HmiComms.dataTypeHint(tag)};
 
-	// Raw-to-engineering scaling for analog I/O, done by the server so that
-	// writes are scaled back the same way.
-	if (HmiTypes.isAnalog(tag.type) && tag.minRaw != null && tag.maxRaw != null &&
+	// Raw-to-engineering scaling for analog I/O, only when the tag asks for
+	// it, done by the server so that writes are scaled back the same way.
+	if (tag.scaled === true && HmiTypes.isAnalog(tag.type) && tag.minRaw != null && tag.maxRaw != null &&
 		tag.minEU != null && tag.maxEU != null &&
 		!(tag.minRaw == tag.minEU && tag.maxRaw == tag.maxEU))
 	{

@@ -266,8 +266,11 @@ HmiProject.createTag = function(name, type)
 		tag.device = '';
 		tag.address = '';
 
+		// Values arrive as the device holds them unless scaling is asked for;
+		// the raw range is only used when it is.
 		if (HmiTypes.isAnalog(type))
 		{
+			tag.scaled = false;
 			tag.minRaw = 0;
 			tag.maxRaw = 32767;
 		}
@@ -633,7 +636,7 @@ HmiProject.tagToXml = function(doc, tag)
 	// Written in a fixed order so that a round trip is byte-stable and files
 	// diff cleanly in git.
 	var scalars = ['name', 'type', 'comment', 'engUnits', 'initial',
-		'minEU', 'maxEU', 'minRaw', 'maxRaw', 'device', 'address',
+		'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw', 'device', 'address',
 		'onMsg', 'offMsg', 'logged', 'retentive'];
 
 	for (var i = 0; i < scalars.length; i++)
@@ -788,6 +791,13 @@ HmiProject.tagFromXml = function(node)
 		{
 			tag[strings[i]] = v;
 		}
+	}
+
+	var scaled = node.getAttribute('scaled');
+
+	if (scaled != null)
+	{
+		tag.scaled = (scaled === 'true' || scaled === '1');
 	}
 
 	var numbers = ['minEU', 'maxEU', 'minRaw', 'maxRaw'];

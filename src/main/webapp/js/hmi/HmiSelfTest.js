@@ -3802,7 +3802,12 @@ HmiSelfTest.testDevices = function(ui)
 		bd.options.byteOrder === 'MLE' && bd.options.unitId === 1 && bd.scanMs === 500 &&
 		bd.enabled === false, JSON.stringify(bd));
 	check('dev.tagBindingRoundTrip', back.getTag('Flow').device === 'Pump' &&
-		back.getTag('Flow').address === 'HR:10:FLOAT');
+		back.getTag('Flow').address === 'HR:10:FLOAT' && back.getTag('Flow').scaled === false);
+
+	flow.scaled = true;
+	check('dev.scaledRoundTrip',
+		HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument())).getTag('Flow').scaled === true);
+	flow.scaled = false;
 	check('dev.noAccessNamesWritten',
 		mxUtils.getXml(p.toXml(mxUtils.createXmlDocument())).indexOf('accessName') < 0);
 
@@ -3864,6 +3869,16 @@ HmiSelfTest.testDevices = function(ui)
 	var address = tags.formDiv.querySelector('[data-hmi-prop="address"]');
 	check('tagForm.addressField', address != null && address.value === 'HR:10:FLOAT' &&
 		address.getAttribute('placeholder').indexOf('Program:Main') >= 0);
+
+	check('tagForm.scalingOffByDefault', tags.formDiv.querySelector('[data-hmi-prop="scaled"]') != null &&
+		tags.formDiv.querySelector('[data-hmi-prop="scaled"]').checked === false &&
+		tags.formDiv.querySelector('[data-hmi-prop="minRaw"]') == null);
+	var scaledBox = tags.formDiv.querySelector('[data-hmi-prop="scaled"]');
+	scaledBox.checked = true;
+	scaledBox.dispatchEvent(new Event('change'));
+	check('tagForm.scalingShowsRawRange', p.getTag('Flow').scaled === true &&
+		tags.formDiv.querySelector('[data-hmi-prop="minRaw"]') != null);
+	p.getTag('Flow').scaled = false;
 
 	tags.selected = p.getTag('Tank_Level');
 	tags.renderForm();
@@ -3930,6 +3945,7 @@ HmiSelfTest.testCommsDriver = function(ui)
 	var flow = HmiProject.createTag('Flow', 'IOReal');
 	flow.device = 'Pumps';
 	flow.address = 'HR:10';
+	flow.scaled = true;
 	flow.minRaw = 0;
 	flow.maxRaw = 1000;
 	flow.minEU = 0;
@@ -3983,6 +3999,8 @@ HmiSelfTest.testCommsDriver = function(ui)
 		check('cd.onlyDeviceTagsGoToTheServer', ids === 'Flow,Motor_On,Bad_Addr', ids);
 		check('cd.deviceSentOnce', cfg != null && cfg.args.devices.length === 1 &&
 			cfg.args.devices[0].name === 'Pumps' && cfg.args.devices[0].host === '10.0.0.9');
+		check('cd.unscaledByDefault', cfg != null && cfg.args.tags[2].scale == null &&
+			HmiProject.createTag('X', 'IOInteger').scaled === false);
 		check('cd.scalingSent', cfg != null && cfg.args.tags[0].scale != null &&
 			cfg.args.tags[0].scale.rawMax === 1000 && cfg.args.tags[0].dataType === 'REAL',
 			cfg != null ? JSON.stringify(cfg.args.tags[0]) : 'none');

@@ -397,12 +397,26 @@ HmiTagDialog.prototype.renderForm = function()
 			HmiDialogs.checkAddress(device, tag, note);
 		}
 
-		if (HmiTypes.isAnalog(tag.type))
+		// Scaling is opt-in: a device value is shown as the device holds it
+		// unless a raw range is to be mapped onto the engineering range.
+		if (HmiTypes.isAnalog(tag.type) && (device == null || device.protocol !== 'simulator'))
 		{
-			HmiDialogs.field(this.formDiv, 'Minimum raw', tag.minRaw,
-				function(v) { tag.minRaw = parseFloat(v) || 0; });
-			HmiDialogs.field(this.formDiv, 'Maximum raw', tag.maxRaw,
-				function(v) { tag.maxRaw = parseFloat(v) || 0; });
+			HmiDialogs.field(this.formDiv, 'Scale raw values', tag.scaled === true, function(v)
+			{
+				tag.scaled = !!v;
+				that.markModified();
+				that.renderForm();
+			}, 'checkbox').setAttribute('data-hmi-prop', 'scaled');
+
+			if (tag.scaled === true)
+			{
+				HmiDialogs.field(this.formDiv, 'Minimum raw', tag.minRaw,
+					function(v) { tag.minRaw = parseFloat(v) || 0; }).setAttribute('data-hmi-prop', 'minRaw');
+				HmiDialogs.field(this.formDiv, 'Maximum raw', tag.maxRaw,
+					function(v) { tag.maxRaw = parseFloat(v) || 0; }).setAttribute('data-hmi-prop', 'maxRaw');
+				this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+					'Raw minimum to maximum is shown as the engineering minimum to maximum.'));
+			}
 		}
 	}
 
@@ -719,7 +733,7 @@ HmiTagDialog.prototype.markModified = function()
  * for bulk edits in a spreadsheet.
  */
 HmiTagDialog.CSV_FIELDS = ['name', 'type', 'comment', 'engUnits', 'initial',
-	'minEU', 'maxEU', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg'];
+	'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg'];
 
 HmiTagDialog.prototype.exportCsv = function()
 {
@@ -833,7 +847,8 @@ HmiTagDialog.prototype.applyCsv = function(text)
 				field === 'minRaw' || field === 'maxRaw' ||
 				(field === 'initial' && !HmiTypes.isMessage(type)));
 
-			tag[field] = (numeric) ? parseFloat(record[field]) : record[field];
+			tag[field] = (numeric) ? parseFloat(record[field]) :
+				(field === 'scaled') ? (record[field] === 'true' || record[field] === '1') : record[field];
 		}
 	}
 
