@@ -7,7 +7,7 @@ window.ICONSEARCH_PATH = null;
 window.ICON_SERVICE_PATH = null;
 
 // ---------------------------------------------------------------------------
-// drawio-desktop-hmi loader.
+// Append HMI Studio loader.
 //
 // PostConfig.js is the only file loaded last in BOTH the dev and the packaged
 // branch of bootstrap.js, and it is not under any directory the electron-builder
@@ -40,7 +40,7 @@ window.ICON_SERVICE_PATH = null;
 		'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js',
 		'HmiWindows.js', 'HmiFrame.js',
 		'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
-		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js'];
+		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js', 'HmiBrand.js'];
 
 	if (urlParams['dev'] == '1' || urlParams['test'] == '1')
 	{

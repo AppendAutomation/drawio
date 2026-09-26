@@ -2457,7 +2457,7 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 	var project = ui.hmiProject;
 	var last = project.settings.publish;
 	var file = ui.getCurrentFile();
-	var title = (file != null) ? file.getTitle().replace(/\.drawio(-hmi)?$/i, '') : '';
+	var title = (file != null) ? file.getTitle().replace(/\.(ahmi|drawio-hmi|drawio)$/i, '') : '';
 
 	var opts = {
 		productName: last.productName || title || 'HMI Application',
@@ -2756,4 +2756,103 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 			HmiDialogs.publishRequest('hmiPublish.cancel')['catch'](function() {});
 		}
 	});
+};
+
+// ------------------------------------------------------------------ about
+
+/**
+ * Help > About: the product, its versions and the attribution the Apache
+ * License asks for, with the licence texts one click away.
+ */
+HmiDialogs.showAbout = function(ui)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog hmiAbout');
+
+	var head = HmiDialogs.el('div', 'hmiAboutHead');
+	var logo = document.createElement('img');
+	logo.setAttribute('src', HmiBrand.LOGO);
+	logo.className = 'hmiAboutLogo';
+	head.appendChild(logo);
+
+	var title = HmiDialogs.el('div', 'hmiAboutTitle');
+	title.appendChild(HmiDialogs.el('div', 'hmiAboutName', HmiBrand.NAME));
+	var version = HmiDialogs.el('div', 'hmiAboutVersion', '');
+	version.setAttribute('data-hmi-field', 'version');
+	title.appendChild(version);
+	head.appendChild(title);
+	div.appendChild(head);
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', 'hmiAboutText',
+		'© ' + new Date().getFullYear() + ' ' + HmiBrand.PUBLISHER + '.'));
+	var attribution = HmiDialogs.el('div', 'hmiAboutText',
+		'Built on the draw.io diagram editor by JGraph Ltd, used and modified ' +
+		'under the Apache License 2.0. Append HMI Studio is not affiliated with ' +
+		'or endorsed by JGraph Ltd.');
+	attribution.setAttribute('data-hmi-field', 'attribution');
+	body.appendChild(attribution);
+	div.appendChild(body);
+
+	var info = null;
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	var licences = HmiDialogs.button('Licences...', function()
+	{
+		if (info != null)
+		{
+			HmiDialogs.showLicences(ui, info);
+		}
+	});
+	licences.setAttribute('data-hmi-field', 'licences');
+	footer.appendChild(licences);
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}, true));
+	div.appendChild(footer);
+
+	var show = function(v)
+	{
+		info = v;
+		version.innerText = 'Version ' + v.version + ((v.coreVersion) ?
+			' (editor ' + v.coreVersion + ')' : '');
+	};
+
+	if (window.electron != null && typeof window.electron.request === 'function')
+	{
+		window.electron.request({action: 'hmiApp.info'}, show, function(message)
+		{
+			version.innerText = message;
+		});
+	}
+	else
+	{
+		show({version: EditorUi.VERSION, coreVersion: null, license: '', notice: ''});
+	}
+
+	ui.showDialog(div, 440, 280, true, true);
+};
+
+HmiDialogs.showLicences = function(ui, info)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Licences'));
+
+	var text = document.createElement('textarea');
+	text.className = 'hmiTextArea hmiLicenceText';
+	text.setAttribute('readonly', 'readonly');
+	text.setAttribute('data-hmi-field', 'licenceText');
+	text.value = (info.notice || '') + '\n\n' + (info.license || '');
+	div.appendChild(text);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('close'), function()
+	{
+		ui.hideDialog();
+	}, true));
+	div.appendChild(footer);
+
+	ui.showDialog(div, 640, 520, true, true);
 };

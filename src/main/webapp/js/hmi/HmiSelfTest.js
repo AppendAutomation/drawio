@@ -43,6 +43,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFilenames(ui);
+		HmiSelfTest.testBrand(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
@@ -2225,7 +2226,7 @@ HmiSelfTest.testSimulation = function()
  * A real file round trip, through the desktop save and read path.
  *
  * Everything else asserts against getFileData/setFileData in memory. This
- * writes an actual .drawio-hmi to disk with the app's own save machinery, reads
+ * writes an actual .ahmi to disk with the app's own save machinery, reads
  * the bytes back, and loads them -- which is the only way to know the file a
  * person ends up with is the file the tests have been describing.
  *
@@ -2394,7 +2395,7 @@ HmiSelfTest.testFilenames = function(ui)
 	var types = ui.editor.diagramFileTypes;
 
 	HmiSelfTest.check('name.typeRegistered',
-		HmiSelfTest.hasFileType(types, 'drawio-hmi'),
+		HmiSelfTest.hasFileType(types, 'ahmi'),
 		types.map(function(t) { return t.extension; }).join(','));
 
 	// Ours must not lead, or every new diagram is named after it.
@@ -2417,13 +2418,18 @@ HmiSelfTest.testFilenames = function(ui)
 
 	HmiSelfTest.check('name.hmiSuggestsExtension',
 		ui.normalizeFilename('Untitled Diagram.drawio') ===
-			'Untitled Diagram.drawio-hmi',
+			'Untitled Diagram.ahmi',
 		ui.normalizeFilename('Untitled Diagram.drawio'));
 
 	// And a name that already carries ours is left alone, rather than coming
-	// back as Name.drawio-hmi.drawio.
+	// back as Name.ahmi.drawio.
 	HmiSelfTest.check('name.noDoubleExtension',
-		ui.normalizeFilename('Plant.drawio-hmi') === 'Plant.drawio-hmi',
+		ui.normalizeFilename('Plant.ahmi') === 'Plant.ahmi',
+		ui.normalizeFilename('Plant.ahmi'));
+
+	// A file saved under the old extension is offered the new one.
+	HmiSelfTest.check('name.legacyBecomesAhmi',
+		ui.normalizeFilename('Plant.drawio-hmi') === 'Plant.ahmi',
 		ui.normalizeFilename('Plant.drawio-hmi'));
 
 	// An explicit export format still wins.
@@ -2436,10 +2442,55 @@ HmiSelfTest.testFilenames = function(ui)
 		{name: 'Diagram', extensions: ['drawio', 'xml']}]);
 
 	HmiSelfTest.check('name.openFilterIncludesHmi',
+		mxUtils.indexOf(filters[0].extensions, 'ahmi') >= 0 &&
 		mxUtils.indexOf(filters[0].extensions, 'drawio-hmi') >= 0,
 		filters[0].extensions.join(','));
 
 	ui.hmiProject = saved;
+};
+
+/**
+ * Nothing the user can see says draw.io: title, resources, Help, the tab bar,
+ * help icons and links; About keeps the licence attribution.
+ */
+HmiSelfTest.testBrand = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var upstream = /draw\.io|diagrams\.net|drawio\.com|jgraph/i;
+
+	check('brand.appName', Editor.prototype.appName === HmiBrand.NAME);
+	check('brand.title', document.title.indexOf(HmiBrand.NAME) >= 0 &&
+		!upstream.test(document.title), document.title);
+	check('brand.resource', mxResources.get('draw.io') === HmiBrand.NAME &&
+		!upstream.test(mxResources.get('cfgCssHelp')), mxResources.get('draw.io'));
+	check('brand.noUpstreamAnchors',
+		document.querySelectorAll('a[href*="jgraph"], a[href*="drawio.com"], ' +
+			'a[href*="diagrams.net"]').length === 0);
+	check('brand.pageText', !upstream.test(document.body.innerText),
+		(document.body.innerText.match(upstream) || [''])[0]);
+	check('brand.helpIconHidden', ui.createHelpIcon('https://www.drawio.com/doc').style.display === 'none');
+	check('brand.upstreamLinks', HmiBrand.isUpstreamLink('https://www.drawio.com/doc/faq') &&
+		HmiBrand.isUpstreamLink('https://app.diagrams.net/x') &&
+		HmiBrand.isUpstreamLink('https://github.com/jgraph/drawio') &&
+		!HmiBrand.isUpstreamLink(HmiBrand.ISSUES) &&
+		!HmiBrand.isUpstreamLink('https://example.com/draw.io.html'));
+	check('brand.svgComment', !upstream.test(Graph.svgFileComment), Graph.svgFileComment);
+
+	// A popup menu builds its table only when it has a factory method
+	var menu = new mxPopupMenu(function() {});
+	ui.menus.get('help').funct(menu, null);
+	var helpText = menu.table.textContent;
+	check('brand.helpMenu', helpText.indexOf(mxResources.get('hmiAbout')) >= 0 &&
+		helpText.indexOf(mxResources.get('hmiUserGuide')) >= 0 && !upstream.test(helpText) &&
+		helpText.indexOf(mxResources.get('quickStart')) < 0, helpText.replace(/\n/g, '|'));
+	menu.destroy();
+
+	HmiDialogs.showAbout(ui);
+	var dlg = ui.dialog.container;
+	check('brand.aboutName', dlg.innerText.indexOf(HmiBrand.NAME) >= 0);
+	check('brand.aboutAttribution', dlg.querySelector('[data-hmi-field="attribution"]')
+		.innerText.indexOf('Apache License') >= 0);
+	ui.hideDialog();
 };
 
 HmiSelfTest.hasFileType = function(types, ext)

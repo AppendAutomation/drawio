@@ -1,5 +1,5 @@
 /**
- * Persistence of the HMI project inside the .drawio-hmi file.
+ * Persistence of the HMI project inside the .ahmi file.
  *
  * Upstream's EditorUi.getXmlFileData rebuilds the <mxfile> element with a
  * SHALLOW clone and then re-appends only the <diagram> children, so a custom
@@ -19,7 +19,10 @@ HmiFile = function() {};
 
 HmiFile.VERSION_ATTRIBUTE = 'hmiVersion';
 HmiFile.ELEMENT = 'hmiProject';
-HmiFile.EXTENSION = '.drawio-hmi';
+HmiFile.EXTENSION = '.ahmi';
+
+/** Files saved before the rename still open, and Save As offers .ahmi. */
+HmiFile.LEGACY_EXTENSION = '.drawio-hmi';
 
 HmiFile.install = function()
 {
@@ -110,7 +113,7 @@ HmiFile.install = function()
 		Editor.prototype.diagramFileTypes =
 			Editor.prototype.diagramFileTypes.concat([{
 				description: 'hmiFileType',
-				extension: 'drawio-hmi',
+				extension: 'ahmi',
 				mimeType: 'text/xml'
 			}]);
 	}
@@ -120,9 +123,9 @@ HmiFile.install = function()
 };
 
 /**
- * Makes .drawio-hmi the suggested extension for a document that carries a tag
+ * Makes .ahmi the suggested extension for a document that carries a tag
  * dictionary, and stops upstream appending a second extension to a name that
- * already has ours.
+ * already has ours. A legacy .drawio-hmi name becomes .ahmi.
  */
 HmiFile.installFilename = function()
 {
@@ -131,13 +134,16 @@ HmiFile.installFilename = function()
 	EditorUi.prototype.normalizeFilename = function(title, defaultExtension)
 	{
 		// Upstream only recognises xml/html/drawio/png/svg/pdf, so a title
-		// that already ends in .drawio-hmi would come back as
-		// "Name.drawio-hmi.drawio".
-		if (typeof title === 'string' &&
-			title.toLowerCase().lastIndexOf(HmiFile.EXTENSION) ===
-			title.length - HmiFile.EXTENSION.length)
+		// that already ends in .ahmi would come back as "Name.ahmi.drawio".
+		if (typeof title === 'string' && HmiFile.endsWith(title, HmiFile.EXTENSION))
 		{
 			return title;
+		}
+
+		if (typeof title === 'string' && HmiFile.endsWith(title, HmiFile.LEGACY_EXTENSION))
+		{
+			return title.substring(0, title.length - HmiFile.LEGACY_EXTENSION.length) +
+				HmiFile.EXTENSION;
 		}
 
 		var name = editorUiNormalizeFilename.apply(this, arguments);
@@ -156,8 +162,14 @@ HmiFile.installFilename = function()
 	};
 };
 
+HmiFile.endsWith = function(name, ext)
+{
+	return name.length >= ext.length &&
+		name.toLowerCase().lastIndexOf(ext) === name.length - ext.length;
+};
+
 /**
- * Adds .drawio-hmi to the open dialog.
+ * Adds .ahmi (and the legacy .drawio-hmi) to the open dialog.
  *
  * App.pickFile hardcodes its filter list inline, so rather than replacing that
  * whole function (and inheriting every future upstream change to it) we
@@ -197,12 +209,12 @@ HmiFile.withHmiFilter = function(filters)
 		var ext = filters[i].extensions;
 
 		if (ext != null && mxUtils.indexOf(ext, 'drawio') >= 0 &&
-			mxUtils.indexOf(ext, 'drawio-hmi') < 0)
+			mxUtils.indexOf(ext, 'ahmi') < 0)
 		{
 			// Copy rather than mutate: the array upstream passed may be shared.
 			filters[i] = {
 				name: filters[i].name,
-				extensions: ['drawio-hmi'].concat(ext)
+				extensions: ['ahmi', 'drawio-hmi'].concat(ext)
 			};
 		}
 	}

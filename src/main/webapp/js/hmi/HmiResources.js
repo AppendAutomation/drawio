@@ -15,6 +15,9 @@ HmiResources.install = function()
 		'hmiDevices=Devices',
 		'hmiValidate=Validate Expressions',
 		'hmiPublish=Publish',
+		'hmiUserGuide=User Guide',
+		'hmiReportProblem=Report a Problem',
+		'hmiAbout=About Append HMI Studio',
 		'hmiRun=Run',
 		'hmiStop=Stop',
 		'hmiRuntimeLog=Runtime Log',
@@ -52,7 +55,7 @@ HmiResources.install = function()
 		'hmiMax=Maximum',
 		'hmiDictionaryLost=This file declares an HMI tag dictionary but does not ' +
 			'contain one. It was most likely saved by an editor that does not ' +
-			'support .drawio-hmi files, which discards the dictionary. Close ' +
+			'support HMI application files, which discards the dictionary. Close ' +
 			'without saving and restore from a backup to avoid losing it.'
 	].join('\n'));
 };

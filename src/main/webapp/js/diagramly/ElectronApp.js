@@ -1210,7 +1210,7 @@ mxStencilRegistry.allowEval = false;
 			action: 'showOpenDialog',
 			defaultPath: lastDir || (await requestSync('getDocumentsFolder')),
 			filters: [
-				{ name: 'draw.io Diagrams', extensions: ['drawio', 'xml', 'png', 'svg', 'html', 'pdf'] },
+				{ name: 'Diagrams', extensions: ['drawio', 'xml', 'png', 'svg', 'html', 'pdf'] },
         	    { name: 'VSDX Documents', extensions: ['vsdx'] },
         	    { name: 'Mermaid', extensions: ['mmd', 'mermaid'] },
         	    { name: 'All Files', extensions: ['*'] }

@@ -944,3 +944,55 @@
 {
 	color: #b06000;
 }
+
+/* -------------------------------------------------------------- brand */
+
+.geAppIcon
+{
+	background-color: #1f7ae0 !important;
+	background-size: 80% !important;
+}
+
+.hmiAboutHead
+{
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	margin-bottom: 12px;
+}
+
+.hmiAboutLogo
+{
+	width: 64px;
+	height: 64px;
+}
+
+.hmiAboutName
+{
+	font-size: 18px;
+	font-weight: 600;
+}
+
+.hmiAboutVersion
+{
+	margin-top: 4px;
+	font-size: 12px;
+	opacity: 0.8;
+}
+
+.hmiAboutText
+{
+	margin: 8px 0;
+	font-size: 12px;
+	line-height: 1.5;
+}
+
+.hmiLicenceText
+{
+	box-sizing: border-box;
+	width: 100%;
+	height: 400px;
+	font-family: monospace;
+	font-size: 11px;
+	white-space: pre-wrap;
+}
