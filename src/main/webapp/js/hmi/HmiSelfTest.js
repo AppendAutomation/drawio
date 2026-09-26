@@ -55,6 +55,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testKeypad(ui);
 		HmiSelfTest.testWindows(ui);
 		HmiSelfTest.testDevices(ui);
+		HmiSelfTest.testCommsDriver(ui);
 
 		// Last: its assertions run deferred, and anything opened after it
 		// would take the focus it is checking.
@@ -3912,4 +3913,207 @@ HmiSelfTest.testDevices = function(ui)
 				console.log('HMICOMMS DONE');
 			});
 	}
+};
+
+
+/** HmiCommsDriver against a stand-in bridge, then a real run through the server. */
+HmiSelfTest.testCommsDriver = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	var project = HmiSelfTest.sampleProject();
+	var pumps = HmiProject.createDevice('Pumps', 'modbus');
+	pumps.host = '10.0.0.9';
+	pumps.scanMs = 500;
+	project.devices.push(pumps);
+
+	var flow = HmiProject.createTag('Flow', 'IOReal');
+	flow.device = 'Pumps';
+	flow.address = 'HR:10';
+	flow.minRaw = 0;
+	flow.maxRaw = 1000;
+	flow.minEU = 0;
+	flow.maxEU = 100;
+	project.addTag(flow);
+
+	var motor = HmiProject.createTag('Motor_On', 'IODiscrete');
+	motor.device = 'Pumps';
+	motor.address = 'CO:3';
+	project.addTag(motor);
+
+	var bad = HmiProject.createTag('Bad_Addr', 'IOInteger');
+	bad.device = 'Pumps';
+	bad.address = '40001';
+	project.addTag(bad);
+
+	// The stand-in bridge: records requests, answers when told to.
+	var saved = {available: HmiComms.available, request: HmiComms.request, onEvent: HmiComms.onEvent,
+		offEvent: HmiComms.offEvent};
+	var requests = [];
+	var pushes = [];
+
+	HmiComms.available = function() { return true; };
+	HmiComms.request = function(action, args, cb) { requests.push({action: action, args: args, cb: cb}); };
+	HmiComms.onEvent = function(l) { pushes.push(l); };
+	HmiComms.offEvent = function() {};
+
+	var find = function(action)
+	{
+		for (var i = requests.length - 1; i >= 0; i--)
+		{
+			if (requests[i].action === action)
+			{
+				return requests[i];
+			}
+		}
+
+		return null;
+	};
+
+	try
+	{
+		var driver = new HmiCommsDriver(project);
+		var changes = [];
+		driver.on('change', function(b) { changes.push(b); });
+		driver.connect();
+
+		var cfg = find('configure');
+		var ids = (cfg != null) ? cfg.args.tags.map(function(t) { return t.id; }).join(',') : '';
+
+		check('cd.onlyDeviceTagsGoToTheServer', ids === 'Flow,Motor_On,Bad_Addr', ids);
+		check('cd.deviceSentOnce', cfg != null && cfg.args.devices.length === 1 &&
+			cfg.args.devices[0].name === 'Pumps' && cfg.args.devices[0].host === '10.0.0.9');
+		check('cd.scalingSent', cfg != null && cfg.args.tags[0].scale != null &&
+			cfg.args.tags[0].scale.rawMax === 1000 && cfg.args.tags[0].dataType === 'REAL',
+			cfg != null ? JSON.stringify(cfg.args.tags[0]) : 'none');
+
+		changes = [];
+		driver.subscribe(['Tank_Level', 'Flow', 'Motor_On', 'Pump1_Run'], 250);
+
+		check('cd.simulatedSnapshotIsImmediate', changes.length === 1 &&
+			changes[0].Tank_Level != null && changes[0].Pump1_Run != null && changes[0].Flow == null,
+			JSON.stringify(changes));
+		check('cd.remoteSubscribeWaitsForConfigure', find('subscribe') == null);
+
+		cfg.cb({tags: [{id: 'Flow', normalized: 'HR:10:FLOAT:BE'}, {id: 'Motor_On'},
+			{id: 'Bad_Addr', error: 'Use HR:0 for 40001'}], errors: []}, null);
+
+		var sub = find('subscribe');
+		check('cd.subscribeAfterConfigure', sub != null && sub.args.ids.join(',') === 'Flow,Motor_On' &&
+			sub.args.rates.Flow === 500, sub != null ? JSON.stringify(sub.args) : 'none');
+		check('cd.badAddressIsBadAtOnce', driver.get('Bad_Addr').quality === HmiTypes.QUALITY_BAD &&
+			driver.get('Bad_Addr').error === 'Use HR:0 for 40001');
+
+		pushes[0]({t: 'snapshot', values: {Flow: [42.5, 192, 1000], Motor_On: [true, 192, 1000]}});
+		check('cd.serverValuesArrive', driver.get('Flow').value === 42.5 &&
+			driver.get('Flow').quality === HmiTypes.QUALITY_GOOD);
+		check('cd.discreteIsZeroOne', driver.get('Motor_On').value === 1);
+
+		pushes[0]({t: 'change', values: {Flow: [null, 0, 2000, 'comm', 'Connection refused']}});
+		check('cd.badQualityCarriesItsReason', driver.get('Flow').quality === HmiTypes.QUALITY_BAD &&
+			driver.get('Flow').status === 'comm' && driver.get('Flow').error === 'Connection refused');
+
+		// Writes: local at once, device pending then answered.
+		var errors = [];
+		driver.on('writeError', function(e) { errors.push(e); });
+		var res = driver.write({Pump1_Run: 1, Flow: 25, Motor_On: 0});
+
+		check('cd.localWriteResolves', res.Pump1_Run.ok === true && res.Pump1_Run.pending == null);
+		check('cd.deviceWriteIsPending', res.Flow.ok === true && res.Flow.pending === true);
+
+		var w = find('write');
+		check('cd.writeSentWithBooleans', w != null && w.args.values.Flow === 25 &&
+			w.args.values.Motor_On === false, w != null ? JSON.stringify(w.args) : 'none');
+
+		w.cb({results: {Flow: {ok: true}, Motor_On: {ok: false, error: 'Illegal data address (exception 2)'}}});
+		check('cd.refusedWriteIsReported', errors.length === 1 && errors[0].name === 'Motor_On' &&
+			errors[0].error.indexOf('exception 2') >= 0);
+
+		// Device status reaches the banner.
+		var fakeUi = {hmiBannerFaults: document.createElement('span')};
+		driver.on('status', function(d) { HmiMenus.updateDeviceStatus(fakeUi, d); });
+		pushes[0]({t: 'status', devices: [{name: 'Pumps', state: 'backoff', lastError: 'Connection refused'}]});
+		check('cd.bannerNamesTheDevice', fakeUi.hmiBannerFaults.style.display !== 'none' &&
+			fakeUi.hmiBannerFaults.innerText.indexOf('Pumps not communicating') >= 0,
+			fakeUi.hmiBannerFaults.innerText);
+
+		pushes[0]({t: 'status', devices: [{name: 'Pumps', state: 'connected', lastError: null}]});
+		check('cd.bannerClears', fakeUi.hmiBannerFaults.style.display === 'none');
+
+		pushes[0]({t: 'server', state: 'disconnected'});
+		// The simulator's scans must never overwrite a device tag.
+		driver.sim.emit('change', {Flow: {value: 99, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			Pump1_Run: {value: 1, quality: HmiTypes.QUALITY_GOOD, timestamp: 5}});
+		check('cd.simulatorCannotOverwriteDeviceTags', driver.get('Flow').value !== 99 &&
+			driver.get('Pump1_Run').timestamp === 5);
+
+		check('cd.serverLossIsComm', driver.get('Flow').status === 'comm' &&
+			driver.get('Motor_On').quality === HmiTypes.QUALITY_BAD &&
+			driver.get('Pump1_Run').quality === HmiTypes.QUALITY_GOOD);
+
+		driver.disconnect();
+		check('cd.disconnectClosesTheSession', find('disconnect') != null);
+
+		// Without the desktop app, device tags are bad rather than silently absent.
+		HmiComms.available = function() { return false; };
+		var web = new HmiCommsDriver(project);
+		web.connect();
+		check('cd.noBridgeIsUnavailable', web.get('Flow').status === 'unavailable' &&
+			web.write({Flow: 1}).Flow.ok === false);
+		web.disconnect();
+	}
+	finally
+	{
+		HmiComms.available = saved.available;
+		HmiComms.request = saved.request;
+		HmiComms.onEvent = saved.onEvent;
+		HmiComms.offEvent = saved.offEvent;
+	}
+
+	// A real run: a device nobody answers for, through the real server.
+	if (!HmiComms.available())
+	{
+		return;
+	}
+
+	var real = HmiSelfTest.sampleProject();
+	var dead = HmiProject.createDevice('Dead', 'modbus');
+	dead.host = '127.0.0.1';
+	dead.port = 1;
+	dead.timeoutMs = 500;
+	real.devices.push(dead);
+	var level = HmiProject.createTag('Remote_Level', 'IOReal');
+	level.device = 'Dead';
+	level.address = 'HR:0';
+	real.addTag(level);
+
+	var runDriver = new HmiCommsDriver(real);
+	var statuses = [];
+	runDriver.on('status', function(d) { statuses.push(d); });
+	runDriver.connect();
+	runDriver.subscribe(['Remote_Level', 'Tank_Level'], 250);
+
+	var started = Date.now();
+
+	var poll = function()
+	{
+		var v = runDriver.get('Remote_Level');
+
+		if (v.status === 'comm' || Date.now() - started > 8000)
+		{
+			check('commsRun.unreachableDeviceIsComm', v.status === 'comm' && v.error != null,
+				JSON.stringify(v));
+			check('commsRun.statusReported', statuses.length > 0 && statuses[statuses.length - 1].Dead != null,
+				JSON.stringify(statuses));
+			check('commsRun.simulatedStillGood', runDriver.get('Tank_Level').quality === HmiTypes.QUALITY_GOOD);
+			runDriver.disconnect();
+			console.log('HMICOMMSRUN DONE');
+
+			return;
+		}
+
+		window.setTimeout(poll, 100);
+	};
+
+	window.setTimeout(poll, 100);
 };

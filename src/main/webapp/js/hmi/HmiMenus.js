@@ -414,8 +414,16 @@ HmiMenus.start = function(ui)
 			project.prunePages(ids);
 		}
 
-		ui.hmiRuntime = new HmiWindowManager(ui, project,
-			new HmiSimulator(project));
+		// Simulated tags stay in the HMI; tags on real devices go to the
+		// comms server. The runtime sees one driver.
+		var driver = new HmiCommsDriver(project);
+
+		driver.on('status', function(devices)
+		{
+			HmiMenus.updateDeviceStatus(ui, devices);
+		});
+
+		ui.hmiRuntime = new HmiWindowManager(ui, project, driver);
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
@@ -501,8 +509,55 @@ HmiMenus.updateBanner = function(ui, running)
 	});
 
 	banner.appendChild(stop);
+
+	var faults = document.createElement('span');
+	faults.className = 'hmiBannerFaults';
+	faults.style.display = 'none';
+	banner.insertBefore(faults, stop);
+	ui.hmiBannerFaults = faults;
+
 	document.body.appendChild(banner);
 	ui.hmiBanner = banner;
+};
+
+/**
+ * Devices that are not communicating are named in the run banner: a screen
+ * full of stale values should say so without anyone opening the log.
+ */
+HmiMenus.updateDeviceStatus = function(ui, devices)
+{
+	var faults = ui.hmiBannerFaults;
+
+	if (faults == null)
+	{
+		return;
+	}
+
+	var down = [];
+
+	for (var name in devices)
+	{
+		var d = devices[name];
+
+		if (d.state === 'backoff' || d.state === 'disconnected' && d.lastError)
+		{
+			down.push(name + ': ' + (d.lastError || d.state));
+		}
+	}
+
+	faults.innerText = '';
+
+	if (down.length === 0)
+	{
+		faults.style.display = 'none';
+
+		return;
+	}
+
+	faults.style.display = '';
+	mxUtils.write(faults, (down.length === 1) ? '\u26A0 ' + down[0].split(':')[0] + ' not communicating' :
+		'\u26A0 ' + down.length + ' devices not communicating');
+	faults.setAttribute('title', down.join('\n'));
 };
 
 // ------------------------------------------------------------- commands

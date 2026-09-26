@@ -838,3 +838,11 @@
 {
 	color: #188038;
 }
+
+.hmiBannerFaults
+{
+	padding: 1px 8px;
+	border-radius: 3px;
+	background-color: #b3261e;
+	cursor: help;
+}
