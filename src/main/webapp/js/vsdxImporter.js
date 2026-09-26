@@ -4,7 +4,7 @@
  */
 var mxIsElectron = navigator.userAgent != null &&
 	navigator.userAgent.toLowerCase().indexOf(' electron/') > -1 && 
-	navigator.userAgent.indexOf(' draw.io/') > -1;
+	window.electron != null; // Append HMI Studio: the preload bridge, not the app name
 /**
  * Adds meta tag to the page.
  */
