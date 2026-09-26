@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Append HMI Studio</title>
+  <defs>
+    <linearGradient id="bezel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a4a57"/>
+      <stop offset="1" stop-color="#1f2a33"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f8df0"/>
+      <stop offset="1" stop-color="#0d5bb8"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.35" r="0.6">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <!-- panel bezel -->
+  <rect x="48" y="48" width="928" height="928" rx="168" fill="url(#bezel)"/>
+  <rect x="48" y="48" width="928" height="928" rx="168" fill="none" stroke="#56687a" stroke-width="10"/>
+  <!-- screen -->
+  <rect x="128" y="128" width="768" height="560" rx="56" fill="url(#screen)"/>
+  <rect x="128" y="128" width="768" height="560" rx="56" fill="url(#glow)"/>
+  <!-- gauge: track, value arc, ticks, needle -->
+  <path d="M 312 560 A 200 200 0 0 1 712 560" fill="none" stroke="#0a3f80" stroke-width="56" stroke-linecap="round"/>
+  <path d="M 312 560 A 200 200 0 0 1 612 387" fill="none" stroke="#ffffff" stroke-width="56" stroke-linecap="round"/>
+  <path d="M 672 460 A 200 200 0 0 1 712 560" fill="none" stroke="#ffb300" stroke-width="56" stroke-linecap="round"/>
+  <line x1="512" y1="560" x2="610" y2="400" stroke="#ffffff" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="512" cy="560" r="44" fill="#ffffff"/>
+  <circle cx="512" cy="560" r="18" fill="#0d5bb8"/>
+  <!-- indicator lights -->
+  <circle cx="352" cy="832" r="54" fill="#2ecc71"/>
+  <circle cx="512" cy="832" r="54" fill="#ffb300"/>
+  <circle cx="672" cy="832" r="54" fill="#e74c3c"/>
+  <circle cx="336" cy="814" r="16" fill="#ffffff" fill-opacity="0.45"/>
+  <circle cx="496" cy="814" r="16" fill="#ffffff" fill-opacity="0.45"/>
+  <circle cx="656" cy="814" r="16" fill="#ffffff" fill-opacity="0.45"/>
+</svg>
