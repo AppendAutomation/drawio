@@ -292,7 +292,7 @@ HmiProject.PROTOCOLS = [
 	{value: 'slc', label: 'SLC 500 / MicroLogix (PCCC)', port: 44818,
 		placeholder: 'N7:0, B3:1/4, F8:2, T4:0.ACC, ST9:0',
 		options: [
-			{key: 'maxGapElements', label: 'Largest gap in a read', type: 'int', def: 8},
+			{key: 'maxGapElements', label: 'Largest gap in a read', type: 'int', def: 118},
 			{key: 'swapStringBytes', label: 'Swap string bytes', type: 'bool', def: false}]},
 	{value: 'modbus', label: 'Modbus TCP', port: 502,
 		placeholder: 'HR:0, HR:10:FLOAT, CO:5, HR:4.3',
