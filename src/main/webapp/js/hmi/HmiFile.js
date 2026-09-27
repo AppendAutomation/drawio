@@ -95,6 +95,10 @@ HmiFile.install = function()
 			{
 				this.hmiProject = HmiFile.createDefaultProject();
 			}
+
+			// The page (and the screen frame with it) was drawn while the
+			// previous project's settings were still in place
+			HmiFrame.refresh(this);
 		}));
 	};
 

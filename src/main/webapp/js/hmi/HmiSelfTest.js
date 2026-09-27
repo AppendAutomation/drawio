@@ -261,6 +261,25 @@ HmiSelfTest.testFileRoundTrip = function(ui)
 		ui.hmiProject.getTag('Tank_Level') != null &&
 		ui.hmiProject.getTag('Tank_Level').address === 'N7:0');
 
+	// Opening a file redraws the screen frame at that file's resolution,
+	// not the one shown before it was opened
+	var hd = HmiSelfTest.sampleProject();
+	hd.settings.width = 1920;
+	hd.settings.height = 1080;
+	ui.hmiProject = hd;
+	var hdData = ui.getFileData(true);
+	ui.hmiProject = HmiFile.createDefaultProject();
+	HmiFrame.refresh(ui);
+	ui.setFileData(hdData);
+
+	var fs = ui.editor.graph.view.scale;
+	var fscreen = (ui.hmiFrameGroup != null) ? ui.hmiFrameGroup.screen : null;
+
+	HmiSelfTest.check('file.load.frameFollowsResolution', fscreen != null &&
+		parseFloat(fscreen.getAttribute('width')) === Math.round(1920 * fs) &&
+		parseFloat(fscreen.getAttribute('height')) === Math.round(1080 * fs),
+		(fscreen != null) ? fscreen.getAttribute('width') + ' x ' + fscreen.getAttribute('height') : 'no frame');
+
 	// The detector: dictionary stripped but the marker left behind.
 	var stripped = again.replace(/<hmiProject[\s\S]*?<\/hmiProject>/, '');
 	ui.hmiProject = null;
