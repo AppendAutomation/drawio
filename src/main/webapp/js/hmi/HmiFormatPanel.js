@@ -754,10 +754,27 @@ HmiFormatPanel.roundCoord = function(v)
 	return String(Math.round(v * 100) / 100);
 };
 
-/** A cell's center in page (diagram) coordinates, through any groups. */
+/**
+ * A cell's center in page (diagram) coordinates, through any groups. That is
+ * what the shape turns about. A connector has no bounds of its own (it is
+ * defined by its points), so its drawn bounds are used.
+ */
 HmiFormatPanel.cellCenter = function(graph, cell)
 {
 	var model = graph.getModel();
+
+	if (model.isEdge(cell))
+	{
+		var es = graph.view.getState(cell);
+		var s = graph.view.scale;
+		var t = graph.view.translate;
+
+		if (es != null)
+		{
+			return {x: es.getCenterX() / s - t.x, y: es.getCenterY() / s - t.y};
+		}
+	}
+
 	var geo = graph.getCellGeometry(cell);
 	var x = (geo != null) ? geo.x + geo.width / 2 : 0;
 	var y = (geo != null) ? geo.y + geo.height / 2 : 0;

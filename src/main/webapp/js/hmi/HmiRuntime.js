@@ -1209,6 +1209,22 @@ HmiRuntime.prototype.applyGeometry = function(state)
 	var v = binding.visual;
 	var scale = this.graph.view.scale;
 
+	// A connector (such as General > Arrow) is drawn from its points, not its
+	// bounds, so Location and Orientation move the points and the label.
+	// Size does not apply to connectors.
+	if (this.graph.getModel().isEdge(state.cell))
+	{
+		var ex = ((v.dx || 0) + (v.rotDx || 0)) * scale;
+		var ey = ((v.dy || 0) + (v.rotDy || 0)) * scale;
+
+		if (ex !== 0 || ey !== 0)
+		{
+			HmiRuntime.translateEdgeState(state, ex, ey);
+		}
+
+		return;
+	}
+
 	// Size scales about the chosen edge. state.width/height still hold the
 	// design size at this point, so the opposite edge is held still by moving
 	// the origin by whatever the object lost.
@@ -1246,6 +1262,31 @@ HmiRuntime.prototype.applyGeometry = function(state)
 	{
 		state.x += v.rotDx * scale;
 		state.y += v.rotDy * scale;
+	}
+};
+
+HmiRuntime.translateEdgeState = function(state, dx, dy)
+{
+	var pts = state.absolutePoints;
+
+	if (pts != null)
+	{
+		var moved = [];
+
+		for (var i = 0; i < pts.length; i++)
+		{
+			moved.push((pts[i] != null) ? new mxPoint(pts[i].x + dx, pts[i].y + dy) : null);
+		}
+
+		state.absolutePoints = moved;
+	}
+
+	state.x += dx;
+	state.y += dy;
+
+	if (state.absoluteOffset != null)
+	{
+		state.absoluteOffset = new mxPoint(state.absoluteOffset.x + dx, state.absoluteOffset.y + dy);
 	}
 };
 

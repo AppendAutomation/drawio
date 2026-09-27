@@ -379,6 +379,18 @@ HmiSelfTest.testPivotPanel = function(ui)
 	graph.clearSelection();
 	graph.removeCells([cell]);
 	format.immediateRefresh();
+
+	// A connector's center is the middle of its drawn bounds
+	var edge = graph.insertEdge(graph.getDefaultParent(), null, '', null, null,
+		'shape=flexArrow;endArrow=classic;html=1;');
+	edge.geometry.setTerminalPoint(new mxPoint(100, 500), true);
+	edge.geometry.setTerminalPoint(new mxPoint(300, 540), false);
+	graph.view.invalidate(edge);
+	graph.view.validate();
+	var ec = HmiFormatPanel.cellCenter(graph, edge);
+	check('pivot.connectorCenter', Math.abs(ec.x - 200) < 1 && Math.abs(ec.y - 520) < 1,
+		ec.x + ',' + ec.y);
+	graph.removeCells([edge]);
 };
 
 HmiSelfTest.testFormatTab = function(ui)
@@ -1961,11 +1973,50 @@ HmiSelfTest.testMovement = function(ui)
 		model.endUpdate();
 	}
 
+	// The two arrow outlines in the palettes: a shape (Misc > Arrow Right)
+	// and a connector (General > Arrow), both turning about a point 50 to
+	// the right of their center, and a connector moved by a Location link
+	model.beginUpdate();
+
+	try
+	{
+		cells.arrowV = graph.insertVertex(graph.getDefaultParent(), null, '',
+			60, 600, 100, 60, 'shape=singleArrow;whiteSpace=wrap;html=1;');
+		cells.arrowE = graph.insertEdge(graph.getDefaultParent(), null, '', null, null,
+			'shape=flexArrow;endArrow=classic;html=1;');
+		cells.arrowE.geometry.setTerminalPoint(new mxPoint(250, 630), true);
+		cells.arrowE.geometry.setTerminalPoint(new mxPoint(350, 630), false);
+		cells.lineLoc = graph.insertEdge(graph.getDefaultParent(), null, '', null, null,
+			'shape=flexArrow;endArrow=classic;html=1;');
+		cells.lineLoc.geometry.setTerminalPoint(new mxPoint(450, 630), true);
+		cells.lineLoc.geometry.setTerminalPoint(new mxPoint(550, 630), false);
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	specs.push(['arrowV', 'orientation', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+		angleMin: '0', angleMax: '180', pivot: 'point', pivotDx: '50', pivotDy: '0'}]);
+	specs.push(['arrowE', 'orientation', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+		angleMin: '0', angleMax: '180', pivot: 'point', pivotDx: '50', pivotDy: '0'}]);
+	specs.push(['lineLoc', 'location.horizontal', {expr: 'Tank_Level', atMin: '0',
+		atMax: '100', offsetMin: '0', offsetMax: '200'}]);
+
 	for (var i = 0; i < specs.length; i++)
 	{
 		var links = {};
 		links[specs[i][1]] = specs[i][2];
 		HmiProject.setCellLinks(graph, cells[specs[i][0]], links);
+	}
+
+	var designPoints = {};
+
+	for (var k in {arrowE: 1, lineLoc: 1})
+	{
+		var es = graph.view.getState(cells[k]);
+		designPoints[k] = (es != null && es.absolutePoints != null) ?
+			es.absolutePoints.map(function(p) { return p.clone(); }) : null;
 	}
 
 	var design = {};
@@ -2012,6 +2063,48 @@ HmiSelfTest.testMovement = function(ui)
 		Math.abs((rotP.y - design.rotP.y) + 50 * pScale) < 1,
 		(rotP != null) ? 'dx = ' + (rotP.x - design.rotP.x) + ', dy = ' + (rotP.y - design.rotP.y) +
 			', rotation = ' + rotP.style[mxConstants.STYLE_ROTATION] + ', scale = ' + pScale : 'none');
+
+	var arrowV = graph.view.getState(cells.arrowV);
+
+	HmiSelfTest.check('m2.orientationPivotArrowShape',
+		arrowV != null && parseFloat(arrowV.style[mxConstants.STYLE_ROTATION]) === 90 &&
+		Math.abs((arrowV.x - design.arrowV.x) - 50 * pScale) < 1 &&
+		Math.abs((arrowV.y - design.arrowV.y) + 50 * pScale) < 1,
+		(arrowV != null) ? 'dx = ' + (arrowV.x - design.arrowV.x) + ', dy = ' + (arrowV.y - design.arrowV.y) : 'none');
+
+	// A connector is drawn from its points, so they are what must move
+	var movedBy = function(k, wx, wy)
+	{
+		var es = graph.view.getState(cells[k]);
+		var before = designPoints[k];
+
+		if (es == null || before == null || es.absolutePoints == null)
+		{
+			return 'no points';
+		}
+
+		for (var i = 0; i < before.length; i++)
+		{
+			var p = es.absolutePoints[i];
+
+			if (Math.abs(p.x - before[i].x - wx) > 1 || Math.abs(p.y - before[i].y - wy) > 1)
+			{
+				return 'point ' + i + ' moved ' + (p.x - before[i].x) + ',' + (p.y - before[i].y);
+			}
+		}
+
+		return null;
+	};
+
+	var arrowE = graph.view.getState(cells.arrowE);
+	var arrowEWhy = movedBy('arrowE', 50 * pScale, -50 * pScale);
+
+	HmiSelfTest.check('m2.orientationPivotArrowConnector',
+		arrowE != null && parseFloat(arrowE.style[mxConstants.STYLE_ROTATION]) === 90 &&
+		arrowEWhy == null, arrowEWhy);
+
+	var lineLocWhy = movedBy('lineLoc', 100 * pScale, 0);
+	HmiSelfTest.check('m2.locationConnector', lineLocWhy == null, lineLocWhy);
 
 	// The default stays the object's own center: no displacement
 	var rot0 = graph.view.getState(cells.rot);
