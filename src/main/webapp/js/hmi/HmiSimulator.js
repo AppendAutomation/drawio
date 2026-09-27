@@ -22,6 +22,39 @@ HmiSimulator = function(project)
 	// is testable from the start rather than after the first real driver.
 	this.faulted = {};
 	this.frozen = false;
+
+	// Starting values in place of the tags' initial values (retentive tags,
+	// see HmiRetentive), by lower-case name
+	this.presets = {};
+};
+
+/** Values the next connect starts memory tags at, instead of their initial values. */
+HmiSimulator.prototype.preset = function(values)
+{
+	this.presets = {};
+
+	for (var name in (values || {}))
+	{
+		this.presets[name.toLowerCase()] = values[name];
+	}
+};
+
+/** A stored value made to fit the tag's type now, or null when it cannot. */
+HmiSimulator.coerce = function(tag, value)
+{
+	if (HmiTypes.isDiscrete(tag.type))
+	{
+		return (value === true || value === 1 || value === '1' || value === 'true') ? 1 : 0;
+	}
+
+	if (HmiTypes.isAnalog(tag.type))
+	{
+		var n = parseFloat(value);
+
+		return isNaN(n) ? null : n;
+	}
+
+	return (value != null) ? String(value) : null;
 };
 
 HmiSimulator.prototype.id = 'simulator';
@@ -33,8 +66,21 @@ HmiSimulator.prototype.connect = function()
 
 	for (var i = 0; i < tags.length; i++)
 	{
-		this.values[tags[i].name.toLowerCase()] = {
-			value: (tags[i].initial != null) ? tags[i].initial : 0,
+		var key = tags[i].name.toLowerCase();
+		var start = (tags[i].initial != null) ? tags[i].initial : 0;
+
+		if (this.presets[key] !== undefined && !HmiTypes.isIO(tags[i].type))
+		{
+			var kept = HmiSimulator.coerce(tags[i], this.presets[key]);
+
+			if (kept != null)
+			{
+				start = kept;
+			}
+		}
+
+		this.values[key] = {
+			value: start,
 			quality: HmiTypes.QUALITY_GOOD,
 			timestamp: Date.now()
 		};

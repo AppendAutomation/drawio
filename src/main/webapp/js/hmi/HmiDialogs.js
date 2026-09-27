@@ -429,6 +429,21 @@ HmiTagDialog.prototype.renderForm = function()
 		}
 	}
 
+	// Retentive memory tags keep their last value from one Run to the next
+	if (!HmiTypes.isIO(tag.type))
+	{
+		HmiDialogs.field(this.formDiv, 'Retentive', tag.retentive === true, function(v)
+		{
+			if (v) { tag.retentive = true; }
+			else { delete tag.retentive; }
+
+			that.markModified();
+		}, 'checkbox').setAttribute('data-hmi-prop', 'retentive');
+
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'Keeps the last value: the next Run starts from it instead of the initial value.'));
+	}
+
 	// The tag's comment is the alarm's description
 	if (HmiTypes.isAnalog(tag.type))
 	{
@@ -791,7 +806,7 @@ HmiTagDialog.prototype.markModified = function()
  */
 HmiTagDialog.CSV_FIELDS = ['name', 'type', 'comment', 'engUnits', 'initial',
 	'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg',
-	'alarmLoLo', 'alarmLow', 'alarmHigh', 'alarmHiHi', 'alarmDeadband', 'alarmState'];
+	'retentive', 'alarmLoLo', 'alarmLow', 'alarmHigh', 'alarmHiHi', 'alarmDeadband', 'alarmState'];
 
 /** CSV columns kept in tag.alarms, with the key there. */
 HmiTagDialog.CSV_ALARM_FIELDS = {alarmLoLo: 'loLo', alarmLow: 'low', alarmHigh: 'high',
@@ -933,7 +948,8 @@ HmiTagDialog.prototype.applyCsv = function(text)
 				(field === 'initial' && !HmiTypes.isMessage(type)));
 
 			tag[field] = (numeric) ? parseFloat(record[field]) :
-				(field === 'scaled') ? (record[field] === 'true' || record[field] === '1') : record[field];
+				(field === 'scaled' || field === 'retentive') ?
+					(record[field] === 'true' || record[field] === '1') : record[field];
 		}
 	}
 

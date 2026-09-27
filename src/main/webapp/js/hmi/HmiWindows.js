@@ -204,6 +204,11 @@ HmiWindowManager = function(ui, project, driver, options)
 
 	this.alarms = new HmiAlarmManager(project, this.hub.client(), {store: store,
 		persist: function(events) { HmiAlarms.persist(store, events); }});
+
+	// Retentive tags' values are saved while the Run goes on
+	this.retentive = new HmiRetentiveKeeper(project, this.hub.client(), {
+		store: (options != null) ? options.retentiveStore : null,
+		values: (options != null) ? options.retained : null});
 };
 
 HmiWindowManager.prototype.start = function()
@@ -226,6 +231,7 @@ HmiWindowManager.prototype.start = function()
 
 	// Before any window: alarms are watched whether or not a window shows them
 	this.alarms.start();
+	this.retentive.start();
 
 	var pages = this.startupPages();
 
@@ -253,6 +259,9 @@ HmiWindowManager.prototype.stop = function()
 		this.close(this.windows[this.windows.length - 1]);
 	}
 
+	// The last values are saved as the Run ends
+	this.retentive.stop();
+	this.retentive.driver.disconnect();
 	this.alarms.stop();
 	this.alarms.driver.disconnect();
 	this.hub.disconnect();

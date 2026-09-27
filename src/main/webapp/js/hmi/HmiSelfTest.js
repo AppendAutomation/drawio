@@ -45,6 +45,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testFilenames(ui);
 		HmiSelfTest.testBrand(ui);
 		HmiSelfTest.testAlarms(ui);
+		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
@@ -2978,6 +2979,73 @@ HmiSelfTest.testAlarms = function(ui)
 		JSON.stringify(back.getTag('Pump1_Run').alarms));
 
 	check('alarm.logged', logged.length > 8 && logged.every(function(e) { return e.time > 0 && e.tag; }));
+};
+
+/**
+ * Retentive memory tags: presets replace initial values at the start of a
+ * Run, the keeper saves changes, and the flag survives the file.
+ */
+HmiSelfTest.testRetentive = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var p = HmiSelfTest.sampleProject();
+	var sp = p.addTag(HmiProject.createTag('Setpoint', 'MemoryReal'));
+	sp.initial = 10;
+	sp.retentive = true;
+	var mode = p.addTag(HmiProject.createTag('Auto_Mode', 'MemoryDiscrete'));
+	mode.retentive = true;
+	var recipe = p.addTag(HmiProject.createTag('Recipe', 'MemoryMessage'));
+	recipe.retentive = true;
+	p.getTag('Tank_Level').retentive = true;
+
+	check('ret.onlyMemoryTags', HmiRetentive.tags(p).join(',') === 'Setpoint,Auto_Mode,Recipe',
+		HmiRetentive.tags(p).join(','));
+
+	// Presets replace initial values; I/O tags are not preset
+	var sim = new HmiSimulator(p);
+	sim.preset({setpoint: 42.5, Auto_Mode: true, Recipe: 'Batch B', Tank_Level: 77});
+	sim.connect();
+	check('ret.presetApplied', sim.get('Setpoint').value === 42.5 && sim.get('Auto_Mode').value === 1 &&
+		sim.get('Recipe').value === 'Batch B', JSON.stringify([sim.get('Setpoint'), sim.get('Auto_Mode')]));
+	check('ret.ioNotPreset', sim.get('Tank_Level').value !== 77);
+
+	var sim2 = new HmiSimulator(p);
+	sim2.preset({Setpoint: 'not a number'});
+	sim2.connect();
+	check('ret.badPresetUsesInitial', sim2.get('Setpoint').value === 10);
+
+	// The keeper saves good values of retentive tags, once per burst
+	var saved = [];
+	var keeper = new HmiRetentiveKeeper(p, sim, {values: {Setpoint: 42.5, Gone_Tag: 5},
+		persist: function(v) { saved.push(v); }});
+	check('ret.loadedFiltered', JSON.stringify(keeper.values) === '{"Setpoint":42.5}', JSON.stringify(keeper.values));
+
+	keeper.start();
+	sim.write({Setpoint: 55});
+	sim.write({Setpoint: 56, Pump1_Run: 1});
+	keeper.applyBatch({Recipe: {value: 'X', quality: HmiTypes.QUALITY_BAD, timestamp: 1}});
+	check('ret.debounced', saved.length === 0);
+	keeper.stop();
+	// Not Pump1_Run (not retentive), and not the bad-quality 'X'
+	check('ret.savedOnStop', saved.length === 1 && saved[0].Setpoint === 56 && saved[0].Pump1_Run == null &&
+		saved[0].Recipe === 'Batch B', JSON.stringify(saved));
+
+	keeper.flush();
+	check('ret.noChangeNoSave', saved.length === 1);
+
+	// Run starts retentive tags from the retained values
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	HmiMenus.startWith(ui, p, false, null, {Setpoint: 88});
+	var win = (ui.hmiRuntime != null) ? ui.hmiRuntime.windows[0] : null;
+	check('ret.runStartsFromRetained', win != null && win.runtime.driver.get('Setpoint').value === 88,
+		(win != null) ? JSON.stringify(win.runtime.driver.get('Setpoint')) : 'no window');
+	HmiMenus.stop(ui);
+	ui.hmiProject = savedProject;
+
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	check('ret.flagRoundTrip', back.getTag('Setpoint').retentive === true &&
+		back.getTag('Pump1_Run').retentive !== true);
 };
 
 HmiSelfTest.hasFileType = function(types, ext)

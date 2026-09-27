@@ -217,7 +217,7 @@ HmiCli.TYPES = {
 };
 
 HmiCli.TAG_FIELDS = ['comment', 'engUnits', 'initial', 'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw',
-	'device', 'address', 'onMsg', 'offMsg', 'scanMs', 'alarms', 'sim'];
+	'device', 'address', 'onMsg', 'offMsg', 'scanMs', 'alarms', 'sim', 'retentive'];
 
 HmiCli.DEVICE_FIELDS = ['host', 'port', 'timeoutMs', 'scanMs', 'enabled', 'options'];
 

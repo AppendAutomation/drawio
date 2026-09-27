@@ -77,11 +77,32 @@ HmiRuntimeApp.load = function(ui, project)
 
 	HmiMenus.start(ui, {runtime: true});
 
-	if (!HmiMenus.isRunning(ui))
+	if (HmiMenus.isRunning(ui))
+	{
+		HmiRuntimeApp.started(ui, project);
+	}
+	else if (ui.hmiStarting)
+	{
+		// Retentive values are read first; Run starts once they are in
+		var listener = function(sender, evt)
+		{
+			if (evt.getProperty('running'))
+			{
+				ui.removeListener(listener);
+				HmiLog.guard('runtime.started', function() { HmiRuntimeApp.started(ui, project); });
+			}
+		};
+
+		ui.addListener('hmiRunStateChanged', listener);
+	}
+	else
 	{
 		throw new Error('The project could not be started. See the log for details.');
 	}
+};
 
+HmiRuntimeApp.started = function(ui, project)
+{
 	var p = ui.hmiProject;
 	HmiRuntimeApp.log('info', 'running ' + project.title + ': ' + p.tags.length + ' tags, ' +
 		p.devices.length + ' devices, ' + p.settings.width + 'x' + p.settings.height);

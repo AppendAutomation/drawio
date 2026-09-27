@@ -69,6 +69,12 @@ HmiCommsDriver.prototype.remoteTag = function(name)
 
 // ------------------------------------------------------------ lifecycle
 
+/** Starting values for memory tags (see HmiSimulator.preset). */
+HmiCommsDriver.prototype.preset = function(values)
+{
+	this.sim.preset(values);
+};
+
 HmiCommsDriver.prototype.connect = function()
 {
 	this.sim.on('change', this.onSim);

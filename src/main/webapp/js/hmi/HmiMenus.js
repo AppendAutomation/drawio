@@ -267,6 +267,11 @@ HmiMenus.installActions = function()
 			{
 				HmiMenus.showLog(ui);
 			});
+
+			this.addAction('hmiClearRetentive...', function()
+			{
+				HmiMenus.clearRetentive(ui);
+			});
 		}));
 	};
 };
@@ -298,7 +303,7 @@ HmiMenus.installMenu = function()
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
 
-				this.addMenuItems(menu, ['-', 'hmiRuntimeLog'], parent);
+				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive'], parent);
 			})));
 		}));
 	};
@@ -409,6 +414,37 @@ HmiMenus.start = function(ui, options)
 		return;
 	}
 
+	// Retentive tags start from their saved values, which have to be read
+	// first; without any, the Run starts at once as it always has
+	var store = HmiMenus.alarmStore(ui, runtime);
+
+	if (store != null && HmiRetentive.tags(project).length > 0 && HmiRetentive.available())
+	{
+		if (ui.hmiStarting)
+		{
+			return;
+		}
+
+		ui.hmiStarting = true;
+
+		HmiRetentive.load(store, function(values)
+		{
+			ui.hmiStarting = false;
+
+			if (!HmiMenus.isRunning(ui) && ui.hmiProject === project)
+			{
+				HmiMenus.startWith(ui, project, runtime, store, values);
+			}
+		});
+
+		return;
+	}
+
+	HmiMenus.startWith(ui, project, runtime, store, {});
+};
+
+HmiMenus.startWith = function(ui, project, runtime, store, retained)
+{
 	HmiLog.guard('run.start', function()
 	{
 		// Pages deleted since their properties were set must not linger in
@@ -428,6 +464,7 @@ HmiMenus.start = function(ui, options)
 		// Simulated tags stay in the HMI; tags on real devices go to the
 		// comms server. The runtime sees one driver.
 		var driver = new HmiCommsDriver(project);
+		driver.preset(retained);
 
 		driver.on('status', function(devices)
 		{
@@ -436,15 +473,15 @@ HmiMenus.start = function(ui, options)
 
 		ui.hmiRunOnly = runtime;
 		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime,
-			alarmStore: HmiMenus.alarmStore(ui, runtime)});
+			alarmStore: store, retentiveStore: store, retained: retained});
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
 };
 
 /**
- * Which alarm history a Run writes to: a published runtime's product, or
- * the project's file name in the editor.
+ * Which alarm history and retentive values a Run uses: a published
+ * runtime's product, or the project's file name in the editor.
  */
 HmiMenus.alarmStore = function(ui, runtime)
 {
@@ -463,6 +500,37 @@ HmiMenus.alarmStore = function(ui, runtime)
 	var title = (file != null) ? file.getTitle().replace(/\.(ahmi|drawio-hmi|drawio)$/i, '') : '';
 
 	return title || 'Untitled';
+};
+
+/** Forgets the saved retentive values, so the next Run starts from initial values. */
+HmiMenus.clearRetentive = function(ui)
+{
+	var store = HmiMenus.alarmStore(ui, false);
+
+	if (store == null || !HmiRetentive.available())
+	{
+		return;
+	}
+
+	// A Run would save them again as it stops
+	if (HmiMenus.isRunning(ui))
+	{
+		ui.showError(mxResources.get('hmiClearRetentive'), 'Stop the Run first.', mxResources.get('ok'));
+
+		return;
+	}
+
+	ui.confirm('Forget the retentive tags\' saved values? The next Run starts them at their initial values.',
+		function()
+		{
+			HmiRetentive.clear(store, function(error)
+			{
+				if (error != null)
+				{
+					ui.showError(mxResources.get('error'), error, mxResources.get('ok'));
+				}
+			});
+		}, null, 'Clear', mxResources.get('cancel'));
 };
 
 HmiMenus.stop = function(ui)
