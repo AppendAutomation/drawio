@@ -2883,6 +2883,81 @@ HmiSelfTest.testAlarms = function(ui)
 	ui.hmiProject = savedProject;
 	HmiSelfTest.resetGraph(ui);
 
+	// --- objects --------------------------------------------------------
+
+	check('alarm.shapesRegistered', mxCellRenderer.defaultShapes[HmiAlarms.LIST_SHAPE] != null &&
+		mxCellRenderer.defaultShapes[HmiAlarms.HISTORY_SHAPE] != null);
+	check('alarm.palette', ui.sidebar != null && ui.sidebar.palettes['hmi'] != null);
+
+	set('Tank_Level', 96);
+	set('Pump1_Run', 1);
+	HmiSelfTest.resetGraph(ui);
+	var listCell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 480, 200,
+		'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;');
+	var histCell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 280, 560, 240,
+		'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;hmiColumns=time,event,tag;hmiMaxEvents=5;');
+	check('alarm.objectKind', HmiAlarms.objectKind(graph, listCell) === 'list' &&
+		HmiAlarms.objectKind(graph, histCell) === 'history');
+
+	ui.hmiProject = project;
+	var rt3 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt3.start();
+
+	var listNode = graph.container.querySelector('[data-hmi-alarm-view="list"]');
+	var histNode = graph.container.querySelector('[data-hmi-alarm-view="history"]');
+	var listRows = function() { return listNode.querySelectorAll('tbody tr').length; };
+
+	check('alarm.listRendered', listNode != null && listRows() === mgr.active().length &&
+		listNode.querySelectorAll('thead th').length === HmiAlarms.LIST_COLUMNS.length + 1,
+		(listNode != null) ? listRows() + ' rows for ' + mgr.active().length : 'no view');
+	check('alarm.listClasses', listNode.querySelector('[data-hmi-alarm="Tank_Level"]').className
+		.indexOf('hmiAlarm-unacked') >= 0 &&
+		listNode.querySelector('[data-hmi-alarm="Tank_Level"]').className.indexOf('hmiAlarm-severe') >= 0);
+	check('alarm.historyColumns', histNode != null && histNode.querySelectorAll('thead th').length === 3 &&
+		histNode.querySelectorAll('tbody tr').length === 5,
+		(histNode != null) ? histNode.querySelectorAll('tbody tr').length + ' rows' : 'no view');
+
+	listNode.querySelector('[data-hmi-alarm="Tank_Level"] .hmiAlarmAck').click();
+	check('alarm.ackButton', mgr.isAcked('Tank_Level') &&
+		listNode.querySelector('[data-hmi-alarm="Tank_Level"]').className.indexOf('hmiAlarm-acked') >= 0 &&
+		histNode.querySelector('tbody tr').className.indexOf('hmiAlarmEvent-ACK') >= 0);
+
+	listNode.querySelector('[data-hmi-field="ackAll"]').click();
+	check('alarm.ackAllButton', mgr.counts().unacked === 0 &&
+		listNode.querySelector('[data-hmi-field="ackAll"]').disabled);
+
+	var w0 = listNode.offsetWidth;
+	var z0 = graph.view.scale;
+	graph.zoomTo(z0 * 2);
+	check('alarm.followsZoom', Math.abs(listNode.offsetWidth - 2 * w0) <= 2, w0 + ' -> ' + listNode.offsetWidth);
+	graph.zoomTo(z0);
+
+	rt3.stop();
+	check('alarm.viewsRemoved', graph.container.querySelectorAll('.hmiAlarmView').length === 0);
+
+	// Settings in the Animation tab
+	if (ui.format != null)
+	{
+		graph.setSelectionCell(histCell);
+		ui.format.immediateRefresh();
+		var fc = ui.format.container;
+		var title = fc.querySelector('[data-hmi-field="hmiTitle"]');
+		title.value = 'Plant events';
+		title.dispatchEvent(new Event('blur'));
+		check('alarm.settingsTitle', graph.getCellStyle(histCell).hmiTitle === 'Plant events');
+
+		ui.format.immediateRefresh();
+		var box = ui.format.container.querySelector('[data-hmi-column="description"]');
+		box.checked = true;
+		box.dispatchEvent(new Event('change'));
+		check('alarm.settingsColumns', graph.getCellStyle(histCell).hmiColumns === 'time,event,tag,description',
+			graph.getCellStyle(histCell).hmiColumns);
+		graph.clearSelection();
+	}
+
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
+
 	// Tag configuration
 	var threw = false;
 

@@ -93,6 +93,28 @@ HmiRuntime.prototype.start = function()
 
 	// One full repaint into the animated state.
 	graph.refresh();
+
+	this.startAlarmViews();
+};
+
+/** Live tables over the Alarm List and Alarm History objects. */
+HmiRuntime.prototype.startAlarmViews = function()
+{
+	var graph = this.graph;
+	var model = graph.getModel();
+	this.alarmViews = [];
+
+	for (var id in model.cells)
+	{
+		var kind = HmiAlarms.objectKind(graph, model.cells[id]);
+
+		if (kind != null)
+		{
+			var view = new HmiAlarmView(graph, model.cells[id], kind, this.alarms);
+			view.start();
+			this.alarmViews.push(view);
+		}
+	}
 };
 
 HmiRuntime.prototype.stop = function()
@@ -107,6 +129,16 @@ HmiRuntime.prototype.stop = function()
 	this.stopBlinkTimers();
 	this.stopWhileDown();
 	this.removeInput();
+
+	if (this.alarmViews != null)
+	{
+		for (var i = 0; i < this.alarmViews.length; i++)
+		{
+			this.alarmViews[i].stop();
+		}
+
+		this.alarmViews = null;
+	}
 
 	if (this.onChange != null)
 	{

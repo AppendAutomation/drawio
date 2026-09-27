@@ -517,3 +517,491 @@ HmiAlarms.loadRecent = function(store, limit, fn)
 		fn([]);
 	});
 };
+
+// ================================================================= objects
+//
+// Alarm List (active and unacknowledged alarms) and Alarm History (events)
+// are vertices with shape=hmiAlarmList / shape=hmiAlarmHistory. Their
+// settings are style keys, so the design-time preview shows them:
+//   hmiTitle      heading ('' for none)
+//   hmiColumns    comma-separated column keys, in order
+//   hmiMaxEvents  history only: how many events to show (default 200)
+//   fontSize      as for any shape
+// At Run an HTML table replaces the preview (HmiAlarmView).
+
+HmiAlarms.LIST_SHAPE = 'hmiAlarmList';
+HmiAlarms.HISTORY_SHAPE = 'hmiAlarmHistory';
+
+HmiAlarms.COLUMNS = {
+	time: 'Time', event: 'Event', tag: 'Tag', description: 'Description',
+	condition: 'Condition', value: 'Value', limit: 'Limit', state: 'State'
+};
+
+HmiAlarms.LIST_COLUMNS = ['time', 'tag', 'description', 'condition', 'value', 'state'];
+HmiAlarms.HISTORY_COLUMNS = ['time', 'event', 'tag', 'description', 'condition', 'value', 'limit'];
+
+HmiAlarms.EVENT_LABELS = {ALM: 'Alarm', RTN: 'Return', ACK: 'Ack', CHG: 'Change'};
+
+HmiAlarms.DEFAULT_MAX_EVENTS = 200;
+
+/** 'list', 'history' or null for any other cell. */
+HmiAlarms.objectKind = function(graph, cell)
+{
+	if (cell == null || !graph.getModel().isVertex(cell))
+	{
+		return null;
+	}
+
+	var shape = graph.getCellStyle(cell)[mxConstants.STYLE_SHAPE];
+
+	return (shape === HmiAlarms.LIST_SHAPE) ? 'list' : ((shape === HmiAlarms.HISTORY_SHAPE) ? 'history' : null);
+};
+
+/** The object's columns from its style, falling back to the defaults. */
+HmiAlarms.columnsOf = function(style, kind)
+{
+	var all = (kind === 'history') ? HmiAlarms.HISTORY_COLUMNS : HmiAlarms.LIST_COLUMNS;
+	var text = (style != null) ? style.hmiColumns : null;
+
+	if (text == null || text === '')
+	{
+		return all.slice(0);
+	}
+
+	return String(text).split(',').filter(function(c) { return mxUtils.indexOf(all, c) >= 0; });
+};
+
+HmiAlarms.titleOf = function(style, kind)
+{
+	return (style != null && style.hmiTitle != null) ? String(style.hmiTitle) :
+		((kind === 'history') ? 'Alarm History' : 'Active Alarms');
+};
+
+HmiAlarms.install = function()
+{
+	HmiAlarms.installShapes();
+	HmiAlarms.installPalette();
+};
+
+// ---------------------------------------------------------- preview shapes
+
+HmiAlarms.installShapes = function()
+{
+	function AlarmTableShape()
+	{
+		mxRectangleShape.call(this);
+	}
+
+	mxUtils.extend(AlarmTableShape, mxRectangleShape);
+
+	AlarmTableShape.prototype.kind = 'list';
+
+	AlarmTableShape.prototype.paintVertexShape = function(c, x, y, w, h)
+	{
+		var style = this.style || {};
+		var fs = parseFloat(style[mxConstants.STYLE_FONTSIZE]) || 12;
+		var cols = HmiAlarms.columnsOf(style, this.kind);
+		var title = HmiAlarms.titleOf(style, this.kind);
+		var rowH = fs * 1.8;
+		var top = y;
+
+		c.setFillColor('#ffffff');
+		c.setStrokeColor('#607d8b');
+		c.rect(x, y, w, h);
+		c.fillAndStroke();
+
+		c.setFontSize(fs);
+		c.setFontFamily('Helvetica');
+
+		if (title !== '')
+		{
+			c.setFillColor('#263238');
+			c.rect(x, top, w, rowH);
+			c.fill();
+			c.setFontColor('#ffffff');
+			c.setFontStyle(mxConstants.FONT_BOLD);
+			c.text(x + 6, top + rowH / 2, 0, 0, title, mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE,
+				false, '', null, false, 0, null);
+			top += rowH;
+		}
+
+		// Column headings
+		c.setFillColor('#cfd8dc');
+		c.rect(x, top, w, rowH);
+		c.fill();
+		c.setFontColor('#263238');
+		c.setFontStyle(mxConstants.FONT_BOLD);
+
+		var colW = w / Math.max(1, cols.length);
+
+		for (var i = 0; i < cols.length; i++)
+		{
+			c.text(x + i * colW + 4, top + rowH / 2, 0, 0, HmiAlarms.COLUMNS[cols[i]],
+				mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE, false, '', null, false, 0, null);
+		}
+
+		top += rowH;
+
+		// Sample rows, colored as they would be
+		var samples = (this.kind === 'history') ? ['#fdecea', '#e8f5e9', '#e3f2fd'] :
+			['#fdecea', '#fff8e1', '#eceff1'];
+		c.setFontStyle(0);
+		c.setFontColor('#90a4ae');
+
+		for (var r = 0; top + rowH <= y + h && r < 12; r++)
+		{
+			c.setFillColor(samples[r % samples.length]);
+			c.rect(x + 1, top, w - 2, rowH);
+			c.fill();
+			top += rowH;
+		}
+	};
+
+	function AlarmListShape() { AlarmTableShape.call(this); }
+	mxUtils.extend(AlarmListShape, AlarmTableShape);
+	AlarmListShape.prototype.kind = 'list';
+
+	function AlarmHistoryShape() { AlarmTableShape.call(this); }
+	mxUtils.extend(AlarmHistoryShape, AlarmTableShape);
+	AlarmHistoryShape.prototype.kind = 'history';
+
+	mxCellRenderer.registerShape(HmiAlarms.LIST_SHAPE, AlarmListShape);
+	mxCellRenderer.registerShape(HmiAlarms.HISTORY_SHAPE, AlarmHistoryShape);
+};
+
+// ----------------------------------------------------------------- palette
+
+/** An HMI palette right after General, with the alarm objects. */
+HmiAlarms.installPalette = function()
+{
+	var addGeneralPalette = Sidebar.prototype.addGeneralPalette;
+
+	Sidebar.prototype.addGeneralPalette = function()
+	{
+		addGeneralPalette.apply(this, arguments);
+
+		HmiLog.guard('alarms.palette', mxUtils.bind(this, function()
+		{
+			var sb = this;
+			var base = 'html=1;fontSize=12;noLabel=1;';
+
+			this.addPaletteFunctions('hmi', 'HMI', true, [
+				this.createVertexTemplateEntry(base + 'shape=' + HmiAlarms.LIST_SHAPE + ';',
+					480, 200, '', 'Alarm List', null, null, 'alarm list active alarms summary hmi'),
+				this.createVertexTemplateEntry(base + 'shape=' + HmiAlarms.HISTORY_SHAPE + ';',
+					560, 240, '', 'Alarm History', null, null, 'alarm history events log hmi')
+			]);
+		}));
+	};
+};
+
+// ---------------------------------------------------------------- run view
+
+/**
+ * The live table for one Alarm List or Alarm History cell in a Run window:
+ * an HTML overlay over the cell, following zoom and pan. The model is not
+ * touched.
+ */
+HmiAlarmView = function(graph, cell, kind, alarms)
+{
+	this.graph = graph;
+	this.cell = cell;
+	this.kind = kind;
+	this.alarms = alarms;
+	this.style = graph.getCellStyle(cell);
+	this.columns = HmiAlarms.columnsOf(this.style, kind);
+	this.maxEvents = parseInt(this.style.hmiMaxEvents, 10) || HmiAlarms.DEFAULT_MAX_EVENTS;
+	this.diskEvents = [];
+};
+
+HmiAlarmView.prototype.start = function()
+{
+	var that = this;
+
+	this.node = document.createElement('div');
+	this.node.className = 'hmiAlarmView hmiAlarmView-' + this.kind;
+	this.node.setAttribute('data-hmi-alarm-view', this.kind);
+	this.graph.container.appendChild(this.node);
+
+	this.onView = function() { that.place(); };
+	this.graph.view.addListener(mxEvent.SCALE, this.onView);
+	this.graph.view.addListener(mxEvent.TRANSLATE, this.onView);
+	this.graph.view.addListener(mxEvent.SCALE_AND_TRANSLATE, this.onView);
+
+	this.onChange = function() { that.render(); };
+
+	if (this.alarms != null)
+	{
+		this.alarms.on((this.kind === 'history') ? 'event' : 'change', this.onChange);
+
+		if (this.kind === 'history')
+		{
+			HmiAlarms.loadRecent(this.alarms.options.store, this.maxEvents, function(events)
+			{
+				that.diskEvents = events;
+				that.render();
+			});
+		}
+	}
+
+	this.place();
+	this.render();
+};
+
+HmiAlarmView.prototype.stop = function()
+{
+	if (this.node == null)
+	{
+		return;
+	}
+
+	this.graph.view.removeListener(this.onView);
+
+	if (this.alarms != null)
+	{
+		this.alarms.off('event', this.onChange);
+		this.alarms.off('change', this.onChange);
+	}
+
+	if (this.node.parentNode != null)
+	{
+		this.node.parentNode.removeChild(this.node);
+	}
+
+	this.node = null;
+};
+
+HmiAlarmView.prototype.place = function()
+{
+	var state = this.graph.view.getState(this.cell);
+
+	if (this.node == null || state == null)
+	{
+		return;
+	}
+
+	var s = this.node.style;
+	s.left = Math.round(state.x) + 'px';
+	s.top = Math.round(state.y) + 'px';
+	s.width = Math.round(state.width) + 'px';
+	s.height = Math.round(state.height) + 'px';
+	s.fontSize = ((parseFloat(this.style[mxConstants.STYLE_FONTSIZE]) || 12) * this.graph.view.scale) + 'px';
+};
+
+HmiAlarmView.pad = function(n)
+{
+	return (n < 10 ? '0' : '') + n;
+};
+
+HmiAlarmView.formatTime = function(ms, withDate)
+{
+	if (!(ms > 0))
+	{
+		return '';
+	}
+
+	var d = new Date(ms);
+	var p = HmiAlarmView.pad;
+	var t = p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+
+	return (withDate) ? d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + t : t;
+};
+
+HmiAlarmView.formatValue = function(v)
+{
+	var n = parseFloat(v);
+
+	return (v === '' || v == null) ? '' : ((isNaN(n)) ? String(v) :
+		String(Math.round(n * 1000) / 1000));
+};
+
+/** The rows shown: listed alarms, or events (newest first). */
+HmiAlarmView.prototype.rows = function()
+{
+	if (this.alarms == null)
+	{
+		return [];
+	}
+
+	if (this.kind === 'list')
+	{
+		return this.alarms.active();
+	}
+
+	// Logged events, then those since that are not on disk yet
+	var disk = this.diskEvents;
+	var newest = (disk.length > 0) ? disk[0].time : 0;
+	var live = this.alarms.history().filter(function(e) { return e.time > newest; });
+
+	return live.concat(disk).slice(0, this.maxEvents);
+};
+
+HmiAlarmView.prototype.render = function()
+{
+	if (this.node == null)
+	{
+		return;
+	}
+
+	var that = this;
+	var node = this.node;
+	var title = HmiAlarms.titleOf(this.style, this.kind);
+	node.innerHTML = '';
+
+	var head = document.createElement('div');
+	head.className = 'hmiAlarmHead';
+
+	var label = document.createElement('span');
+	label.className = 'hmiAlarmTitle';
+	mxUtils.write(label, title);
+	head.appendChild(label);
+
+	if (this.kind === 'list' && this.alarms != null)
+	{
+		var c = this.alarms.counts();
+		var counts = document.createElement('span');
+		counts.className = 'hmiAlarmCounts';
+		counts.setAttribute('data-hmi-field', 'counts');
+		mxUtils.write(counts, c.active + ' active, ' + c.unacked + ' unacknowledged');
+		head.appendChild(counts);
+
+		var ackAll = document.createElement('button');
+		ackAll.className = 'hmiAlarmAckAll';
+		ackAll.setAttribute('data-hmi-field', 'ackAll');
+		ackAll.disabled = c.unacked === 0;
+		mxUtils.write(ackAll, 'Ack All');
+		mxEvent.addListener(ackAll, 'click', function(evt)
+		{
+			mxEvent.consume(evt);
+			that.alarms.ackAll();
+		});
+		head.appendChild(ackAll);
+	}
+
+	node.appendChild(head);
+
+	var scroll = document.createElement('div');
+	scroll.className = 'hmiAlarmScroll';
+
+	var table = document.createElement('table');
+	table.className = 'hmiAlarmTable';
+
+	var tr = document.createElement('tr');
+
+	for (var i = 0; i < this.columns.length; i++)
+	{
+		var th = document.createElement('th');
+		mxUtils.write(th, HmiAlarms.COLUMNS[this.columns[i]]);
+		tr.appendChild(th);
+	}
+
+	if (this.kind === 'list')
+	{
+		tr.appendChild(document.createElement('th'));
+	}
+
+	var thead = document.createElement('thead');
+	thead.appendChild(tr);
+	table.appendChild(thead);
+
+	var tbody = document.createElement('tbody');
+	var rows = this.rows();
+
+	for (var r = 0; r < rows.length; r++)
+	{
+		tbody.appendChild((this.kind === 'list') ? this.listRow(rows[r]) : this.historyRow(rows[r]));
+	}
+
+	table.appendChild(tbody);
+	scroll.appendChild(table);
+	node.appendChild(scroll);
+
+	if (rows.length === 0)
+	{
+		var empty = document.createElement('div');
+		empty.className = 'hmiAlarmEmpty';
+		mxUtils.write(empty, (this.kind === 'list') ? 'No active alarms' : 'No alarm events');
+		node.appendChild(empty);
+	}
+};
+
+HmiAlarmView.prototype.addCell = function(tr, text)
+{
+	var td = document.createElement('td');
+	mxUtils.write(td, (text != null) ? String(text) : '');
+	tr.appendChild(td);
+
+	return td;
+};
+
+HmiAlarmView.prototype.listRow = function(rec)
+{
+	var that = this;
+	var tag = this.alarms.project.getTag(rec.tag);
+	var tr = document.createElement('tr');
+	var state = (rec.active) ? ((rec.acked) ? 'acked' : 'unacked') : 'cleared';
+
+	tr.className = 'hmiAlarmRow hmiAlarm-' + state +
+		((rec.active && HmiAlarms.SEVERITY[rec.condition] > 1) ? ' hmiAlarm-severe' : '') +
+		((rec.bad) ? ' hmiAlarm-bad' : '');
+	tr.setAttribute('data-hmi-alarm', rec.tag);
+
+	var values = {
+		time: HmiAlarmView.formatTime(rec.alarmTime, false),
+		tag: rec.tag,
+		description: (tag != null && tag.comment) ? tag.comment : rec.tag,
+		condition: HmiAlarms.CONDITIONS[rec.condition] || rec.condition,
+		value: (rec.bad) ? '?' : HmiAlarmView.formatValue(rec.value) + ((tag != null && tag.engUnits) ? ' ' + tag.engUnits : ''),
+		limit: HmiAlarmView.formatValue((tag != null) ? HmiAlarms.limitFor(tag, rec.condition) : ''),
+		state: {acked: 'Acknowledged', unacked: 'Unacknowledged', cleared: 'Cleared, unacknowledged'}[state],
+		event: ''
+	};
+
+	for (var i = 0; i < this.columns.length; i++)
+	{
+		this.addCell(tr, values[this.columns[i]]);
+	}
+
+	var td = document.createElement('td');
+
+	if (!rec.acked)
+	{
+		var ack = document.createElement('button');
+		ack.className = 'hmiAlarmAck';
+		mxUtils.write(ack, 'Ack');
+		mxEvent.addListener(ack, 'click', function(evt)
+		{
+			mxEvent.consume(evt);
+			that.alarms.ack(rec.tag);
+		});
+		td.appendChild(ack);
+	}
+
+	tr.appendChild(td);
+
+	return tr;
+};
+
+HmiAlarmView.prototype.historyRow = function(e)
+{
+	var tr = document.createElement('tr');
+	tr.className = 'hmiAlarmRow hmiAlarmEvent-' + e.event;
+
+	var values = {
+		time: HmiAlarmView.formatTime(e.time, true),
+		event: HmiAlarms.EVENT_LABELS[e.event] || e.event,
+		tag: e.tag,
+		description: e.description,
+		condition: e.condition,
+		value: HmiAlarmView.formatValue(e.value),
+		limit: HmiAlarmView.formatValue(e.limit),
+		state: ''
+	};
+
+	for (var i = 0; i < this.columns.length; i++)
+	{
+		this.addCell(tr, values[this.columns[i]]);
+	}
+
+	return tr;
+};

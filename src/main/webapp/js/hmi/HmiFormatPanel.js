@@ -40,6 +40,13 @@ HmiFormatPanel.prototype.init = function()
 	this.cell = cells[0];
 	this.links = HmiProject.getCellLinks(graph, this.cell);
 
+	var alarmKind = HmiAlarms.objectKind(graph, this.cell);
+
+	if (alarmKind != null)
+	{
+		this.addAlarmObjectSection(alarmKind);
+	}
+
 	this.container.appendChild(this.addLauncher(this.createPanel()));
 
 	for (var key in this.links)
@@ -616,6 +623,132 @@ HmiFormatPanel.prototype.createCheckField = function(cfg, field, labelText)
 	mxUtils.write(wrap, labelText);
 
 	return wrap;
+};
+
+// ------------------------------------------------------------ alarm objects
+
+/**
+ * Settings of an Alarm List or Alarm History object, kept as style keys
+ * (hmiTitle, hmiColumns, hmiMaxEvents, fontSize) so the preview shows them.
+ */
+HmiFormatPanel.prototype.addAlarmObjectSection = function(kind)
+{
+	var graph = this.editorUi.editor.graph;
+	var cell = this.cell;
+	var style = graph.getCellStyle(cell);
+	var section = this.createCollapsibleSection((kind === 'list') ? 'Alarm List' : 'Alarm History', false);
+	var content = section.contentDiv;
+
+	var setStyle = function(key, value)
+	{
+		graph.setCellStyles(key, value, [cell]);
+	};
+
+	var input = function(field, value, onCommit)
+	{
+		var el = document.createElement('input');
+		el.className = 'hmiInput';
+		el.setAttribute('type', 'text');
+		el.setAttribute('data-hmi-field', field);
+		el.value = value;
+
+		var commit = function()
+		{
+			if (el.value !== value)
+			{
+				onCommit(el.value);
+			}
+		};
+
+		mxEvent.addListener(el, 'blur', commit);
+		mxEvent.addListener(el, 'keydown', function(evt)
+		{
+			if (evt.keyCode == 13)
+			{
+				commit();
+				el.blur();
+			}
+		});
+
+		return el;
+	};
+
+	content.appendChild(HmiDialogs.el('div', 'hmiHint', (kind === 'list') ?
+		'At Run, lists the alarms that are active or not yet acknowledged, newest first, ' +
+		'with Ack and Ack All buttons.' :
+		'At Run, lists alarm events newest first, starting with those already logged on this PC.'));
+
+	this.addRow(content, 'Title', input('hmiTitle', HmiAlarms.titleOf(style, kind), function(v)
+	{
+		setStyle('hmiTitle', v);
+	}));
+
+	this.addRow(content, 'Font size', input('fontSize', String(parseFloat(style[mxConstants.STYLE_FONTSIZE]) || 12),
+		function(v)
+		{
+			var n = parseFloat(v);
+
+			if (n >= 6 && n <= 72)
+			{
+				setStyle(mxConstants.STYLE_FONTSIZE, n);
+			}
+		}));
+
+	if (kind === 'history')
+	{
+		this.addRow(content, 'Events shown', input('hmiMaxEvents',
+			String(parseInt(style.hmiMaxEvents, 10) || HmiAlarms.DEFAULT_MAX_EVENTS), function(v)
+		{
+			var n = parseInt(v, 10);
+
+			if (n >= 1 && n <= 10000)
+			{
+				setStyle('hmiMaxEvents', n);
+			}
+		}));
+	}
+
+	var all = (kind === 'history') ? HmiAlarms.HISTORY_COLUMNS : HmiAlarms.LIST_COLUMNS;
+	var shown = HmiAlarms.columnsOf(style, kind);
+	var box = document.createElement('div');
+	box.className = 'hmiAlarmColumns';
+
+	for (var i = 0; i < all.length; i++)
+	{
+		(function(col)
+		{
+			var label = document.createElement('label');
+			label.className = 'hmiCheck';
+			var check = document.createElement('input');
+			check.setAttribute('type', 'checkbox');
+			check.setAttribute('data-hmi-column', col);
+			check.checked = mxUtils.indexOf(shown, col) >= 0;
+
+			mxEvent.addListener(check, 'change', function()
+			{
+				var next = all.filter(function(c)
+				{
+					return (c === col) ? check.checked : mxUtils.indexOf(shown, c) >= 0;
+				});
+
+				if (next.length > 0)
+				{
+					setStyle('hmiColumns', next.join(','));
+				}
+				else
+				{
+					check.checked = true;
+				}
+			});
+
+			label.appendChild(check);
+			mxUtils.write(label, HmiAlarms.COLUMNS[col]);
+			box.appendChild(label);
+		})(all[i]);
+	}
+
+	this.addRow(content, 'Columns', box);
+	this.container.appendChild(section.wrapper);
 };
 
 // ------------------------------------------------------ center of rotation

@@ -448,6 +448,12 @@ HmiMenus.start = function(ui, options)
  */
 HmiMenus.alarmStore = function(ui, runtime)
 {
+	// The self tests' Runs must not add to anyone's alarm history
+	if (urlParams['hmitest'] == '1' || urlParams['hmilive'] == '1' || urlParams['hmifile'] != null)
+	{
+		return null;
+	}
+
 	if (runtime && typeof HmiRuntimeApp !== 'undefined' && HmiRuntimeApp.info != null)
 	{
 		return HmiRuntimeApp.info.productName;
