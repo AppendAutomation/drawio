@@ -224,6 +224,25 @@ HmiCli.DEVICE_FIELDS = ['host', 'port', 'timeoutMs', 'scanMs', 'enabled', 'optio
 HmiCli.WINDOW_FIELDS = ['titleBar', 'type', 'x', 'y', 'width', 'height', 'onShow', 'whileShowing',
 	'onHide', 'everyMs'];
 
+HmiCli.OBJECT_FIELDS = ['id', 'type', 'style', 'x', 'y', 'width', 'height', 'label', 'links', 'children'];
+
+HmiCli.EDGE_FIELDS = ['id', 'edge', 'style', 'label', 'source', 'target', 'sourcePoint', 'targetPoint',
+	'points', 'links'];
+
+/** Link fields beyond each type's defaults. */
+HmiCli.EXTRA_LINK_FIELDS = {orientation: ['pivot', 'pivotDx', 'pivotDy']};
+
+HmiCli.unknownFields = function(obj, fields, what, errors)
+{
+	for (var key in obj)
+	{
+		if (mxUtils.indexOf(fields, key) < 0)
+		{
+			errors.push(what + ': unknown field "' + key + '"');
+		}
+	}
+};
+
 /** Builds the project from the spec, writes it, then checks it. */
 HmiCli.build = function(ui, project)
 {
@@ -522,6 +541,8 @@ HmiCli.buildCells = function(graph, parent, objects, ids, where, errors)
 			continue;
 		}
 
+		HmiCli.unknownFields(o, HmiCli.OBJECT_FIELDS, what, errors);
+
 		if (o.type != null && HmiCli.TYPES[o.type] == null)
 		{
 			errors.push(what + ': unknown type "' + o.type + '" (' + Object.keys(HmiCli.TYPES).join(', ') + ')');
@@ -545,6 +566,7 @@ HmiCli.buildCells = function(graph, parent, objects, ids, where, errors)
 	{
 		var e = edges[i];
 		var what = where + ' connector ' + (e.id || (i + 1));
+		HmiCli.unknownFields(e, HmiCli.EDGE_FIELDS, what, errors);
 		var src = (e.source != null) ? ids[e.source] : null;
 		var trg = (e.target != null) ? ids[e.target] : null;
 
@@ -598,9 +620,15 @@ HmiCli.applyLinks = function(graph, cell, links, what, errors)
 		}
 
 		var cfg = def.defaults();
+		var allowed = Object.keys(cfg).concat(HmiCli.EXTRA_LINK_FIELDS[key] || []);
 
 		for (var k in links[key])
 		{
+			if (mxUtils.indexOf(allowed, k) < 0)
+			{
+				errors.push(what + ' link ' + key + ': unknown field "' + k + '" (' + allowed.join(', ') + ')');
+			}
+
 			cfg[k] = links[key][k];
 		}
 
