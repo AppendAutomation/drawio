@@ -618,7 +618,295 @@ HmiFormatPanel.prototype.createCheckField = function(cfg, field, labelText)
 	return wrap;
 };
 
+// ------------------------------------------------------ centre of rotation
+
+/**
+ * The centre of an Orientation link: the object's centre (the default), or a
+ * point given in page coordinates or picked by clicking the page. It is kept
+ * as an offset from the object's centre (pivotDx, pivotDy), so it moves with
+ * the object; the fields show it in page coordinates, where it is placed.
+ */
+HmiFormatPanel.prototype.addPivotControls = function(content, cfg)
+{
+	var that = this;
+	var point = cfg.pivot === 'point';
+
+	var mode = document.createElement('select');
+	mode.className = 'hmiInput';
+	mode.setAttribute('data-hmi-field', 'pivot');
+
+	var options = [{value: 'center', label: 'Object centre'}, {value: 'point', label: 'A point'}];
+
+	for (var i = 0; i < options.length; i++)
+	{
+		var opt = document.createElement('option');
+		opt.setAttribute('value', options[i].value);
+		mxUtils.write(opt, options[i].label);
+
+		if ((point ? 'point' : 'center') === options[i].value)
+		{
+			opt.setAttribute('selected', 'selected');
+		}
+
+		mode.appendChild(opt);
+	}
+
+	mxEvent.addListener(mode, 'change', function()
+	{
+		if (mode.value === 'point')
+		{
+			cfg.pivot = 'point';
+			cfg.pivotDx = cfg.pivotDx || '0';
+			cfg.pivotDy = cfg.pivotDy || '0';
+		}
+		else
+		{
+			delete cfg.pivot;
+			delete cfg.pivotDx;
+			delete cfg.pivotDy;
+		}
+
+		that.commit();
+	});
+
+	this.addRow(content, 'Rotate about', mode);
+
+	if (!point)
+	{
+		return;
+	}
+
+	var center = HmiFormatPanel.cellCenter(this.editorUi.editor.graph, this.cell);
+	var dx = parseFloat(cfg.pivotDx) || 0;
+	var dy = parseFloat(cfg.pivotDy) || 0;
+
+	var coord = function(axis, value)
+	{
+		var input = document.createElement('input');
+		input.className = 'hmiInput';
+		input.setAttribute('type', 'text');
+		input.setAttribute('data-hmi-field', 'pivot' + axis.toUpperCase());
+		input.value = HmiFormatPanel.roundCoord(value);
+
+		var commit = function()
+		{
+			var v = parseFloat(input.value);
+
+			if (isNaN(v))
+			{
+				input.value = HmiFormatPanel.roundCoord(value);
+
+				return;
+			}
+
+			var offset = HmiFormatPanel.roundCoord(v - center[axis]);
+			var field = (axis === 'x') ? 'pivotDx' : 'pivotDy';
+
+			if (cfg[field] !== offset)
+			{
+				cfg[field] = offset;
+				that.commit();
+			}
+		};
+
+		mxEvent.addListener(input, 'blur', commit);
+		mxEvent.addListener(input, 'keydown', function(evt)
+		{
+			if (evt.keyCode == 13)
+			{
+				commit();
+				input.blur();
+			}
+			else if (evt.keyCode == 27)
+			{
+				input.value = HmiFormatPanel.roundCoord(value);
+				input.blur();
+			}
+		});
+
+		return input;
+	};
+
+	this.addRow(content, 'Centre X (page)', coord('x', center.x + dx));
+	this.addRow(content, 'Centre Y (page)', coord('y', center.y + dy));
+
+	var pick = document.createElement('button');
+	pick.className = 'hmiButton';
+	pick.setAttribute('data-hmi-field', 'pivotPick');
+	mxUtils.write(pick, 'Pick on page');
+
+	mxEvent.addListener(pick, 'click', function(evt)
+	{
+		mxEvent.consume(evt);
+		HmiFormatPanel.pickPivot(that.editorUi, that.cell, cfg);
+	});
+
+	content.appendChild(pick);
+	content.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Click Pick on page, then click where the object should turn about ' +
+		'(Esc cancels). The point moves with the object.'));
+
+	this.showPivotMarker(center.x + dx, center.y + dy);
+};
+
+HmiFormatPanel.roundCoord = function(v)
+{
+	return String(Math.round(v * 100) / 100);
+};
+
+/** A cell's centre in page (diagram) coordinates, through any groups. */
+HmiFormatPanel.cellCenter = function(graph, cell)
+{
+	var model = graph.getModel();
+	var geo = graph.getCellGeometry(cell);
+	var x = (geo != null) ? geo.x + geo.width / 2 : 0;
+	var y = (geo != null) ? geo.y + geo.height / 2 : 0;
+	var parent = model.getParent(cell);
+
+	while (parent != null && model.isVertex(parent))
+	{
+		var pg = graph.getCellGeometry(parent);
+
+		if (pg != null && !pg.relative)
+		{
+			x += pg.x;
+			y += pg.y;
+		}
+
+		parent = model.getParent(parent);
+	}
+
+	return {x: x, y: y};
+};
+
+/**
+ * One click on the page sets the centre of rotation. The click is taken
+ * before the editor's own handlers, so it neither selects nor moves anything.
+ */
+HmiFormatPanel.pickPivot = function(ui, cell, cfg)
+{
+	var graph = ui.editor.graph;
+
+	HmiFormatPanel.cancelPivotPick(ui);
+
+	var finish = function()
+	{
+		HmiFormatPanel.cancelPivotPick(ui);
+	};
+
+	// The point is set on the press; the listener stays until the release,
+	// which it also takes, or the editor would treat it as a click on the
+	// background and clear the selection
+	var picked = false;
+
+	var listener = {
+		mouseDown: function(sender, me)
+		{
+			var pt = graph.getPointForEvent(me.getEvent(), false);
+			var center = HmiFormatPanel.cellCenter(graph, cell);
+			var links = HmiProject.getCellLinks(graph, cell);
+			var link = links['orientation'];
+
+			me.consume();
+			picked = true;
+
+			if (link != null)
+			{
+				link.pivot = 'point';
+				link.pivotDx = HmiFormatPanel.roundCoord(pt.x - center.x);
+				link.pivotDy = HmiFormatPanel.roundCoord(pt.y - center.y);
+				HmiProject.setCellLinks(graph, cell, links);
+			}
+		},
+		mouseMove: function(sender, me)
+		{
+			me.consume();
+		},
+		mouseUp: function(sender, me)
+		{
+			me.consume();
+
+			if (picked)
+			{
+				finish();
+			}
+		}
+	};
+
+	var keyDown = function(evt)
+	{
+		if (evt.keyCode == 27)
+		{
+			mxEvent.consume(evt);
+			finish();
+		}
+	};
+
+	// First in line, ahead of selection, moving and rubberband
+	graph.mouseListeners = graph.mouseListeners || [];
+	graph.mouseListeners.unshift(listener);
+	// Capture phase, ahead of the editor's own Escape handling
+	document.addEventListener('keydown', keyDown, true);
+
+	var cursor = graph.container.style.cursor;
+	graph.container.style.cursor = 'crosshair';
+
+	ui.hmiPivotPick = function()
+	{
+		graph.removeMouseListener(listener);
+		document.removeEventListener('keydown', keyDown, true);
+		graph.container.style.cursor = cursor;
+	};
+};
+
+HmiFormatPanel.cancelPivotPick = function(ui)
+{
+	if (ui.hmiPivotPick != null)
+	{
+		var cancel = ui.hmiPivotPick;
+		ui.hmiPivotPick = null;
+		cancel();
+	}
+};
+
+/** A small crosshair on the page where the object will turn about. */
+HmiFormatPanel.prototype.showPivotMarker = function(x, y)
+{
+	var graph = this.editorUi.editor.graph;
+	var marker = document.createElement('div');
+	marker.className = 'hmiPivotMarker';
+	graph.container.appendChild(marker);
+
+	var place = function()
+	{
+		var s = graph.view.scale;
+		var t = graph.view.translate;
+		marker.style.left = Math.round((x + t.x) * s) + 'px';
+		marker.style.top = Math.round((y + t.y) * s) + 'px';
+	};
+
+	place();
+	graph.view.addListener(mxEvent.SCALE, place);
+	graph.view.addListener(mxEvent.TRANSLATE, place);
+	graph.view.addListener(mxEvent.SCALE_AND_TRANSLATE, place);
+
+	this.pivotMarker = {node: marker, place: place};
+};
+
 HmiFormatPanel.prototype.destroy = function()
 {
+	if (this.pivotMarker != null)
+	{
+		var view = this.editorUi.editor.graph.view;
+		view.removeListener(this.pivotMarker.place);
+
+		if (this.pivotMarker.node.parentNode != null)
+		{
+			this.pivotMarker.node.parentNode.removeChild(this.pivotMarker.node);
+		}
+
+		this.pivotMarker = null;
+	}
+
 	BaseFormatPanel.prototype.destroy.apply(this, arguments);
 };

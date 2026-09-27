@@ -405,6 +405,10 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 					{value: 'center', label: 'Centre, both ways'}
 				]));
 		}
+		else if (key === 'orientation')
+		{
+			this.addPivotControls(content, cfg);
+		}
 	}
 
 	var movement = ['location.horizontal', 'location.vertical',

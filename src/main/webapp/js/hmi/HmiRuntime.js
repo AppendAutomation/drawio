@@ -608,6 +608,22 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 			// InTouch counts clockwise from the design orientation, and so
 			// does mxGraph's rotation style, so no sign flip is needed.
 			visual.rotation = angle;
+
+			// mxGraph turns a shape about its own centre. About any other
+			// point the centre also travels round that point, so the shape
+			// is moved by o - R(angle)o, o being the point's offset from the
+			// centre (screen axes, y down, clockwise).
+			var o = HmiRuntime.pivotOffset(cfg);
+
+			if (o != null)
+			{
+				var a = angle * Math.PI / 180;
+				var cos = Math.cos(a);
+				var sin = Math.sin(a);
+
+				visual.rotDx = o.x - (o.x * cos - o.y * sin);
+				visual.rotDy = o.y - (o.x * sin + o.y * cos);
+			}
 		}
 	}
 	else if (key === 'location.horizontal' || key === 'location.vertical')
@@ -654,6 +670,28 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 		// Sliders are input only; their visual position comes from the tag,
 		// which the author expresses with a Location or Percent Fill link.
 	}
+};
+
+/**
+ * The centre of rotation of an Orientation link as an offset from the object's
+ * centre, in diagram units, or null for the object's own centre. Stored as an
+ * offset (pivotDx, pivotDy), so the point moves with the object when it is
+ * moved in the editor or by a Location link.
+ */
+HmiRuntime.pivotOffset = function(cfg)
+{
+	if (cfg == null || cfg.pivot !== 'point')
+	{
+		return null;
+	}
+
+	var x = parseFloat(cfg.pivotDx);
+	var y = parseFloat(cfg.pivotDy);
+
+	x = isNaN(x) ? 0 : x;
+	y = isNaN(y) ? 0 : y;
+
+	return (x === 0 && y === 0) ? null : {x: x, y: y};
 };
 
 /**
@@ -937,7 +975,7 @@ HmiRuntime.formatNumber = function(value, format)
 HmiRuntime.sameVisual = function(a, b)
 {
 	var keys = ['fillColor', 'strokeColor', 'fontColor', 'visible', 'label',
-		'rotation', 'dx', 'dy', 'scaleX', 'scaleY', 'anchorX', 'anchorY',
+		'rotation', 'rotDx', 'rotDy', 'dx', 'dy', 'scaleX', 'scaleY', 'anchorX', 'anchorY',
 		'fillPct', 'fillDir', 'disabled'];
 
 	for (var i = 0; i < keys.length; i++)
@@ -1114,11 +1152,9 @@ HmiRuntime.prototype.repaint = function(cell)
 			return;
 		}
 
-		this.applyVisibility(cell, state);
-		this.applyFill(cell, state);
-		this.repaintCount++;
-
-		return;
+		// Revalidating keeps the old style, so colour and rotation are
+		// applied below as for any other change (Orientation about a point
+		// changes both geometry and rotation)
 	}
 
 	this.decorateStyle(cell, state.style);
@@ -1157,7 +1193,8 @@ HmiRuntime.prototype.hasGeometry = function(cell)
 
 	var v = binding.visual;
 
-	return v.dx != null || v.dy != null || v.scaleX != null || v.scaleY != null;
+	return v.dx != null || v.dy != null || v.scaleX != null || v.scaleY != null ||
+		v.rotDx != null || v.rotDy != null;
 };
 
 HmiRuntime.prototype.applyGeometry = function(state)
@@ -1202,6 +1239,13 @@ HmiRuntime.prototype.applyGeometry = function(state)
 	if (v.dy != null)
 	{
 		state.y += v.dy * scale;
+	}
+
+	// Orientation about a point other than the centre (see applyLink)
+	if (v.rotDx != null)
+	{
+		state.x += v.rotDx * scale;
+		state.y += v.rotDy * scale;
 	}
 };
 

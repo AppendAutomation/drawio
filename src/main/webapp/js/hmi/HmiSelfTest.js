@@ -45,6 +45,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testFilenames(ui);
 		HmiSelfTest.testBrand(ui);
 		HmiSelfTest.testFormatTab(ui);
+		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
 		HmiSelfTest.testPanelLayout(ui);
@@ -270,6 +271,79 @@ HmiSelfTest.testFileRoundTrip = function(ui)
 };
 
 /** Spike 2: four tabs, and routing that does not strand the user. */
+/**
+ * Orientation's centre of rotation in the Animation panel: page coordinates
+ * in the fields, an offset from the object's centre in the link, a marker on
+ * the page, and picking by clicking.
+ */
+HmiSelfTest.testPivotPanel = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var graph = ui.editor.graph;
+	var format = ui.format;
+
+	if (format == null)
+	{
+		return;
+	}
+
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, '', 200, 200, 100, 80);
+	HmiProject.setCellLinks(graph, cell, {orientation: {expr: '', atMin: '0', atMax: '100',
+		angleMin: '0', angleMax: '360', pivot: 'point', pivotDx: '50', pivotDy: '-40'}});
+	ui.hmiUiState = ui.hmiUiState || {expanded: {}};
+	ui.hmiUiState.expanded['orientation'] = true;
+	graph.setSelectionCell(cell);
+	format.immediateRefresh();
+
+	var field = function(name) { return format.container.querySelector('[data-hmi-field="' + name + '"]'); };
+	var link = function() { return HmiProject.getCellLinks(graph, cell)['orientation']; };
+
+	check('pivot.fieldsShowPage', field('pivotX') != null && field('pivotX').value === '300' &&
+		field('pivotY').value === '200', field('pivotX') && field('pivotX').value + ',' + field('pivotY').value);
+	check('pivot.marker', graph.container.querySelectorAll('.hmiPivotMarker').length === 1);
+
+	field('pivotX').value = '260';
+	field('pivotX').dispatchEvent(new Event('blur'));
+	check('pivot.typedIsOffset', link().pivotDx === '10' && link().pivotDy === '-40', JSON.stringify(link()));
+
+	// Moving the object keeps the point where it is on the object
+	graph.moveCells([cell], 40, 0);
+	format.immediateRefresh();
+	check('pivot.followsObject', field('pivotX').value === '300' && link().pivotDx === '10',
+		field('pivotX') && field('pivotX').value);
+
+	// Pick: the next click on the page sets it, and selects nothing else
+	HmiFormatPanel.pickPivot(ui, cell, link());
+	check('pivot.pickCursor', graph.container.style.cursor === 'crosshair');
+
+	var s = graph.view.scale;
+	var t = graph.view.translate;
+	var r = graph.container.getBoundingClientRect();
+	var cx = r.left + (400 + t.x) * s - graph.container.scrollLeft;
+	var cy = r.top + (100 + t.y) * s - graph.container.scrollTop;
+	var target = graph.view.getDrawPane().ownerSVGElement;
+	var init = {clientX: cx, clientY: cy, button: 0, buttons: 1, bubbles: true,
+		cancelable: true, pointerType: 'mouse', isPrimary: true, pointerId: 1};
+	target.dispatchEvent(new PointerEvent('pointerdown', init));
+	target.dispatchEvent(new PointerEvent('pointerup', init));
+
+	// The object's centre is now (290, 240)
+	check('pivot.picked', link().pivotDx === '110' && link().pivotDy === '-140', JSON.stringify(link()));
+	check('pivot.pickEnds', ui.hmiPivotPick == null && graph.container.style.cursor !== 'crosshair');
+	check('pivot.pickKeepsSelection', graph.getSelectionCell() === cell);
+
+	format.immediateRefresh();
+	field('pivot').value = 'center';
+	field('pivot').dispatchEvent(new Event('change'));
+	format.immediateRefresh();
+	check('pivot.backToCentre', link().pivot == null && link().pivotDx == null &&
+		field('pivotX') == null && graph.container.querySelectorAll('.hmiPivotMarker').length === 0);
+
+	graph.clearSelection();
+	graph.removeCells([cell]);
+	format.immediateRefresh();
+};
+
 HmiSelfTest.testFormatTab = function(ui)
 {
 	var graph = ui.editor.graph;
@@ -1793,6 +1867,9 @@ HmiSelfTest.testMovement = function(ui)
 	var specs = [
 		['rot', 'orientation', {expr: 'Tank_Level', atMin: '0', atMax: '100',
 			angleMin: '0', angleMax: '180'}],
+		// Turning about the middle of its right edge (the cell is 100 x 80)
+		['rotP', 'orientation', {expr: 'Tank_Level', atMin: '0', atMax: '100',
+			angleMin: '0', angleMax: '180', pivot: 'point', pivotDx: '50', pivotDy: '0'}],
 		['locH', 'location.horizontal', {expr: 'Tank_Level', atMin: '0',
 			atMax: '100', offsetMin: '0', offsetMax: '200'}],
 		['locV', 'location.vertical', {expr: 'Tank_Level', atMin: '0',
@@ -1862,6 +1939,24 @@ HmiSelfTest.testMovement = function(ui)
 			rotState.style[mxConstants.STYLE_ROTATION]) === 90,
 		'rotation = ' + ((rotState != null) ?
 			rotState.style[mxConstants.STYLE_ROTATION] : 'none'));
+
+	// At 90 degrees clockwise the centre swings from left of the point to
+	// above it: 50 right and 50 up, while the shape itself turns 90
+	var rotP = graph.view.getState(cells.rotP);
+	var pScale = graph.view.scale;
+
+	HmiSelfTest.check('m2.orientationPivot',
+		rotP != null && parseFloat(rotP.style[mxConstants.STYLE_ROTATION]) === 90 &&
+		Math.abs((rotP.x - design.rotP.x) - 50 * pScale) < 1 &&
+		Math.abs((rotP.y - design.rotP.y) + 50 * pScale) < 1,
+		(rotP != null) ? 'dx = ' + (rotP.x - design.rotP.x) + ', dy = ' + (rotP.y - design.rotP.y) +
+			', rotation = ' + rotP.style[mxConstants.STYLE_ROTATION] + ', scale = ' + pScale : 'none');
+
+	// The default stays the object's own centre: no displacement
+	var rot0 = graph.view.getState(cells.rot);
+
+	HmiSelfTest.check('m2.orientationCentreDefault',
+		Math.abs(rot0.x - design.rot.x) < 0.5 && Math.abs(rot0.y - design.rot.y) < 0.5);
 
 	// --- location ---------------------------------------------------------
 

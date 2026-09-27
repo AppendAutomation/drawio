@@ -996,3 +996,20 @@
 	font-size: 11px;
 	white-space: pre-wrap;
 }
+
+/* Centre of rotation of an Orientation link, while its panel is open */
+.hmiPivotMarker
+{
+	position: absolute;
+	width: 15px;
+	height: 15px;
+	margin: -8px 0 0 -8px;
+	pointer-events: none;
+	z-index: 3;
+	background:
+		linear-gradient(#e53935, #e53935) center / 1px 100% no-repeat,
+		linear-gradient(#e53935, #e53935) center / 100% 1px no-repeat;
+	border: 1px solid #e53935;
+	border-radius: 50%;
+	box-sizing: border-box;
+}
