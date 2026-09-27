@@ -54,6 +54,17 @@ Hmi.captureUi = function()
 		this.editor.graph.hmiUi = this;
 		HmiFrame.refresh(this);
 
+		// Command-line check or publish (--hmi-check, --hmi-publish)
+		if (HmiCli.isActive())
+		{
+			var cliUi = this;
+
+			window.setTimeout(function()
+			{
+				HmiLog.guard('cli.start', function() { HmiCli.start(cliUi); });
+			}, 0);
+		}
+
 		// A published package: open its project straight into Run
 		if (HmiRuntimeApp.isActive())
 		{

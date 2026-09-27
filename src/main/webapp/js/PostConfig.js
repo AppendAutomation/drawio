@@ -40,7 +40,7 @@ window.ICON_SERVICE_PATH = null;
 		'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js', 'HmiAlarms.js',
 		'HmiWindows.js', 'HmiFrame.js',
 		'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
-		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js', 'HmiBrand.js'];
+		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js', 'HmiBrand.js', 'HmiCli.js'];
 
 	if (urlParams['dev'] == '1' || urlParams['test'] == '1')
 	{
