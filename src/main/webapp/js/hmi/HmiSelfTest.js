@@ -46,6 +46,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testBrand(ui);
 		HmiSelfTest.testAlarms(ui);
 		HmiSelfTest.testRetentive(ui);
+		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
@@ -3046,6 +3047,204 @@ HmiSelfTest.testRetentive = function(ui)
 	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
 	check('ret.flagRoundTrip', back.getTag('Setpoint').retentive === true &&
 		back.getTag('Pump1_Run').retentive !== true);
+};
+
+/** Users, login, _Username/_AccessLevel, the Enable link and masked input. */
+HmiSelfTest.testSecurity = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var S = HmiSecurity;
+
+	// Known answers: FIPS 180-2 "abc" and RFC 7914 PBKDF2-HMAC-SHA256
+	check('sec.sha256', S.hex(S.sha256(S.utf8('abc'))) ===
+		'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad');
+	check('sec.pbkdf2', S.hex(S.pbkdf2(S.utf8('passwd'), S.utf8('salt'), 1)) ===
+		'55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc');
+
+	var h = S.hashPassword('secret');
+	var op = {name: 'Operator', level: 100, salt: h.salt, hash: h.hash, iterations: h.iterations};
+	check('sec.verify', S.verify(op, 'secret') && !S.verify(op, 'Secret') && !S.verify(op, ''));
+	check('sec.names', S.validName('Jane Doe') && !S.validName('None') && !S.validName('') &&
+		!S.validName(' lead') && S.validLevel(9999) && !S.validLevel(10000) && !S.validLevel(1.5));
+
+	var p = HmiSelfTest.sampleProject();
+	var h2 = S.hashPassword('boss');
+	p.users = [op, {name: 'Super', level: 900, salt: h2.salt, hash: h2.hash, iterations: h2.iterations}];
+	p.settings.security.autoLogoutMin = 5;
+
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	var xml = mxUtils.getXml(p.toXml(mxUtils.createXmlDocument()));
+	check('sec.roundTrip', back.users.length === 2 && back.users[1].level === 900 &&
+		S.verify(back.users[0], 'secret') && back.settings.security.autoLogoutMin === 5);
+	check('sec.noPlaintext', xml.indexOf('secret') < 0 && xml.indexOf('boss') < 0);
+
+	// Manager: logged out is "None" and 0
+	var saved = [];
+	var mgr = new HmiSecurityManager(p, {persist: function(u) { saved.push(u); }});
+	var names = [];
+	mgr.on('names', function(n) { names = names.concat(n); });
+	check('sec.loggedOut', mgr.readSystem('_Username').value === 'None' &&
+		mgr.readSystem('_AccessLevel').value === 0);
+	check('sec.loginRefused', !mgr.login('Operator', 'nope') && !mgr.login('Nobody', 'secret') &&
+		mgr.username() === 'None');
+	check('sec.login', mgr.login('operator', 'secret') && mgr.username() === 'Operator' &&
+		mgr.accessLevel() === 100 && names.indexOf('_AccessLevel') >= 0);
+
+	check('sec.changePassword', !mgr.changePassword('wrong', 'x') && mgr.changePassword('secret', 'newpw') &&
+		saved.length === 1 && S.verify(saved[0][0], 'newpw') && !S.verify(saved[0][0], 'secret'));
+
+	mgr.lastInput = 0;
+	mgr.checkIdle(4 * 60000);
+	check('sec.idleNotYet', mgr.username() === 'Operator');
+	mgr.checkIdle(5 * 60000);
+	check('sec.autoLogout', mgr.username() === 'None' && mgr.accessLevel() === 0);
+
+	// Script functions: only in scripts
+	check('sec.scriptOnly', HmiExpr.compile('Login("a", "b")', {project: p}).errors.length > 0 &&
+		HmiExpr.compile('IF Login("a", "b") THEN ShowLogin(); ENDIF; Logout();',
+			{project: p, mode: 'script'}).errors.length === 0,
+		JSON.stringify(HmiExpr.compile('IF Login("a", "b") THEN ShowLogin(); ENDIF; Logout();',
+			{project: p, mode: 'script'}).errors));
+	check('sec.systemReadOnly', HmiExpr.compile('_AccessLevel = 5;', {project: p, mode: 'script'})
+		.errors.length > 0);
+
+	// Enable link gates touch; the runtime repaints on login
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var btn = graph.insertVertex(graph.getDefaultParent(), null, 'Start', 40, 40, 100, 40);
+	var label = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 100, 100, 40);
+	HmiProject.setCellLinks(graph, btn, {
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'set'},
+		'enable': {expr: '_AccessLevel >= 500', sense: 'enabled'}
+	});
+	HmiProject.setCellLinks(graph, label, {
+		'valueDisplay': {kind: 'string', expr: '_Username', prefix: '', suffix: ''}
+	});
+
+	var sim = new HmiSimulator(p);
+	sim.connect();
+	var rt = new HmiRuntime({graph: graph, project: p, driver: sim, security: mgr});
+	rt.start();
+	rt.flush();
+
+	sim.write({'Pump1_Run': 0});
+	rt.handleTouch(btn, 'click');
+	check('sec.enableBlocks', sim.get('Pump1_Run').value === 0);
+
+	rt.runScript('Login("Super", "boss");');
+	rt.flush();
+	rt.handleTouch(btn, 'click');
+	check('sec.enablePermits', sim.get('Pump1_Run').value === 1 && mgr.username() === 'Super');
+	check('sec.usernameDisplayed', rt.evaluate('_Username').value === 'Super' &&
+		rt.bindings[label.id] != null && rt.bindings[label.id].visual.label === 'Super',
+		(rt.bindings[label.id] != null) ? JSON.stringify(rt.bindings[label.id].visual) : 'no binding');
+
+	rt.runScript('Logout();');
+	rt.flush();
+	sim.write({'Pump1_Run': 0});
+	rt.handleTouch(btn, 'click');
+	check('sec.logoutDisables', sim.get('Pump1_Run').value === 0 && rt.evaluate('_AccessLevel').value === 0);
+
+	HmiProject.setCellLinks(graph, btn, {
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'set'},
+		'enable': {expr: '_AccessLevel >= 500', sense: 'disabled'}
+	});
+	rt.rebind();
+	rt.flush();
+	rt.handleTouch(btn, 'click');
+	check('sec.enableSense', sim.get('Pump1_Run').value === 1);
+	rt.stop();
+
+	check('sec.enableOffered', HmiTypes.LINKS['enable'].milestone <= HmiTypes.MILESTONE &&
+		HmiTypes.LINKS['disable'].milestone > HmiTypes.MILESTONE &&
+		typeof HmiFormatPanel.BUILDERS['enable'] === 'function');
+	check('sec.maskedDefault', HmiTypes.LINKS['userInput'].defaults().masked === false);
+
+	// Masked user input: a password field that does not show the value
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	var urt = new HmiRuntime({graph: graph, project: p, driver: sim});
+	urt.values = {'recipe_name': {value: 'Batch A', quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}};
+	HmiDialogs.showUserInput(ui, {kind: 'string', tag: 'Recipe_Name', prompt: 'Password',
+		keypad: false, masked: true}, urt);
+	var pwField = (ui.dialog != null) ? ui.dialog.container.querySelector('input') : null;
+	check('sec.maskedInput', pwField != null && pwField.type === 'password' && pwField.value === '',
+		(pwField != null) ? pwField.type + ' ' + pwField.value : 'no field');
+	ui.hideDialog();
+
+	// Prebuilt login window
+	var field = function(name)
+	{
+		return (ui.dialog != null) ? ui.dialog.container.querySelector('[data-hmi-field="' + name + '"]') : null;
+	};
+
+	HmiDialogs.showLogin(ui, mgr);
+	check('sec.loginWindow', field('loginName') != null && field('loginPassword').type === 'password');
+	field('loginName').value = 'Super';
+	field('loginPassword').value = 'bad';
+	field('loginSubmit').click();
+	check('sec.loginWindowRefuses', field('loginError') != null &&
+		field('loginError').innerText.indexOf('Invalid') === 0 && field('loginPassword').value === '' &&
+		mgr.username() === 'None');
+	field('loginPassword').value = 'boss';
+	field('loginSubmit').click();
+	check('sec.loginWindowAccepts', mgr.username() === 'Super' && field('loginName') == null);
+
+	// Users dialog in the editor edits the project; hashes only
+	HmiDialogs.showUsers(ui);
+	check('sec.usersListed', ui.dialog != null &&
+		ui.dialog.container.querySelectorAll('[data-hmi-user]').length === 2);
+	field('userName').value = 'Maint';
+	field('userLevel').value = '500';
+	field('userPassword').value = 'pw1';
+	field('userPassword2').value = 'pw2';
+	field('userSave').click();
+	check('sec.usersMismatch', field('userError').innerText.indexOf('match') > 0 &&
+		ui.dialog.container.querySelectorAll('[data-hmi-user]').length === 2);
+	field('userPassword2').value = 'pw1';
+	field('userSave').click();
+	field('userName').value = 'Bad';
+	field('userLevel').value = '10000';
+	field('userPassword').value = 'x';
+	field('userPassword2').value = 'x';
+	field('userSave').click();
+	check('sec.usersLevelChecked', field('userError').innerText.indexOf('9999') > 0);
+	ui.dialog.container.querySelector('.hmiOk').click();
+	var maint = S.findUser(p.users, 'maint');
+	check('sec.usersAdded', p.users.length === 3 && maint != null && maint.level === 500 &&
+		S.verify(maint, 'pw1') && maint.password == null, JSON.stringify(p.users.map(function(u) { return u.name; })));
+
+	// At run time the dialog saves through the manager, and the logged-in user stays
+	HmiDialogs.showUsers(ui, {runtime: mgr});
+	var superRow = ui.dialog.container.querySelector('[data-hmi-user="Super"] [data-hmi-field="remove"]');
+	superRow.click();
+	check('sec.cannotRemoveSelf', field('userError').innerText.indexOf('logged in') > 0 &&
+		ui.dialog.container.querySelectorAll('[data-hmi-user]').length === 2);
+	ui.dialog.container.querySelector('[data-hmi-user="Operator"] [data-hmi-field="remove"]').click();
+	ui.dialog.container.querySelector('.hmiOk').click();
+	check('sec.runtimeSave', mgr.users.length === 1 && saved.length === 2 && saved[1].length === 1 &&
+		p.users.length === 3);
+
+	// Run hands runtime users to the manager in place of the project's
+	HmiMenus.startWith(ui, p, false, null, null, [{name: 'Solo', level: 7, salt: h.salt, hash: h.hash,
+		iterations: h.iterations}]);
+	var run = ui.hmiRuntime;
+	check('sec.runUsesSavedUsers', run != null && run.security.users.length === 1 &&
+		run.security.login('Solo', 'secret') && run.windows[0].runtime.evaluate('_AccessLevel').value === 7);
+	HmiMenus.stop(ui);
+
+	check('sec.menu', ui.actions.get('hmiUsers') != null && ui.actions.get('hmiClearRuntimeUsers') != null);
+
+	// Automation spec: passwords hashed at build, hashes dumped
+	var errors = [];
+	var built = HmiCli.buildProject({settings: {security: {autoLogoutMin: 10}},
+		users: [{name: 'Lead', level: 800, password: 'pw'}, {name: 'None', password: 'x'},
+			{name: 'X', level: 1, password: 'y', colour: 'red'}]}, errors);
+	check('sec.cliUsers', built.users.length === 2 && S.verify(built.users[0], 'pw') &&
+		built.settings.security.autoLogoutMin === 10 && errors.length === 2 &&
+		errors[0].indexOf('None') > 0 && errors[1].indexOf('colour') > 0, JSON.stringify(errors));
+
+	ui.hmiProject = savedProject;
 };
 
 HmiSelfTest.hasFileType = function(types, ext)

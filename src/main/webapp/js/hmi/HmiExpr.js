@@ -49,7 +49,16 @@ HmiExpr.FUNCTIONS = {
 	'Max': {arity: 2, fn: function(a, b) { return Math.max(HmiExpr.num(a), HmiExpr.num(b)); }},
 	'Sqr': {arity: 1, fn: function(a) { return HmiExpr.num(a) * HmiExpr.num(a); }},
 	'StringLen': {arity: 1, fn: function(a) { return ('' + a).length; }},
-	'Text': {arity: 2, fn: function(a, b) { return HmiExpr.picture(HmiExpr.num(a), '' + b); }}
+	'Text': {arity: 2, fn: function(a, b) { return HmiExpr.picture(HmiExpr.num(a), '' + b); }},
+
+	// Actions, for scripts only: they run through the runtime (ctx.call) and
+	// have effects, so an expression re-evaluated on every change must not
+	// call them
+	'ShowLogin': {arity: 0, action: true},
+	'Login': {arity: 2, action: true},
+	'Logout': {arity: 0, action: true},
+	'ChangePassword': {arity: 2, action: true},
+	'ShowUserManager': {arity: 0, action: true}
 };
 
 HmiExpr.num = function(v)
@@ -825,6 +834,10 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 		this.error(name + ' takes ' + def.arity + ' argument' +
 			((def.arity === 1) ? '' : 's') + ', got ' + args.length, token);
 	}
+	else if (def.action && this.opts.mode !== 'script')
+	{
+		this.error(name + '() can only be used in a script', token);
+	}
 
 	return {type: 'call', name: name, args: args};
 };
@@ -1052,6 +1065,14 @@ HmiExpr.Evaluator.prototype.eval_call = function(node)
 	}
 
 	var meta = HmiExpr.combine(parts);
+
+	if (def.action)
+	{
+		var result = (this.ctx.call != null) ? this.ctx.call(node.name, args) : null;
+
+		return {value: result, quality: (result != null) ? HmiTypes.QUALITY_GOOD : HmiTypes.QUALITY_BAD,
+			timestamp: Date.now()};
+	}
 
 	return {value: def.fn.apply(null, args), quality: meta.quality,
 		timestamp: meta.timestamp};

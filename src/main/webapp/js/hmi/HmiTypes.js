@@ -78,7 +78,11 @@ HmiTypes.SYSTEM_TAGS = {
 	'_AlarmsUnacked': {type: 'MemoryInteger', readOnly: true,
 		comment: 'Number of unacknowledged alarms'},
 	'_AckAll': {type: 'MemoryDiscrete', readOnly: false,
-		comment: 'Write 1 to acknowledge all alarms'}
+		comment: 'Write 1 to acknowledge all alarms'},
+	'_Username': {type: 'MemoryMessage', readOnly: true,
+		comment: 'The logged-in user, "None" when nobody is'},
+	'_AccessLevel': {type: 'MemoryInteger', readOnly: true,
+		comment: "The logged-in user's access level, 0 when nobody is"}
 };
 
 /** The system tag's canonical name, or null. Case-insensitive like tag names. */
@@ -221,7 +225,16 @@ HmiTypes.defineLink = function(key, def)
 				fill: '#FF0000', line: '#FFFFFF', text: '#000000', blank: false};
 		}});
 
-	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 2,
+	// Enable gates every touch link on the object, in the Visibility style:
+	// enabled while the expression is true (or false, with sense 'disabled')
+	def('enable', {code: 586, family: 'display', label: 'Enable', milestone: 2,
+		defaults: function()
+		{
+			return {expr: '', sense: 'enabled'};
+		}});
+
+	// Superseded by Enable; still applied in existing projects, not offered
+	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 99,
 		defaults: function()
 		{
 			return {expr: ''};
@@ -242,7 +255,7 @@ HmiTypes.defineLink = function(key, def)
 		defaults: function()
 		{
 			return {kind: 'analog', tag: '', min: '', max: '',
-				prompt: 'Enter value', keypad: true};
+				prompt: 'Enter value', keypad: true, masked: false};
 		}});
 
 	def('pushbutton', {code: 401, family: 'touch', label: 'Pushbutton', milestone: 1,

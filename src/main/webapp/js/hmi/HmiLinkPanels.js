@@ -135,6 +135,21 @@
 			]));
 	};
 
+	// Enable, in the Visibility style: touch links work only while enabled
+	B['enable'] = function(content, cfg)
+	{
+		this.addRow(content, mxResources.get('hmiExpression'),
+			this.createExprField(cfg, 'expr', 'condition, e.g. _AccessLevel >= 500'));
+		this.addRow(content, mxResources.get('hmiSense'),
+			this.createSelectField(cfg, 'sense', [
+				{value: 'enabled', label: 'Enabled while true'},
+				{value: 'disabled', label: 'Disabled while true'}
+			]));
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'A disabled object ignores touch: pushbuttons, user input, sliders and ' +
+			'window links do nothing.'));
+	};
+
 	// ---------------------------------------------------------------- blink
 
 	B['blink'] = function(content, cfg)
@@ -269,6 +284,12 @@
 			this.addRow(content, '', this.createCheckField(cfg, 'keypad',
 				(cfg.kind === 'analog') ?
 					'On-screen keypad' : 'On-screen keyboard'));
+		}
+
+		// Passwords: the entry shows dots and not the current value
+		if (cfg.kind === 'string')
+		{
+			this.addRow(content, '', this.createCheckField(cfg, 'masked', 'Masked input'));
 		}
 	};
 

@@ -29,6 +29,9 @@ HmiRuntime = function(config)
 	// The Run's HmiAlarmManager, when there is one (dotfields, system tags)
 	this.alarms = config.alarms || null;
 
+	// The Run's HmiSecurityManager (_Username, _AccessLevel, Login() ...)
+	this.security = config.security || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -86,6 +89,12 @@ HmiRuntime.prototype.start = function()
 	{
 		this.onAlarmNames = function(names) { that.invalidateNames(names); };
 		this.alarms.on('names', this.onAlarmNames);
+	}
+
+	if (this.security != null)
+	{
+		this.onSecurityNames = function(names) { that.invalidateNames(names); };
+		this.security.on('names', this.onSecurityNames);
 	}
 
 	this.installInput();
@@ -150,6 +159,12 @@ HmiRuntime.prototype.stop = function()
 	{
 		this.alarms.off('names', this.onAlarmNames);
 		this.onAlarmNames = null;
+	}
+
+	if (this.onSecurityNames != null)
+	{
+		this.security.off('names', this.onSecurityNames);
+		this.onSecurityNames = null;
 	}
 
 	this.driver.unsubscribe();
@@ -404,6 +419,8 @@ HmiRuntime.prototype.context = function()
 		this.ctx = {
 			read: function(name, field) { return that.readField(name, field); },
 			write: function(name, value, field) { that.writeField(name, value, field); },
+			// Script actions (Login(), ShowLogin() ...)
+			call: function(name, args) { return (that.security != null) ? that.security.call(name, args) : null; },
 			now: function() { return Date.now(); }
 		};
 	}
@@ -447,8 +464,10 @@ HmiRuntime.prototype.readField = function(name, field)
 
 	if (system != null)
 	{
-		return (this.alarms != null && (field == null || field === 'Value')) ?
-			this.alarms.readSystem(system) :
+		var provider = (system === '_Username' || system === '_AccessLevel') ? this.security : this.alarms;
+
+		return (provider != null && (field == null || field === 'Value')) ?
+			provider.readSystem(system) :
 			{value: (field === 'Name') ? system : null,
 				quality: (field === 'Name') ? HmiTypes.QUALITY_GOOD : HmiTypes.QUALITY_BAD,
 				timestamp: Date.now()};
@@ -708,7 +727,15 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 	else if (key === 'disable')
 	{
 		var r = this.evaluate(cfg.expr);
-		visual.disabled = HmiRuntime.truthy(r.value);
+		visual.disabled = visual.disabled === true || HmiRuntime.truthy(r.value);
+	}
+	else if (key === 'enable')
+	{
+		// Bad quality disables: an input that cannot be checked is not trusted
+		var r = this.evaluate(cfg.expr);
+		var on = HmiRuntime.truthy(r.value);
+		var enabled = r.quality > HmiTypes.QUALITY_BAD && ((cfg.sense === 'disabled') ? !on : on);
+		visual.disabled = visual.disabled === true || !enabled;
 	}
 	else if (key === 'orientation')
 	{

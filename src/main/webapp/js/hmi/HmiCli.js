@@ -221,6 +221,8 @@ HmiCli.TAG_FIELDS = ['comment', 'engUnits', 'initial', 'minEU', 'maxEU', 'scaled
 
 HmiCli.DEVICE_FIELDS = ['host', 'port', 'timeoutMs', 'scanMs', 'enabled', 'options'];
 
+HmiCli.USER_FIELDS = ['name', 'level', 'password', 'salt', 'hash', 'iterations'];
+
 HmiCli.WINDOW_FIELDS = ['titleBar', 'type', 'x', 'y', 'width', 'height', 'onShow', 'whileShowing',
 	'onHide', 'everyMs'];
 
@@ -405,7 +407,94 @@ HmiCli.buildProject = function(spec, errors)
 		hmi.settings.publish = JSON.parse(JSON.stringify(s.publish));
 	}
 
+	if (s.security != null)
+	{
+		for (var key in s.security)
+		{
+			if (key !== 'autoLogoutMin')
+			{
+				errors.push('settings.security: unknown field "' + key + '" (allowed: autoLogoutMin)');
+			}
+		}
+
+		var logout = Number(s.security.autoLogoutMin || 0);
+
+		if (!(logout >= 0 && logout <= 1440 && Math.floor(logout) === logout))
+		{
+			errors.push('settings.security.autoLogoutMin: whole minutes from 0 to 1440');
+		}
+
+		hmi.settings.security.autoLogoutMin = logout;
+	}
+
+	HmiCli.buildUsers(hmi, spec.users || [], errors);
+
 	return hmi;
+};
+
+/**
+ * Users: {name, level, password} is hashed here; a dump gives salt, hash
+ * and iterations instead, so no password is ever written to a project.
+ */
+HmiCli.buildUsers = function(hmi, users, errors)
+{
+	for (var i = 0; i < users.length; i++)
+	{
+		var u = users[i] || {};
+		var what = 'user ' + (u.name || (i + 1));
+
+		for (var key in u)
+		{
+			if (mxUtils.indexOf(HmiCli.USER_FIELDS, key) < 0)
+			{
+				errors.push(what + ': unknown field "' + key + '" (allowed: ' +
+					HmiCli.USER_FIELDS.join(', ') + ')');
+			}
+		}
+
+		if (!HmiSecurity.validName(u.name))
+		{
+			errors.push(what + ': the name must be 1 to 32 letters, digits, spaces or ._@- and not "None"');
+			continue;
+		}
+
+		if (HmiSecurity.findUser(hmi.users, u.name) != null)
+		{
+			errors.push(what + ': defined twice');
+			continue;
+		}
+
+		var level = (u.level == null) ? 0 : Number(u.level);
+
+		if (!HmiSecurity.validLevel(level))
+		{
+			errors.push(what + ': level must be a whole number from 0 to 9999');
+			continue;
+		}
+
+		var user = {name: u.name, level: level};
+
+		if (u.salt && u.hash)
+		{
+			user.salt = String(u.salt);
+			user.hash = String(u.hash);
+			user.iterations = Number(u.iterations) || HmiSecurity.ITERATIONS;
+		}
+		else if (u.password != null && String(u.password) !== '')
+		{
+			var h = HmiSecurity.hashPassword(String(u.password));
+			user.salt = h.salt;
+			user.hash = h.hash;
+			user.iterations = h.iterations;
+		}
+		else
+		{
+			errors.push(what + ': needs a password');
+			continue;
+		}
+
+		hmi.users.push(user);
+	}
 };
 
 HmiCli.applyPassword = function(hmi, spec)
@@ -668,6 +757,19 @@ HmiCli.dump = function(ui)
 	{
 		delete spec.settings.runtime.salt;
 		delete spec.settings.runtime.hash;
+	}
+
+	if (hmi.settings.security.autoLogoutMin > 0)
+	{
+		spec.settings.security = {autoLogoutMin: hmi.settings.security.autoLogoutMin};
+	}
+
+	if (hmi.users.length > 0)
+	{
+		spec.users = hmi.users.map(function(u)
+		{
+			return {name: u.name, level: u.level, salt: u.salt, hash: u.hash, iterations: u.iterations};
+		});
 	}
 
 	for (var i = 0; i < hmi.devices.length; i++)

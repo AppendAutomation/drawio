@@ -17,6 +17,9 @@ HmiProject = function()
 	this.settings = HmiProject.defaultSettings();
 	this.windows = {};
 
+	// Users: {name, level, salt, hash, iterations} (see HmiSecurity)
+	this.users = [];
+
 	// Compilation resolves tag names against this dictionary, so the expression
 	// cache is keyed on both of these. The uid is needed as well as the
 	// revision because two different projects can easily sit at the same
@@ -47,6 +50,8 @@ HmiProject.prototype.isEmpty = function()
 		this.settings.startup.length === 0 &&
 		JSON.stringify(this.settings.runtime) === JSON.stringify(d.runtime) &&
 		JSON.stringify(this.settings.publish) === JSON.stringify(d.publish) &&
+		JSON.stringify(this.settings.security) === JSON.stringify(d.security) &&
+		this.users.length === 0 &&
 		Object.keys(this.windows).length === 0;
 };
 
@@ -61,7 +66,7 @@ HmiProject.RESOLUTIONS = [
 HmiProject.defaultSettings = function()
 {
 	return {width: 1024, height: 768, startup: [],
-		runtime: HmiProject.defaultRuntime(), publish: {}};
+		runtime: HmiProject.defaultRuntime(), publish: {}, security: {autoLogoutMin: 0}};
 };
 
 /**
@@ -609,6 +614,32 @@ HmiProject.prototype.toXml = function(doc)
 
 	root.appendChild(settings);
 
+	if (this.settings.security.autoLogoutMin > 0)
+	{
+		var sec = doc.createElement('security');
+		sec.setAttribute('autoLogoutMin', '' + this.settings.security.autoLogoutMin);
+		settings.appendChild(sec);
+	}
+
+	if (this.users.length > 0)
+	{
+		var users = doc.createElement('users');
+
+		for (var i = 0; i < this.users.length; i++)
+		{
+			var u = this.users[i];
+			var un = doc.createElement('user');
+			un.setAttribute('name', u.name);
+			un.setAttribute('level', '' + u.level);
+			un.setAttribute('salt', u.salt || '');
+			un.setAttribute('hash', u.hash || '');
+			un.setAttribute('iterations', '' + (u.iterations || HmiSecurity.ITERATIONS));
+			users.appendChild(un);
+		}
+
+		root.appendChild(users);
+	}
+
 	var windows = doc.createElement('windows');
 	var ids = Object.keys(this.windows).sort();
 
@@ -845,6 +876,27 @@ HmiProject.fromXml = function(node)
 				}
 			}
 		}
+	}
+
+	var security = node.getElementsByTagName('security');
+
+	if (security.length > 0)
+	{
+		var min = parseFloat(security[0].getAttribute('autoLogoutMin'));
+		project.settings.security.autoLogoutMin = (min > 0) ? min : 0;
+	}
+
+	var userNodes = node.getElementsByTagName('user');
+
+	for (var i = 0; i < userNodes.length; i++)
+	{
+		var un = userNodes[i];
+		var level = parseInt(un.getAttribute('level'), 10);
+
+		project.users.push({name: un.getAttribute('name') || '',
+			level: isNaN(level) ? 0 : level,
+			salt: un.getAttribute('salt') || '', hash: un.getAttribute('hash') || '',
+			iterations: parseInt(un.getAttribute('iterations'), 10) || HmiSecurity.ITERATIONS});
 	}
 
 	var windows = node.getElementsByTagName('window');

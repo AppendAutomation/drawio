@@ -1548,6 +1548,17 @@ HmiDialogs.showAppSettings = function(ui)
 	pwRow = pwInput.parentNode;
 	pwRow.style.display = (exitMode === 'password') ? '' : 'none';
 
+	// Users log in with ShowLogin(); HMI > Users defines them
+	var sec = project.settings.security;
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Security'));
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Logs the user out after this many minutes without a touch or key ' +
+		'press. 0 never logs out.'));
+	var logoutInput = HmiDialogs.field(body, 'Log out after (min)', String(sec.autoLogoutMin || 0),
+		function() {});
+	logoutInput.setAttribute('data-hmi-field', 'autoLogoutMin');
+
 	var error = HmiDialogs.el('div', 'hmiError');
 	body.appendChild(error);
 	div.appendChild(body);
@@ -1566,6 +1577,14 @@ HmiDialogs.showAppSettings = function(ui)
 		}
 
 		var password = pwInput.value;
+		var logout = Number(logoutInput.value);
+
+		if (!(logout >= 0 && logout <= 1440 && Math.floor(logout) === logout))
+		{
+			error.innerText = 'Log out after must be a whole number of minutes from 0 to 1440.';
+
+			return false;
+		}
 
 		if (exitMode === 'password' && !password && !rt.hash)
 		{
@@ -1587,7 +1606,10 @@ HmiDialogs.showAppSettings = function(ui)
 		var s = project.settings;
 		var changed = s.width !== w || s.height !== h ||
 			s.startup.join('\n') !== ids.join('\n') ||
-			rt.windowMode !== windowMode || rt.exit !== exitMode;
+			rt.windowMode !== windowMode || rt.exit !== exitMode ||
+			(sec.autoLogoutMin || 0) !== logout;
+
+		sec.autoLogoutMin = logout;
 
 		// Windows left at full-screen size follow the new resolution, since
 		// an unset size means "the screen".
@@ -2089,8 +2111,18 @@ HmiDialogs.showUserInput = function(ui, cfg, runtime)
 	}
 	else
 	{
-		input = HmiDialogs.field(body, 'Value',
-			(current.value != null) ? current.value : '', function() {});
+		// A masked entry (passwords) neither shows what is typed nor the
+		// value it replaces
+		var masked = cfg.kind === 'string' && cfg.masked === true;
+
+		input = HmiDialogs.field(body, 'Value', (masked) ? '' :
+			((current.value != null) ? current.value : ''), function() {},
+			(masked) ? 'password' : null);
+
+		if (masked)
+		{
+			input.setAttribute('autocomplete', 'off');
+		}
 
 		// Show the limits rather than only enforcing them: being told a value
 		// is out of range after typing it is a poor substitute for knowing the
@@ -2956,4 +2988,337 @@ HmiDialogs.showLicences = function(ui, info)
 	div.appendChild(footer);
 
 	ui.showDialog(div, 640, 520, true, true);
+};
+
+// ---------------------------------------------------------------- security
+
+/**
+ * An on-screen keyboard that types into whichever of the given inputs last
+ * had focus (the login and user dialogs have several fields).
+ */
+HmiDialogs.sharedKeyboard = function(inputs)
+{
+	var target = inputs[0];
+
+	for (var i = 0; i < inputs.length; i++)
+	{
+		(function(el)
+		{
+			mxEvent.addListener(el, 'focus', function() { target = el; });
+		})(inputs[i]);
+	}
+
+	var proxy = {
+		focus: function() { target.focus(); }
+	};
+
+	Object.defineProperty(proxy, 'value', {
+		get: function() { return target.value; },
+		set: function(v) { target.value = v; }
+	});
+
+	return HmiDialogs.keyboard(proxy);
+};
+
+/**
+ * The prebuilt login window (ShowLogin()): user name and a masked password,
+ * checked by the Run's HmiSecurityManager.
+ */
+HmiDialogs.showLogin = function(ui, security)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog hmiLogin');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Log In'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	var name = HmiDialogs.field(body, 'User name', '', function() {});
+	name.setAttribute('data-hmi-field', 'loginName');
+	name.setAttribute('autocomplete', 'off');
+	var password = HmiDialogs.field(body, 'Password', '', function() {}, 'password');
+	password.setAttribute('data-hmi-field', 'loginPassword');
+	password.setAttribute('autocomplete', 'off');
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	error.setAttribute('data-hmi-field', 'loginError');
+	body.appendChild(error);
+
+	var keyboard = HmiDialogs.sharedKeyboard([name, password]);
+	keyboard.style.display = 'none';
+	body.appendChild(keyboard);
+	div.appendChild(body);
+
+	var submit = function()
+	{
+		if (security.login(name.value.trim(), password.value))
+		{
+			ui.hideDialog();
+		}
+		else
+		{
+			password.value = '';
+			error.innerText = 'Invalid user name or password.';
+			password.focus();
+		}
+	};
+
+	mxEvent.addListener(name, 'keydown', function(evt)
+	{
+		if (evt.keyCode == 13) { password.focus(); }
+	});
+
+	mxEvent.addListener(password, 'keydown', function(evt)
+	{
+		if (evt.keyCode == 13) { submit(); }
+	});
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	var kb = HmiDialogs.button('Keyboard', function()
+	{
+		var show = keyboard.style.display === 'none';
+		keyboard.style.display = (show) ? '' : 'none';
+		ui.dialog.container.style.height = (show ? 470 : 250) + 'px';
+	});
+	footer.appendChild(kb);
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function() { ui.hideDialog(); }));
+	var ok = HmiDialogs.button('Log In', submit, true);
+	ok.setAttribute('data-hmi-field', 'loginSubmit');
+	footer.appendChild(ok);
+	div.appendChild(footer);
+
+	ui.showDialog(div, 560, 250, true, true);
+	window.setTimeout(function() { name.focus(); }, 0);
+};
+
+/**
+ * Users and their access levels. In the editor (HMI > Users) this edits the
+ * project; at run time (ShowUserManager(), options.runtime = the Run's
+ * HmiSecurityManager) it edits the running list, which is saved on the
+ * target PC. Passwords are only ever kept as hashes.
+ */
+HmiDialogs.showUsers = function(ui, options)
+{
+	var security = (options != null) ? options.runtime : null;
+	var project = ui.hmiProject;
+
+	if (security == null && project == null)
+	{
+		return;
+	}
+
+	var users = HmiSecurity.copyUsers((security != null) ? security.users : project.users);
+	var editing = null;
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiUsers');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Users'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', 'hmiHint', (security != null) ?
+		'Changes are saved on this computer and replace the application\'s users here.' :
+		'Access levels run from 0 to 9999. Animations read the logged-in user through ' +
+		'_Username and _AccessLevel; ShowLogin() in a script opens the login window.'));
+
+	var list = HmiDialogs.el('div', 'hmiFormBox hmiUserList');
+	body.appendChild(list);
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'User'));
+	var nameInput = HmiDialogs.field(body, 'Name', '', function() {});
+	nameInput.setAttribute('data-hmi-field', 'userName');
+	var levelInput = HmiDialogs.field(body, 'Access level', '0', function() {});
+	levelInput.setAttribute('data-hmi-field', 'userLevel');
+	var pwInput = HmiDialogs.field(body, 'Password', '', function() {}, 'password');
+	pwInput.setAttribute('data-hmi-field', 'userPassword');
+	pwInput.setAttribute('autocomplete', 'new-password');
+	var pw2Input = HmiDialogs.field(body, 'Confirm password', '', function() {}, 'password');
+	pw2Input.setAttribute('data-hmi-field', 'userPassword2');
+	pw2Input.setAttribute('autocomplete', 'new-password');
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	error.setAttribute('data-hmi-field', 'userError');
+	body.appendChild(error);
+
+	var keyboard = null;
+
+	if (security != null)
+	{
+		keyboard = HmiDialogs.sharedKeyboard([nameInput, levelInput, pwInput, pw2Input]);
+		keyboard.style.display = 'none';
+		body.appendChild(keyboard);
+	}
+
+	div.appendChild(body);
+
+	var clearForm = function()
+	{
+		editing = null;
+		nameInput.value = '';
+		levelInput.value = '0';
+		pwInput.value = '';
+		pw2Input.value = '';
+		pwInput.setAttribute('placeholder', '');
+		save.innerText = 'Add';
+		error.innerText = '';
+	};
+
+	var render = function()
+	{
+		list.innerHTML = '';
+
+		if (users.length === 0)
+		{
+			list.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'No users.'));
+		}
+
+		for (var i = 0; i < users.length; i++)
+		{
+			(function(u)
+			{
+				var row = HmiDialogs.el('div', 'hmiUserRow');
+				row.setAttribute('data-hmi-user', u.name);
+				row.appendChild(HmiDialogs.el('span', 'hmiUserName', u.name));
+				row.appendChild(HmiDialogs.el('span', 'hmiUserLevel', String(u.level)));
+
+				row.appendChild(HmiDialogs.button('Edit', function()
+				{
+					editing = u;
+					nameInput.value = u.name;
+					levelInput.value = String(u.level);
+					pwInput.value = '';
+					pw2Input.value = '';
+					pwInput.setAttribute('placeholder', 'Unchanged');
+					save.innerText = 'Update';
+					error.innerText = '';
+				}));
+
+				var remove = HmiDialogs.button('Remove', function()
+				{
+					// Nobody removes the account they are using
+					if (security != null && security.user != null &&
+						security.user.name.toLowerCase() === u.name.toLowerCase())
+					{
+						error.innerText = 'You cannot remove the user you are logged in as.';
+
+						return;
+					}
+
+					users.splice(mxUtils.indexOf(users, u), 1);
+					changed = true;
+					clearForm();
+					render();
+				});
+				remove.setAttribute('data-hmi-field', 'remove');
+				row.appendChild(remove);
+				list.appendChild(row);
+			})(users[i]);
+		}
+	};
+
+	var changed = false;
+
+	var save = HmiDialogs.button('Add', function()
+	{
+		var name = nameInput.value.trim();
+		var level = Number(levelInput.value.trim());
+		var other = HmiSecurity.findUser(users, name);
+
+		if (!HmiSecurity.validName(name))
+		{
+			error.innerText = 'A name has 1 to 32 letters, digits, spaces or . _ - @ and cannot be "None".';
+
+			return;
+		}
+
+		if (other != null && other !== editing)
+		{
+			error.innerText = 'There is already a user named "' + other.name + '".';
+
+			return;
+		}
+
+		if (!HmiSecurity.validLevel(level))
+		{
+			error.innerText = 'The access level is a whole number from 0 to 9999.';
+
+			return;
+		}
+
+		if (pwInput.value !== pw2Input.value)
+		{
+			error.innerText = 'The passwords do not match.';
+
+			return;
+		}
+
+		if (editing == null && pwInput.value === '')
+		{
+			error.innerText = 'Enter a password.';
+
+			return;
+		}
+
+		var u = editing || {};
+		u.name = name;
+		u.level = level;
+
+		if (pwInput.value !== '')
+		{
+			var h = HmiSecurity.hashPassword(pwInput.value);
+			u.salt = h.salt;
+			u.hash = h.hash;
+			u.iterations = h.iterations;
+		}
+
+		if (editing == null)
+		{
+			users.push(u);
+		}
+
+		changed = true;
+		clearForm();
+		render();
+	});
+	save.setAttribute('data-hmi-field', 'userSave');
+
+	var formButtons = HmiDialogs.el('div', 'hmiFormRow');
+	formButtons.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	formButtons.appendChild(HmiDialogs.button('New', clearForm));
+	formButtons.appendChild(save);
+	body.insertBefore(formButtons, error);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+
+	if (keyboard != null)
+	{
+		footer.appendChild(HmiDialogs.button('Keyboard', function()
+		{
+			keyboard.style.display = (keyboard.style.display === 'none') ? '' : 'none';
+		}));
+	}
+
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function() { ui.hideDialog(); }));
+
+	var ok = HmiDialogs.button(mxResources.get('ok'), function()
+	{
+		if (changed)
+		{
+			if (security != null)
+			{
+				security.setUsers(users);
+			}
+			else
+			{
+				project.users = HmiSecurity.copyUsers(users);
+				project.touch();
+				ui.editor.setModified(true);
+			}
+		}
+
+		ui.hideDialog();
+	}, true);
+	ok.className += ' hmiOk';
+	footer.appendChild(ok);
+	div.appendChild(footer);
+
+	render();
+	ui.showDialog(div, 560, (security != null) ? 720 : 560, true, true);
 };

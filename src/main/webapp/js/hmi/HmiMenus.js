@@ -272,6 +272,16 @@ HmiMenus.installActions = function()
 			{
 				HmiMenus.clearRetentive(ui);
 			});
+
+			this.addAction('hmiUsers...', function()
+			{
+				HmiDialogs.showUsers(ui);
+			});
+
+			this.addAction('hmiClearRuntimeUsers...', function()
+			{
+				HmiMenus.clearRuntimeUsers(ui);
+			});
 		}));
 	};
 };
@@ -297,13 +307,13 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
-					'hmiDevices', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'hmiDevices', 'hmiUsers', '-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
 
-				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive'], parent);
+				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers'], parent);
 			})));
 		}));
 	};
@@ -414,11 +424,12 @@ HmiMenus.start = function(ui, options)
 		return;
 	}
 
-	// Retentive tags start from their saved values, which have to be read
-	// first; without any, the Run starts at once as it always has
+	// Retentive tags' saved values and the users changed at run time
+	// (ShowUserManager) are read first; with nowhere to read them from (the
+	// self tests, a browser), the Run starts at once as it always has
 	var store = HmiMenus.alarmStore(ui, runtime);
 
-	if (store != null && HmiRetentive.tags(project).length > 0 && HmiRetentive.available())
+	if (store != null && HmiRetentive.available())
 	{
 		if (ui.hmiStarting)
 		{
@@ -427,23 +438,43 @@ HmiMenus.start = function(ui, options)
 
 		ui.hmiStarting = true;
 
-		HmiRetentive.load(store, function(values)
+		var retained = {};
+		var users = null;
+		var pending = 2;
+
+		var ready = function()
 		{
+			if (--pending > 0)
+			{
+				return;
+			}
+
 			ui.hmiStarting = false;
 
 			if (!HmiMenus.isRunning(ui) && ui.hmiProject === project)
 			{
-				HmiMenus.startWith(ui, project, runtime, store, values);
+				HmiMenus.startWith(ui, project, runtime, store, retained, users);
 			}
-		});
+		};
+
+		if (HmiRetentive.tags(project).length > 0)
+		{
+			HmiRetentive.load(store, function(values) { retained = values; ready(); });
+		}
+		else
+		{
+			ready();
+		}
+
+		HmiSecurity.loadUsers(store, function(list) { users = list; ready(); });
 
 		return;
 	}
 
-	HmiMenus.startWith(ui, project, runtime, store, {});
+	HmiMenus.startWith(ui, project, runtime, store, {}, null);
 };
 
-HmiMenus.startWith = function(ui, project, runtime, store, retained)
+HmiMenus.startWith = function(ui, project, runtime, store, retained, users)
 {
 	HmiLog.guard('run.start', function()
 	{
@@ -473,7 +504,7 @@ HmiMenus.startWith = function(ui, project, runtime, store, retained)
 
 		ui.hmiRunOnly = runtime;
 		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime,
-			alarmStore: store, retentiveStore: store, retained: retained});
+			alarmStore: store, retentiveStore: store, retained: retained, users: users});
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
@@ -531,6 +562,36 @@ HmiMenus.clearRetentive = function(ui)
 				}
 			});
 		}, null, 'Clear', mxResources.get('cancel'));
+};
+
+/**
+ * Forgets user changes made at run time with ShowUserManager(), so the next
+ * Run uses the project's users again.
+ */
+HmiMenus.clearRuntimeUsers = function(ui)
+{
+	var store = HmiMenus.alarmStore(ui, false);
+
+	if (store == null || window.electron == null || typeof window.electron.request !== 'function')
+	{
+		return;
+	}
+
+	if (HmiMenus.isRunning(ui))
+	{
+		ui.showError(mxResources.get('hmiClearRuntimeUsers'), 'Stop the Run first.', mxResources.get('ok'));
+
+		return;
+	}
+
+	ui.confirm('Forget the user changes made at run time on this computer? The next Run uses ' +
+		'the users defined in HMI > Users.', function()
+	{
+		window.electron.request({action: 'hmiUsers.clear', store: store}, function() {}, function(message)
+		{
+			ui.showError(mxResources.get('error'), message, mxResources.get('ok'));
+		});
+	}, null, 'Clear', mxResources.get('cancel'));
 };
 
 HmiMenus.stop = function(ui)

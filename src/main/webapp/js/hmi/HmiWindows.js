@@ -205,6 +205,11 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.alarms = new HmiAlarmManager(project, this.hub.client(), {store: store,
 		persist: function(events) { HmiAlarms.persist(store, events); }});
 
+	// Who is logged in; options.users is the runtime's saved user list
+	this.security = new HmiSecurityManager(project, {ui: ui,
+		store: (options != null) ? options.retentiveStore : null,
+		users: (options != null) ? options.users : null});
+
 	// Retentive tags' values are saved while the Run goes on
 	this.retentive = new HmiRetentiveKeeper(project, this.hub.client(), {
 		store: (options != null) ? options.retentiveStore : null,
@@ -232,6 +237,7 @@ HmiWindowManager.prototype.start = function()
 	// Before any window: alarms are watched whether or not a window shows them
 	this.alarms.start();
 	this.retentive.start();
+	this.security.start();
 
 	var pages = this.startupPages();
 
@@ -258,6 +264,8 @@ HmiWindowManager.prototype.stop = function()
 	{
 		this.close(this.windows[this.windows.length - 1]);
 	}
+
+	this.security.stop();
 
 	// The last values are saved as the Run ends
 	this.retentive.stop();
@@ -624,7 +632,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	this.place(win);
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
-		driver: this.hub.client(), alarms: this.alarms});
+		driver: this.hub.client(), alarms: this.alarms, security: this.security});
 
 	runtime.onUserInput = function(cfg, binding)
 	{
