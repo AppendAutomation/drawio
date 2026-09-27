@@ -13,7 +13,7 @@ HmiBrand.NAME = 'Append HMI Studio';
 
 HmiBrand.PUBLISHER = 'Append Automation';
 
-HmiBrand.HOMEPAGE = 'https://github.com/AppendAutomation/append-hmi-studio';
+HmiBrand.HOMEPAGE = 'https://github.com/AppendAutomation/AppendHMIStudio';
 
 HmiBrand.ISSUES = HmiBrand.HOMEPAGE + '/issues';
 
