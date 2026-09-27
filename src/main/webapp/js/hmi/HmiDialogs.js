@@ -3098,12 +3098,13 @@ HmiDialogs.showLogin = function(ui, security)
 HmiDialogs.showUsers = function(ui, options)
 {
 	var security = (options != null) ? options.runtime : null;
-	var project = ui.hmiProject;
 
-	if (security == null && project == null)
+	if (security == null && ui.hmiProject == null)
 	{
-		return;
+		ui.hmiProject = HmiFile.createDefaultProject();
 	}
+
+	var project = ui.hmiProject;
 
 	var users = HmiSecurity.copyUsers((security != null) ? security.users : project.users);
 	var editing = null;
@@ -3117,7 +3118,7 @@ HmiDialogs.showUsers = function(ui, options)
 		'Access levels run from 0 to 9999. Animations read the logged-in user through ' +
 		'_Username and _AccessLevel; ShowLogin() in a script opens the login window.'));
 
-	var list = HmiDialogs.el('div', 'hmiFormBox hmiUserList');
+	var list = HmiDialogs.el('div', 'hmiUserList');
 	body.appendChild(list);
 
 	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'User'));
@@ -3163,21 +3164,33 @@ HmiDialogs.showUsers = function(ui, options)
 	{
 		list.innerHTML = '';
 
+		var table = HmiDialogs.el('table', 'hmiUserTable');
+		var head = HmiDialogs.el('tr');
+		head.appendChild(HmiDialogs.el('th', 'hmiUserName', 'User'));
+		head.appendChild(HmiDialogs.el('th', 'hmiUserLevel', 'Access Level'));
+		head.appendChild(HmiDialogs.el('th', 'hmiUserActions', ''));
+		table.appendChild(HmiDialogs.el('thead')).appendChild(head);
+		var tbody = table.appendChild(HmiDialogs.el('tbody'));
+		list.appendChild(table);
+
 		if (users.length === 0)
 		{
-			list.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'No users.'));
+			var empty = HmiDialogs.el('td', 'hmiEmpty', 'No users.');
+			empty.setAttribute('colspan', '3');
+			tbody.appendChild(HmiDialogs.el('tr')).appendChild(empty);
 		}
 
 		for (var i = 0; i < users.length; i++)
 		{
 			(function(u)
 			{
-				var row = HmiDialogs.el('div', 'hmiUserRow');
+				var row = HmiDialogs.el('tr', 'hmiUserRow');
 				row.setAttribute('data-hmi-user', u.name);
-				row.appendChild(HmiDialogs.el('span', 'hmiUserName', u.name));
-				row.appendChild(HmiDialogs.el('span', 'hmiUserLevel', String(u.level)));
+				row.appendChild(HmiDialogs.el('td', 'hmiUserName', u.name));
+				row.appendChild(HmiDialogs.el('td', 'hmiUserLevel', String(u.level)));
+				var actions = row.appendChild(HmiDialogs.el('td', 'hmiUserActions'));
 
-				row.appendChild(HmiDialogs.button('Edit', function()
+				actions.appendChild(HmiDialogs.button('Edit', function()
 				{
 					editing = u;
 					nameInput.value = u.name;
@@ -3206,8 +3219,8 @@ HmiDialogs.showUsers = function(ui, options)
 					render();
 				});
 				remove.setAttribute('data-hmi-field', 'remove');
-				row.appendChild(remove);
-				list.appendChild(row);
+				actions.appendChild(remove);
+				tbody.appendChild(row);
 			})(users[i]);
 		}
 	};

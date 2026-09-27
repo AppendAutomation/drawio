@@ -486,6 +486,104 @@
 	margin-bottom: 8px;
 }
 
+/* ------------------------------------------------------------- users */
+
+.hmiUserList
+{
+	max-height: 236px;
+	overflow-y: auto;
+	border: 1px solid #c0c0c0;
+	border-radius: 3px;
+	margin-bottom: 8px;
+}
+
+.hmiUserTable
+{
+	width: 100%;
+	border-collapse: collapse;
+}
+
+.hmiUserTable th
+{
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	padding: 5px 10px;
+	font-size: 11px;
+	font-weight: 600;
+	color: gray;
+	text-align: left;
+	background-color: light-dark(#f0f0f0, #2a2a2a);
+	border-bottom: 1px solid rgba(128, 128, 128, 0.4);
+}
+
+.hmiUserTable td
+{
+	padding: 3px 10px;
+	border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+	vertical-align: middle;
+}
+
+.hmiUserTable tbody tr:last-child td
+{
+	border-bottom: none;
+}
+
+.hmiUserTable tbody tr:hover
+{
+	background-color: rgba(0, 0, 0, 0.05);
+}
+
+.hmiUserTable .hmiUserName
+{
+	width: 100%;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	max-width: 0;
+}
+
+.hmiUserTable .hmiUserLevel
+{
+	text-align: right;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.hmiUserTable .hmiUserActions
+{
+	text-align: right;
+	white-space: nowrap;
+}
+
+/* geBtn is sized for dialog footers; rows want compact buttons */
+.hmiUserTable .hmiUserActions button.geBtn
+{
+	min-width: 60px;
+	height: 22px;
+	margin: 0 0 0 4px;
+	padding: 0 10px;
+	line-height: 20px;
+	font-size: 11px;
+}
+
+.hmiUserTable .hmiEmpty
+{
+	padding: 10px;
+	color: gray;
+	text-align: center;
+}
+
+[data-theme="dark"] .hmiUserList
+{
+	border-color: #505050;
+}
+
+[data-theme="dark"] .hmiUserTable tbody tr:hover
+{
+	background-color: rgba(255, 255, 255, 0.08);
+}
+
 /* ------------------------------------------------------------- validation */
 
 .hmiProblemRow
