@@ -618,12 +618,12 @@ HmiFormatPanel.prototype.createCheckField = function(cfg, field, labelText)
 	return wrap;
 };
 
-// ------------------------------------------------------ centre of rotation
+// ------------------------------------------------------ center of rotation
 
 /**
- * The centre of an Orientation link: the object's centre (the default), or a
+ * The center of an Orientation link: the object's center (the default), or a
  * point given in page coordinates or picked by clicking the page. It is kept
- * as an offset from the object's centre (pivotDx, pivotDy), so it moves with
+ * as an offset from the object's center (pivotDx, pivotDy), so it moves with
  * the object; the fields show it in page coordinates, where it is placed.
  */
 HmiFormatPanel.prototype.addPivotControls = function(content, cfg)
@@ -635,7 +635,7 @@ HmiFormatPanel.prototype.addPivotControls = function(content, cfg)
 	mode.className = 'hmiInput';
 	mode.setAttribute('data-hmi-field', 'pivot');
 
-	var options = [{value: 'center', label: 'Object centre'}, {value: 'point', label: 'A point'}];
+	var options = [{value: 'center', label: 'Object center'}, {value: 'point', label: 'A point'}];
 
 	for (var i = 0; i < options.length; i++)
 	{
@@ -727,8 +727,8 @@ HmiFormatPanel.prototype.addPivotControls = function(content, cfg)
 		return input;
 	};
 
-	this.addRow(content, 'Centre X (page)', coord('x', center.x + dx));
-	this.addRow(content, 'Centre Y (page)', coord('y', center.y + dy));
+	this.addRow(content, 'Center X (page)', coord('x', center.x + dx));
+	this.addRow(content, 'Center Y (page)', coord('y', center.y + dy));
 
 	var pick = document.createElement('button');
 	pick.className = 'hmiButton';
@@ -754,7 +754,7 @@ HmiFormatPanel.roundCoord = function(v)
 	return String(Math.round(v * 100) / 100);
 };
 
-/** A cell's centre in page (diagram) coordinates, through any groups. */
+/** A cell's center in page (diagram) coordinates, through any groups. */
 HmiFormatPanel.cellCenter = function(graph, cell)
 {
 	var model = graph.getModel();
@@ -780,7 +780,7 @@ HmiFormatPanel.cellCenter = function(graph, cell)
 };
 
 /**
- * One click on the page sets the centre of rotation. The click is taken
+ * One click on the page sets the center of rotation. The click is taken
  * before the editor's own handlers, so it neither selects nor moves anything.
  */
 HmiFormatPanel.pickPivot = function(ui, cell, cfg)

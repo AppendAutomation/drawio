@@ -393,7 +393,7 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 				this.createSelectField(cfg, 'anchor', [
 					{value: 'top', label: 'Top downward'},
 					{value: 'bottom', label: 'Bottom upward'},
-					{value: 'center', label: 'Centre, both ways'}
+					{value: 'center', label: 'Center, both ways'}
 				]));
 		}
 		else if (key === 'size.width')
@@ -402,7 +402,7 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 				this.createSelectField(cfg, 'anchor', [
 					{value: 'left', label: 'Left rightward'},
 					{value: 'right', label: 'Right leftward'},
-					{value: 'center', label: 'Centre, both ways'}
+					{value: 'center', label: 'Center, both ways'}
 				]));
 		}
 		else if (key === 'orientation')

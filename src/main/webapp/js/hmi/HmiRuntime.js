@@ -609,10 +609,10 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 			// does mxGraph's rotation style, so no sign flip is needed.
 			visual.rotation = angle;
 
-			// mxGraph turns a shape about its own centre. About any other
-			// point the centre also travels round that point, so the shape
+			// mxGraph turns a shape about its own center. About any other
+			// point the center also travels round that point, so the shape
 			// is moved by o - R(angle)o, o being the point's offset from the
-			// centre (screen axes, y down, clockwise).
+			// center (screen axes, y down, clockwise).
 			var o = HmiRuntime.pivotOffset(cfg);
 
 			if (o != null)
@@ -673,8 +673,8 @@ HmiRuntime.prototype.applyLink = function(key, cfg, visual, binding)
 };
 
 /**
- * The centre of rotation of an Orientation link as an offset from the object's
- * centre, in diagram units, or null for the object's own centre. Stored as an
+ * The center of rotation of an Orientation link as an offset from the object's
+ * center, in diagram units, or null for the object's own center. Stored as an
  * offset (pivotDx, pivotDy), so the point moves with the object when it is
  * moved in the editor or by a Location link.
  */
@@ -1241,7 +1241,7 @@ HmiRuntime.prototype.applyGeometry = function(state)
 		state.y += v.dy * scale;
 	}
 
-	// Orientation about a point other than the centre (see applyLink)
+	// Orientation about a point other than the center (see applyLink)
 	if (v.rotDx != null)
 	{
 		state.x += v.rotDx * scale;

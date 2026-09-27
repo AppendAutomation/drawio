@@ -2796,7 +2796,7 @@ HmiDialogs.showAbout = function(ui)
 	var info = null;
 
 	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
-	var licences = HmiDialogs.button('Licences...', function()
+	var licences = HmiDialogs.button('Licenses...', function()
 	{
 		if (info != null)
 		{
@@ -2837,7 +2837,7 @@ HmiDialogs.showAbout = function(ui)
 HmiDialogs.showLicences = function(ui, info)
 {
 	var div = HmiDialogs.el('div', 'hmiDialog');
-	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Licences'));
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Licenses'));
 
 	var text = document.createElement('textarea');
 	text.className = 'hmiTextArea hmiLicenceText';

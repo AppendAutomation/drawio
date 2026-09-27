@@ -272,8 +272,8 @@ HmiSelfTest.testFileRoundTrip = function(ui)
 
 /** Spike 2: four tabs, and routing that does not strand the user. */
 /**
- * Orientation's centre of rotation in the Animation panel: page coordinates
- * in the fields, an offset from the object's centre in the link, a marker on
+ * Orientation's center of rotation in the Animation panel: page coordinates
+ * in the fields, an offset from the object's center in the link, a marker on
  * the page, and picking by clicking.
  */
 HmiSelfTest.testPivotPanel = function(ui)
@@ -327,16 +327,53 @@ HmiSelfTest.testPivotPanel = function(ui)
 	target.dispatchEvent(new PointerEvent('pointerdown', init));
 	target.dispatchEvent(new PointerEvent('pointerup', init));
 
-	// The object's centre is now (290, 240)
+	// The object's center is now (290, 240)
 	check('pivot.picked', link().pivotDx === '110' && link().pivotDy === '-140', JSON.stringify(link()));
 	check('pivot.pickEnds', ui.hmiPivotPick == null && graph.container.style.cursor !== 'crosshair');
 	check('pivot.pickKeepsSelection', graph.getSelectionCell() === cell);
+
+	// And Run turns it about the picked point: a constant 50 on 0..100 is
+	// 180 degrees, which puts the center at 2 x (110, -140) from its design
+	// position
+	var picked = link();
+	picked.expr = '50';
+	picked.angleMax = '360';
+	HmiProject.setCellLinks(graph, cell, {orientation: picked});
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = HmiSelfTest.sampleProject();
+	graph.clearSelection();
+	HmiMenus.start(ui);
+
+	var win = (ui.hmiRuntime != null) ? ui.hmiRuntime.windows[0] : null;
+
+	if (win != null)
+	{
+		win.runtime.flush();
+		var wc = win.graph.getModel().getCell(cell.id);
+		var ws = win.graph.view.getState(wc);
+		var sc = win.graph.view.scale;
+		var tr = win.graph.view.translate;
+		var ex = (wc.geometry.x + tr.x + 220) * sc;
+		var ey = (wc.geometry.y + tr.y - 280) * sc;
+
+		check('pivot.runTurnsAboutPoint', ws != null && Math.abs(ws.x - ex) < 1 && Math.abs(ws.y - ey) < 1,
+			(ws != null) ? 'x=' + ws.x + ' want ' + ex + ', y=' + ws.y + ' want ' + ey +
+				', rotation=' + ws.style[mxConstants.STYLE_ROTATION] : 'no state');
+	}
+	else
+	{
+		check('pivot.runTurnsAboutPoint', false, 'no run window');
+	}
+
+	HmiMenus.stop(ui);
+	ui.hmiProject = savedProject;
+	graph.setSelectionCell(cell);
 
 	format.immediateRefresh();
 	field('pivot').value = 'center';
 	field('pivot').dispatchEvent(new Event('change'));
 	format.immediateRefresh();
-	check('pivot.backToCentre', link().pivot == null && link().pivotDx == null &&
+	check('pivot.backToCenter', link().pivot == null && link().pivotDx == null &&
 		field('pivotX') == null && graph.container.querySelectorAll('.hmiPivotMarker').length === 0);
 
 	graph.clearSelection();
@@ -1380,6 +1417,14 @@ HmiSelfTest.runLive = function(ui)
 			max: 'Tank_Level.MaxEU', prompt: 'Setpoint', keypad: false}
 	});
 
+	// Turns about the middle of its right edge (100 x 20)
+	var needle = graph.insertVertex(graph.getDefaultParent(), null, '', 400, 300, 100, 20);
+
+	HmiProject.setCellLinks(graph, needle, {
+		'orientation': {expr: 'Tank_Level', atMin: '0', atMax: '100', angleMin: '0',
+			angleMax: '180', pivot: 'point', pivotDx: '50', pivotDy: '0'}
+	});
+
 	graph.clearSelection();
 	HmiMenus.start(ui);
 
@@ -1401,6 +1446,7 @@ HmiSelfTest.runLive = function(ui)
 		};
 
 		readout = inWindow(readout);
+		needle = inWindow(needle);
 		tank = inWindow(tank);
 		button = inWindow(button);
 		entry = inWindow(entry);
@@ -1429,6 +1475,21 @@ HmiSelfTest.runLive = function(ui)
 		rt.applyBatch({'Tank_Level': {value: 50,
 			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()}});
 		rt.flush();
+
+		// At 90 degrees the needle's center is 50 right and 50 up of where it
+		// was drawn (its design position, read from the model)
+		var ns = graph.view.getState(needle);
+		var ng = needle.geometry;
+		var vs = graph.view.scale;
+		var vt = graph.view.translate;
+		var ex = (ng.x + vt.x) * vs + 50 * vs;
+		var ey = (ng.y + vt.y) * vs - 50 * vs;
+
+		HmiSelfTest.check('live.orientationPivot', ns != null &&
+			parseFloat(ns.style[mxConstants.STYLE_ROTATION]) === 90 &&
+			Math.abs(ns.x - ex) < 1 && Math.abs(ns.y - ey) < 1,
+			(ns != null) ? 'x=' + ns.x + ' want ' + ex + ', y=' + ns.y + ' want ' + ey +
+				', rotation=' + ns.style[mxConstants.STYLE_ROTATION] : 'no state');
 
 		var tankState = graph.view.getState(tank);
 
@@ -1555,7 +1616,7 @@ HmiSelfTest.runLive = function(ui)
 };
 
 /**
- * Dispatches a real pointer/mouse sequence at the centre of a cell, going
+ * Dispatches a real pointer/mouse sequence at the center of a cell, going
  * through the graph container exactly as a person's click does.
  */
 HmiSelfTest.clickCell = function(graph, cell)
@@ -1940,7 +2001,7 @@ HmiSelfTest.testMovement = function(ui)
 		'rotation = ' + ((rotState != null) ?
 			rotState.style[mxConstants.STYLE_ROTATION] : 'none'));
 
-	// At 90 degrees clockwise the centre swings from left of the point to
+	// At 90 degrees clockwise the center swings from left of the point to
 	// above it: 50 right and 50 up, while the shape itself turns 90
 	var rotP = graph.view.getState(cells.rotP);
 	var pScale = graph.view.scale;
@@ -1952,10 +2013,10 @@ HmiSelfTest.testMovement = function(ui)
 		(rotP != null) ? 'dx = ' + (rotP.x - design.rotP.x) + ', dy = ' + (rotP.y - design.rotP.y) +
 			', rotation = ' + rotP.style[mxConstants.STYLE_ROTATION] + ', scale = ' + pScale : 'none');
 
-	// The default stays the object's own centre: no displacement
+	// The default stays the object's own center: no displacement
 	var rot0 = graph.view.getState(cells.rot);
 
-	HmiSelfTest.check('m2.orientationCentreDefault',
+	HmiSelfTest.check('m2.orientationCenterDefault',
 		Math.abs(rot0.x - design.rot.x) < 0.5 && Math.abs(rot0.y - design.rot.y) < 0.5);
 
 	// --- location ---------------------------------------------------------
@@ -2011,7 +2072,7 @@ HmiSelfTest.testMovement = function(ui)
 		Math.abs(hState.height - design.h.height * 0.75) < 1,
 		'height = ' + hState.height);
 
-	// Centre anchor: the middle holds.
+	// Center anchor: the middle holds.
 	hLinks['size.height'].anchor = 'center';
 	HmiProject.setCellLinks(graph, cells.h, hLinks);
 	rt.rebind();
@@ -2020,9 +2081,9 @@ HmiSelfTest.testMovement = function(ui)
 	hState = graph.view.getState(cells.h);
 	var designMiddle = design.h.y + design.h.height / 2;
 
-	HmiSelfTest.check('m2.sizeAnchorCentreHoldsCentre',
+	HmiSelfTest.check('m2.sizeAnchorCenterHoldsCenter',
 		Math.abs((hState.y + hState.height / 2) - designMiddle) < 1,
-		'centre moved by ' + ((hState.y + hState.height / 2) - designMiddle));
+		'center moved by ' + ((hState.y + hState.height / 2) - designMiddle));
 
 	hLinks['size.height'].anchor = 'top';
 	HmiProject.setCellLinks(graph, cells.h, hLinks);
