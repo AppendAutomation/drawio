@@ -302,12 +302,21 @@ HmiTagDialog.prototype.renderForm = function()
 		function(value)
 		{
 			tag.type = value;
+			that.markModified();
 			that.renderList();
 			that.renderForm();
 		});
 
+	// Also the alarm's description
 	HmiDialogs.field(this.formDiv, 'Comment', tag.comment,
-		function(v) { tag.comment = v; });
+		function(v)
+		{
+			if (tag.comment !== v)
+			{
+				tag.comment = v;
+				that.markModified();
+			}
+		}).setAttribute('data-hmi-prop', 'comment');
 
 	if (HmiTypes.isAnalog(tag.type))
 	{
@@ -420,6 +429,7 @@ HmiTagDialog.prototype.renderForm = function()
 		}
 	}
 
+	// The tag's comment is the alarm's description
 	if (HmiTypes.isAnalog(tag.type))
 	{
 		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarms'));
@@ -439,11 +449,43 @@ HmiTagDialog.prototype.renderForm = function()
 				HmiDialogs.field(that.formDiv, limits[i][1], tag.alarms[key],
 					function(v)
 					{
-						if (v === '') { delete tag.alarms[key]; }
-						else { tag.alarms[key] = parseFloat(v); }
-					});
+						var n = parseFloat(v);
+
+						if (v === '' || isNaN(n)) { delete tag.alarms[key]; }
+						else { tag.alarms[key] = n; }
+
+						that.markModified();
+					}).setAttribute('data-hmi-prop', 'alarm.' + key);
 			})(limits[i][0]);
 		}
+
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'Leave a limit empty for no alarm there. An alarm clears only once ' +
+			'the value is back inside its limit by the deadband.'));
+	}
+	else if (HmiTypes.isDiscrete(tag.type))
+	{
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarm'));
+
+		HmiDialogs.select(this.formDiv, 'Alarm when',
+			(tag.alarms != null && tag.alarms.state) || '', [
+				{value: '', label: 'No alarm'},
+				{value: 'on', label: 'On (1)'},
+				{value: 'off', label: 'Off (0)'}],
+			function(v)
+			{
+				if (v === '')
+				{
+					if (tag.alarms != null) { delete tag.alarms.state; }
+				}
+				else
+				{
+					tag.alarms = tag.alarms || {};
+					tag.alarms.state = v;
+				}
+
+				that.markModified();
+			}).setAttribute('data-hmi-prop', 'alarm.state');
 	}
 
 	this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Simulation'));
@@ -459,6 +501,8 @@ HmiTagDialog.prototype.renderForm = function()
 		{
 			if (v === '') { delete tag.sim.mode; }
 			else { tag.sim.mode = v; }
+
+			that.markModified();
 		});
 
 	HmiDialogs.field(this.formDiv, 'Period (ms)', tag.sim.periodMs,
@@ -466,6 +510,8 @@ HmiTagDialog.prototype.renderForm = function()
 		{
 			if (v === '') { delete tag.sim.periodMs; }
 			else { tag.sim.periodMs = v; }
+
+			that.markModified();
 		});
 };
 
@@ -568,6 +614,16 @@ HmiTagDialog.prototype.rename = function(tag, next)
 	{
 		this.ui.showError(mxResources.get('error'),
 			'A tag named "' + next + '" already exists.',
+			mxResources.get('ok'));
+		this.renderForm();
+
+		return;
+	}
+
+	if (HmiTypes.systemTag(next) != null)
+	{
+		this.ui.showError(mxResources.get('error'),
+			'"' + HmiTypes.systemTag(next) + '" is a system tag name and cannot be used.',
 			mxResources.get('ok'));
 		this.renderForm();
 
@@ -723,6 +779,7 @@ HmiTagDialog.rewriteReferences = function(ui, from, to)
 
 HmiTagDialog.prototype.markModified = function()
 {
+	this.project.touch();
 	this.ui.editor.setModified(true);
 };
 
@@ -733,7 +790,19 @@ HmiTagDialog.prototype.markModified = function()
  * for bulk edits in a spreadsheet.
  */
 HmiTagDialog.CSV_FIELDS = ['name', 'type', 'comment', 'engUnits', 'initial',
-	'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg'];
+	'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw', 'device', 'address', 'onMsg', 'offMsg',
+	'alarmLoLo', 'alarmLow', 'alarmHigh', 'alarmHiHi', 'alarmDeadband', 'alarmState'];
+
+/** CSV columns kept in tag.alarms, with the key there. */
+HmiTagDialog.CSV_ALARM_FIELDS = {alarmLoLo: 'loLo', alarmLow: 'low', alarmHigh: 'high',
+	alarmHiHi: 'hiHi', alarmDeadband: 'deadband', alarmState: 'state'};
+
+HmiTagDialog.csvValue = function(tag, field)
+{
+	var key = HmiTagDialog.CSV_ALARM_FIELDS[field];
+
+	return (key != null) ? ((tag.alarms != null) ? tag.alarms[key] : null) : tag[field];
+};
 
 HmiTagDialog.prototype.exportCsv = function()
 {
@@ -746,7 +815,7 @@ HmiTagDialog.prototype.exportCsv = function()
 
 		for (var f = 0; f < HmiTagDialog.CSV_FIELDS.length; f++)
 		{
-			cells.push(HmiTagDialog.csvCell(tag[HmiTagDialog.CSV_FIELDS[f]]));
+			cells.push(HmiTagDialog.csvCell(HmiTagDialog.csvValue(tag, HmiTagDialog.CSV_FIELDS[f])));
 		}
 
 		rows.push(cells.join(','));
@@ -826,6 +895,11 @@ HmiTagDialog.prototype.applyCsv = function(text)
 
 		if (tag == null)
 		{
+			if (HmiTypes.systemTag(record.name) != null)
+			{
+				continue;
+			}
+
 			tag = HmiProject.createTag(record.name, type);
 			this.project.addTag(tag);
 			added++;
@@ -840,6 +914,17 @@ HmiTagDialog.prototype.applyCsv = function(text)
 			if (field === 'name' || field === 'type' ||
 				record[field] == null || record[field] === '')
 			{
+				continue;
+			}
+
+			var alarmKey = HmiTagDialog.CSV_ALARM_FIELDS[field];
+
+			if (alarmKey != null)
+			{
+				tag.alarms = tag.alarms || {};
+				tag.alarms[alarmKey] = (alarmKey === 'state') ? record[field] :
+					parseFloat(record[field]);
+
 				continue;
 			}
 

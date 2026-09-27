@@ -26,6 +26,9 @@ HmiRuntime = function(config)
 	this.project = config.project;
 	this.driver = config.driver;
 
+	// The Run's HmiAlarmManager, when there is one (dotfields, system tags)
+	this.alarms = config.alarms || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -68,10 +71,22 @@ HmiRuntime.prototype.start = function()
 
 	for (var name in this.reverseIndex)
 	{
-		paths.push(name);
+		// System tags come from the alarm manager, not a device
+		if (HmiTypes.systemTag(name) == null)
+		{
+			paths.push(name);
+		}
 	}
 
 	this.driver.subscribe(paths, this.scanRateMs());
+
+	// Alarm state changes repaint what depends on it (Tag.InAlarm, the
+	// system tags) although no value changed
+	if (this.alarms != null)
+	{
+		this.onAlarmNames = function(names) { that.invalidateNames(names); };
+		this.alarms.on('names', this.onAlarmNames);
+	}
 
 	this.installInput();
 	this.startBlinkTimers();
@@ -97,6 +112,12 @@ HmiRuntime.prototype.stop = function()
 	{
 		this.driver.off('change', this.onChange);
 		this.onChange = null;
+	}
+
+	if (this.onAlarmNames != null)
+	{
+		this.alarms.off('names', this.onAlarmNames);
+		this.onAlarmNames = null;
 	}
 
 	this.driver.unsubscribe();
@@ -350,12 +371,7 @@ HmiRuntime.prototype.context = function()
 
 		this.ctx = {
 			read: function(name, field) { return that.readField(name, field); },
-			write: function(name, value)
-			{
-				var writes = {};
-				writes[name] = value;
-				that.driver.write(writes);
-			},
+			write: function(name, value, field) { that.writeField(name, value, field); },
 			now: function() { return Date.now(); }
 		};
 	}
@@ -363,8 +379,49 @@ HmiRuntime.prototype.context = function()
 	return this.ctx;
 };
 
+/**
+ * A script's assignment. _AckAll = 1 acknowledges every alarm and
+ * Tag.Acked = 1 the tag's own; everything else goes to the driver.
+ */
+HmiRuntime.prototype.writeField = function(name, value, field)
+{
+	var system = HmiTypes.systemTag(name);
+
+	if (system != null || field === 'Acked')
+	{
+		if (this.alarms != null && HmiRuntime.truthy(value))
+		{
+			if (system === '_AckAll')
+			{
+				this.alarms.ackAll();
+			}
+			else if (field === 'Acked' && system == null)
+			{
+				this.alarms.ack(name);
+			}
+		}
+
+		return;
+	}
+
+	var writes = {};
+	writes[name] = value;
+	this.driver.write(writes);
+};
+
 HmiRuntime.prototype.readField = function(name, field)
 {
+	var system = HmiTypes.systemTag(name);
+
+	if (system != null)
+	{
+		return (this.alarms != null && (field == null || field === 'Value')) ?
+			this.alarms.readSystem(system) :
+			{value: (field === 'Name') ? system : null,
+				quality: (field === 'Name') ? HmiTypes.QUALITY_GOOD : HmiTypes.QUALITY_BAD,
+				timestamp: Date.now()};
+	}
+
 	var live = this.getValue(name);
 
 	if (field == null || field === 'Value')
@@ -392,12 +449,15 @@ HmiRuntime.prototype.readField = function(name, field)
 		return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
 	}
 
-	// Alarm state is a later milestone; the fields answer false rather than
-	// bad quality so an expression using them stays evaluable today.
+	// Alarm state from the Run's alarm manager; without one (a runtime used
+	// on its own) the tag's limits against its value
+	var inAlarm = (this.alarms != null) ? this.alarms.isActive(tag.name) : this.inAlarm(tag.name);
+	var acked = (this.alarms != null) ? this.alarms.isAcked(tag.name) : true;
+
 	var map = {Name: tag.name, MinEU: tag.minEU, MaxEU: tag.maxEU,
 		MinRaw: tag.minRaw, MaxRaw: tag.maxRaw, EngUnits: tag.engUnits,
-		Comment: tag.comment, InAlarm: false, AlarmMostUrgentInAlarm: false,
-		Acked: true};
+		Comment: tag.comment, InAlarm: inAlarm ? 1 : 0, AlarmMostUrgentInAlarm: inAlarm ? 1 : 0,
+		Acked: acked ? 1 : 0};
 
 	if (map[field] !== undefined)
 	{
@@ -438,6 +498,25 @@ HmiRuntime.prototype.applyBatch = function(batch)
 			for (var i = 0; i < cells.length; i++)
 			{
 				this.markDirty(cells[i]);
+			}
+		}
+	}
+
+	this.scheduleFlush();
+};
+
+/** Re-evaluates what depends on these names, though no value changed. */
+HmiRuntime.prototype.invalidateNames = function(names)
+{
+	for (var i = 0; i < names.length; i++)
+	{
+		var cells = this.reverseIndex[names[i]] || this.reverseIndex[('' + names[i]).toLowerCase()];
+
+		if (cells != null)
+		{
+			for (var j = 0; j < cells.length; j++)
+			{
+				this.markDirty(cells[j]);
 			}
 		}
 	}
@@ -764,6 +843,15 @@ HmiRuntime.prototype.alarmState = function(name)
 	var tag = this.project.getTag(name);
 	var live = this.getValue(name);
 
+	// The alarm manager's state (deadband, held through bad quality)
+	if (this.alarms != null && tag != null)
+	{
+		var cond = this.alarms.condition(tag.name);
+
+		return (HmiAlarms.SIDE[cond] != null) ? cond :
+			((live.quality <= HmiTypes.QUALITY_BAD && cond == null) ? null : 'normal');
+	}
+
 	if (tag == null || live.quality <= HmiTypes.QUALITY_BAD)
 	{
 		return null;
@@ -790,6 +878,11 @@ HmiRuntime.prototype.alarmState = function(name)
 HmiRuntime.prototype.inAlarm = function(name)
 {
 	var tag = this.project.getTag(name);
+
+	if (this.alarms != null && tag != null)
+	{
+		return this.alarms.isActive(tag.name);
+	}
 
 	if (tag != null && HmiTypes.isDiscrete(tag.type))
 	{

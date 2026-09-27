@@ -435,10 +435,28 @@ HmiMenus.start = function(ui, options)
 		});
 
 		ui.hmiRunOnly = runtime;
-		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime});
+		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime,
+			alarmStore: HmiMenus.alarmStore(ui, runtime)});
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
+};
+
+/**
+ * Which alarm history a Run writes to: a published runtime's product, or
+ * the project's file name in the editor.
+ */
+HmiMenus.alarmStore = function(ui, runtime)
+{
+	if (runtime && typeof HmiRuntimeApp !== 'undefined' && HmiRuntimeApp.info != null)
+	{
+		return HmiRuntimeApp.info.productName;
+	}
+
+	var file = (ui.getCurrentFile != null) ? ui.getCurrentFile() : null;
+	var title = (file != null) ? file.getTitle().replace(/\.(ahmi|drawio-hmi|drawio)$/i, '') : '';
+
+	return title || 'Untitled';
 };
 
 HmiMenus.stop = function(ui)

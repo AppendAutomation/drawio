@@ -443,13 +443,21 @@ HmiExpr.Parser.prototype.parseStatement = function()
 	{
 		this.next();
 
+		var system = (node.type === 'ref') ? HmiTypes.SYSTEM_TAGS[node.name] : null;
+
 		if (node.type !== 'ref')
 		{
 			this.error('only a tag can be assigned to', this.tokens[start]);
 		}
-		else if (node.field != null && node.field !== 'Value')
+		// Writing 1 to .Acked acknowledges the tag's alarm; no other field
+		// can be written
+		else if (node.field != null && node.field !== 'Value' && node.field !== 'Acked')
 		{
 			this.error('cannot assign to .' + node.field, this.tokens[start]);
+		}
+		else if (system != null && system.readOnly)
+		{
+			this.error(node.name + ' is read-only', this.tokens[start]);
 		}
 		else if (mxUtils.indexOf(this.writes, node.name) < 0)
 		{
@@ -752,7 +760,13 @@ HmiExpr.Parser.prototype.parseReference = function()
 	}
 
 	// System tags are supplied by the runtime, not the dictionary.
-	if (this.project != null && name.charAt(0) !== '$' &&
+	var system = HmiTypes.systemTag(name);
+
+	if (system != null)
+	{
+		name = system;
+	}
+	else if (this.project != null && name.charAt(0) !== '$' &&
 		this.project.getTag(name) == null)
 	{
 		this.error('unknown tag "' + name + '"', t);
@@ -1049,7 +1063,7 @@ HmiExpr.Evaluator.prototype.eval_assign = function(node)
 
 	if (this.ctx.write != null)
 	{
-		this.ctx.write(node.target.name, v.value);
+		this.ctx.write(node.target.name, v.value, node.target.field);
 	}
 
 	return v;

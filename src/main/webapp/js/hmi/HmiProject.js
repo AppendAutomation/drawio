@@ -260,6 +260,11 @@ HmiProject.prototype.addTag = function(tag)
 		throw new Error('Duplicate tag name: ' + tag.name);
 	}
 
+	if (HmiTypes.systemTag(tag.name) != null)
+	{
+		throw new Error('"' + tag.name + '" is a system tag name');
+	}
+
 	this.tags.push(tag);
 	this.tagIndex[tag.name.toLowerCase()] = tag;
 	this.touch();
@@ -945,7 +950,7 @@ HmiProject.tagFromXml = function(node)
 		}
 	}
 
-	tag.alarms = HmiProject.attrsOf(node, 'alarms', true);
+	tag.alarms = HmiProject.attrsOf(node, 'alarms', true, ['state']);
 	tag.sim = HmiProject.attrsOf(node, 'sim', false);
 
 	return tag;
@@ -955,7 +960,8 @@ HmiProject.tagFromXml = function(node)
  * Collects the attributes of the first child element with the given name.
  * Returns null when absent so that an unused section is not written back.
  */
-HmiProject.attrsOf = function(node, name, numeric)
+/** stringKeys stay strings when numeric is set (e.g. a discrete alarm's state). */
+HmiProject.attrsOf = function(node, name, numeric, stringKeys)
 {
 	var list = node.getElementsByTagName(name);
 
@@ -970,7 +976,9 @@ HmiProject.attrsOf = function(node, name, numeric)
 	for (var i = 0; i < attrs.length; i++)
 	{
 		var v = attrs[i].value;
-		res[attrs[i].name] = (numeric) ? parseFloat(v) : v;
+		var key = attrs[i].name;
+		res[key] = (numeric && (stringKeys == null || stringKeys.indexOf(key) < 0)) ?
+			parseFloat(v) : v;
 	}
 
 	return res;

@@ -68,6 +68,40 @@ HmiTypes.DOTFIELDS = {
 	'InAlarm': true, 'AlarmMostUrgentInAlarm': true, 'Acked': true
 };
 
+// ------------------------------------------------------------ system tags
+// Supplied by the runtime rather than the dictionary. The names are reserved:
+// no dictionary tag may take one.
+
+HmiTypes.SYSTEM_TAGS = {
+	'_AlarmsActive': {type: 'MemoryInteger', readOnly: true,
+		comment: 'Number of active alarms'},
+	'_AlarmsUnacked': {type: 'MemoryInteger', readOnly: true,
+		comment: 'Number of unacknowledged alarms'},
+	'_AckAll': {type: 'MemoryDiscrete', readOnly: false,
+		comment: 'Write 1 to acknowledge all alarms'}
+};
+
+/** The system tag's canonical name, or null. Case-insensitive like tag names. */
+HmiTypes.systemTag = function(name)
+{
+	if (typeof name !== 'string')
+	{
+		return null;
+	}
+
+	var lower = name.toLowerCase();
+
+	for (var key in HmiTypes.SYSTEM_TAGS)
+	{
+		if (key.toLowerCase() === lower)
+		{
+			return key;
+		}
+	}
+
+	return null;
+};
+
 // ------------------------------------------------------- link type registry
 
 /**

@@ -197,6 +197,13 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.running = false;
 	this.scale = 1;
 	this.fit = options != null && options.fit === true;
+
+	// options.alarmStore names the alarm history (the project, or a
+	// published runtime's product)
+	var store = (options != null) ? options.alarmStore : null;
+
+	this.alarms = new HmiAlarmManager(project, this.hub.client(), {store: store,
+		persist: function(events) { HmiAlarms.persist(store, events); }});
 };
 
 HmiWindowManager.prototype.start = function()
@@ -216,6 +223,9 @@ HmiWindowManager.prototype.start = function()
 	this.createScreen();
 	this.hub.connect();
 	this.running = true;
+
+	// Before any window: alarms are watched whether or not a window shows them
+	this.alarms.start();
 
 	var pages = this.startupPages();
 
@@ -243,6 +253,8 @@ HmiWindowManager.prototype.stop = function()
 		this.close(this.windows[this.windows.length - 1]);
 	}
 
+	this.alarms.stop();
+	this.alarms.driver.disconnect();
 	this.hub.disconnect();
 
 	if (this.resizeListener != null)
@@ -603,7 +615,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	this.place(win);
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
-		driver: this.hub.client()});
+		driver: this.hub.client(), alarms: this.alarms});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

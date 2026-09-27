@@ -44,6 +44,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFilenames(ui);
 		HmiSelfTest.testBrand(ui);
+		HmiSelfTest.testAlarms(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
@@ -2759,6 +2760,149 @@ HmiSelfTest.testBrand = function(ui)
 	check('brand.aboutAttribution', dlg.querySelector('[data-hmi-field="attribution"]')
 		.innerText.indexOf('Apache License') >= 0);
 	ui.hideDialog();
+};
+
+/**
+ * The alarm manager: conditions with deadband, escalation, ISA-style
+ * acknowledgement, counts and system tags, dotfields, scripts, repaint, and
+ * the tag configuration.
+ */
+HmiSelfTest.testAlarms = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	var level = project.getTag('Tank_Level');
+	level.alarms.deadband = 2;
+	level.comment = 'Day tank level';
+	project.getTag('Pump1_Run').alarms = {state: 'on'};
+	var fault = project.addTag(HmiProject.createTag('Motor_Ok', 'MemoryDiscrete'));
+	fault.alarms = {state: 'off'};
+
+	var logged = [];
+	var sim = new HmiSimulator(project);
+	var mgr = new HmiAlarmManager(project, sim, {persist: function(e) { logged = logged.concat(e); }});
+	var t = 1000;
+	var kinds = function() { return logged.map(function(e) { return e.event + ':' + e.tag + ':' + e.condition; }).join(' '); };
+	var set = function(name, v, q)
+	{
+		var batch = {};
+		batch[name] = {value: v, quality: (q != null) ? q : HmiTypes.QUALITY_GOOD, timestamp: ++t};
+		mgr.applyBatch(batch);
+	};
+
+	check('alarm.alarmedTags', mgr.alarmedTags().join(',') === 'Tank_Level,Pump1_Run,Motor_Ok',
+		mgr.alarmedTags().join(','));
+
+	set('Tank_Level', 50);
+	set('Motor_Ok', 1);
+	check('alarm.normalNoEvent', logged.length === 0 && mgr.counts().active === 0, kinds());
+
+	set('Tank_Level', 91);
+	check('alarm.high', mgr.condition('Tank_Level') === 'high' && !mgr.isAcked('Tank_Level') &&
+		mgr.counts().active === 1 && mgr.counts().unacked === 1, kinds());
+	check('alarm.eventFields', logged[0].description === 'Day tank level' && logged[0].limit === 90 &&
+		logged[0].condition === 'Hi' && logged[0].value === 91, JSON.stringify(logged[0]));
+
+	set('Tank_Level', 96);
+	check('alarm.escalates', mgr.condition('Tank_Level') === 'hiHi' && logged.length === 2 &&
+		logged[1].event === 'ALM', kinds());
+
+	mgr.ack('Tank_Level');
+	check('alarm.ackKeepsActiveListed', mgr.isAcked('Tank_Level') && mgr.active().length === 1 &&
+		mgr.counts().unacked === 0 && logged[2].event === 'ACK', kinds());
+
+	set('Tank_Level', 94);
+	check('alarm.deadbandHolds', mgr.condition('Tank_Level') === 'hiHi' && logged.length === 3, kinds());
+
+	set('Tank_Level', 92);
+	check('alarm.easesBackKeepsAck', mgr.condition('Tank_Level') === 'high' && mgr.isAcked('Tank_Level') &&
+		logged[3].event === 'CHG', kinds());
+
+	set('Tank_Level', 89);
+	check('alarm.deadbandOnReturn', mgr.isActive('Tank_Level') && logged.length === 4, kinds());
+
+	set('Tank_Level', 87);
+	check('alarm.returnAckedLeaves', !mgr.isActive('Tank_Level') && mgr.active().length === 0 &&
+		logged[4].event === 'RTN', kinds());
+
+	set('Tank_Level', 97);
+	mgr.ack('Tank_Level');
+	set('Tank_Level', 50);
+	set('Tank_Level', 3);
+	check('alarm.otherSideIsNew', mgr.condition('Tank_Level') === 'loLo' && !mgr.isAcked('Tank_Level'), kinds());
+
+	// Discrete: in alarm on 1 (Pump1_Run) and on 0 (Motor_Ok)
+	set('Pump1_Run', 1);
+	set('Motor_Ok', 0);
+	check('alarm.discrete', mgr.condition('Pump1_Run') === 'on' && mgr.condition('Motor_Ok') === 'off' &&
+		mgr.counts().active === 3, JSON.stringify(mgr.counts()));
+
+	set('Pump1_Run', 0);
+	check('alarm.returnUnackedStays', !mgr.isActive('Pump1_Run') && !mgr.isAcked('Pump1_Run') &&
+		mgr.active().length === 3 && mgr.counts().active === 2 && mgr.counts().unacked === 3,
+		JSON.stringify(mgr.counts()));
+
+	set('Motor_Ok', 1, HmiTypes.QUALITY_BAD);
+	check('alarm.badQualityHolds', mgr.condition('Motor_Ok') === 'off', mgr.condition('Motor_Ok'));
+
+	// Runtime: system tags, dotfields, scripts
+	var rt = new HmiRuntime({graph: ui.editor.graph, project: project, driver: sim, alarms: mgr});
+	check('alarm.systemTags', rt.readField('_AlarmsActive').value === 2 &&
+		rt.readField('_AlarmsUnacked').value === 3 && rt.readField('_AckAll').value === 0);
+	check('alarm.systemTagCompiles', HmiExpr.compile('_AlarmsActive > 0', {project: project}).errors.length === 0 &&
+		HmiExpr.compile('_alarmsactive', {project: project}).errors.length === 0);
+	check('alarm.systemReadOnly', HmiExpr.compile('_AlarmsActive = 1', {project: project, mode: 'script'})
+		.errors.length > 0);
+	check('alarm.dotfields', rt.evaluate('Tank_Level.InAlarm').value === 1 &&
+		rt.evaluate('Tank_Level.Acked').value === 0 && rt.evaluate('Pump1_Run.InAlarm').value === 0);
+
+	rt.runScript('Tank_Level.Acked = 1');
+	check('alarm.ackByScript', mgr.isAcked('Tank_Level') && rt.evaluate('Tank_Level.Acked').value === 1);
+
+	rt.runScript('_AckAll = 1');
+	check('alarm.ackAllByScript', mgr.counts().unacked === 0 && mgr.active().length === 2,
+		JSON.stringify(mgr.counts()) + ' listed ' + mgr.active().length);
+
+	// Repaint: a cell colored by Tank_Level.InAlarm follows the alarm
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 80, 40);
+	HmiProject.setCellLinks(graph, cell, {'fillColor.discrete': {expr: 'Tank_Level.InAlarm',
+		on: '#FF0000', off: '#00FF00'}});
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = project;
+	var rt2 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt2.start();
+	rt2.flush();
+	var fill = function() { var st = graph.view.getState(cell); return (st != null && st.shape != null) ? st.shape.fill : null; };
+	var before = fill();
+	set('Tank_Level', 50);
+	rt2.flush();
+	check('alarm.repaintsOnAlarmChange', before === '#FF0000' && fill() === '#00FF00', before + ' -> ' + fill());
+	rt2.stop();
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
+
+	// Tag configuration
+	var threw = false;
+
+	try
+	{
+		project.addTag(HmiProject.createTag('_ackall', 'MemoryDiscrete'));
+	}
+	catch (e)
+	{
+		threw = true;
+	}
+
+	check('alarm.reservedName', threw);
+
+	var back = HmiProject.fromXml(project.toXml(mxUtils.createXmlDocument()));
+	check('alarm.discreteRoundTrip', back.getTag('Pump1_Run').alarms.state === 'on' &&
+		back.getTag('Tank_Level').alarms.deadband === 2 && back.getTag('Tank_Level').alarms.hiHi === 95,
+		JSON.stringify(back.getTag('Pump1_Run').alarms));
+
+	check('alarm.logged', logged.length > 8 && logged.every(function(e) { return e.time > 0 && e.tag; }));
 };
 
 HmiSelfTest.hasFileType = function(types, ext)
