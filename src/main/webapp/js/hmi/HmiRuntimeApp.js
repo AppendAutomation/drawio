@@ -35,6 +35,7 @@ HmiRuntimeApp.log = function(level, message)
 
 HmiRuntimeApp.start = function(ui)
 {
+	HmiRuntimeApp.ui = ui;
 	document.body.classList.add('hmiRuntimeMode');
 
 	// The exit shortcut is caught in the main process, which asks for the
@@ -70,6 +71,11 @@ HmiRuntimeApp.load = function(ui, project)
 	var file = new LocalFile(ui, project.xml, project.title, true);
 	ui.fileLoaded(file);
 
+	// The window (or browser tab) is named after the application
+	var name = (HmiRuntimeApp.info != null && HmiRuntimeApp.info.productName) || project.title;
+	ui.updateDocumentTitle = function() { document.title = name; };
+	ui.updateDocumentTitle();
+
 	if (ui.getCurrentFile() !== file || ui.hmiProject == null)
 	{
 		throw new Error('The project could not be opened.');
@@ -103,6 +109,14 @@ HmiRuntimeApp.load = function(ui, project)
 
 HmiRuntimeApp.started = function(ui, project)
 {
+	ui.hmiRuntime.setView(HmiRuntimeApp.initialView());
+
+	// A browser gets a menu to change it (hmiviewmenu=1, Append HMI Web)
+	if (urlParams['hmiviewmenu'] == '1')
+	{
+		HmiRuntimeApp.showViewMenu(ui);
+	}
+
 	var p = ui.hmiProject;
 	HmiRuntimeApp.log('info', 'running ' + project.title + ': ' + p.tags.length + ' tags, ' +
 		p.devices.length + ' devices, ' + p.settings.width + 'x' + p.settings.height);
@@ -126,6 +140,144 @@ HmiRuntimeApp.started = function(ui, project)
 			}
 		}
 	});
+};
+
+HmiRuntimeApp.VIEW_LABELS = {fit: 'Fit to window', fill: 'Maximize', original: 'Original size'};
+
+HmiRuntimeApp.viewKey = function()
+{
+	return 'hmiView/' + ((HmiRuntimeApp.info != null) ? HmiRuntimeApp.info.productName : '');
+};
+
+/** The view this browser last chose for the application, else hmiview, else fit. */
+HmiRuntimeApp.initialView = function()
+{
+	var views = HmiWindowManager.VIEWS;
+
+	try
+	{
+		var saved = window.localStorage.getItem(HmiRuntimeApp.viewKey());
+
+		if (mxUtils.indexOf(views, saved) >= 0)
+		{
+			return saved;
+		}
+	}
+	catch (e)
+	{
+		// Storage may be unavailable (private windows)
+	}
+
+	return (mxUtils.indexOf(views, urlParams['hmiview']) >= 0) ? urlParams['hmiview'] : 'fit';
+};
+
+/**
+ * A small button in the top right corner, faint until pointed at, with the
+ * view modes and full screen. The choice is remembered by this browser.
+ */
+HmiRuntimeApp.showViewMenu = function(ui)
+{
+	var menu = document.createElement('div');
+	menu.className = 'hmiViewMenu';
+
+	var button = document.createElement('button');
+	button.className = 'hmiViewButton';
+	button.setAttribute('title', 'View');
+	button.setAttribute('data-hmi-field', 'viewMenu');
+	button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" ' +
+		'd="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zM4 14h2v4h4v2H4v-6zm14 0h2v6h-6v-2h4v-4z"/></svg>';
+	menu.appendChild(button);
+
+	var list = document.createElement('div');
+	list.className = 'hmiViewOptions';
+	list.style.display = 'none';
+	menu.appendChild(list);
+
+	var items = {};
+
+	var refresh = function()
+	{
+		for (var key in items)
+		{
+			items[key].classList.toggle('hmiViewSelected', key === ui.hmiRuntime.view);
+		}
+	};
+
+	var add = function(key, label, fn)
+	{
+		var item = document.createElement('button');
+		item.className = 'hmiViewOption';
+		item.setAttribute('data-hmi-view', key);
+		mxUtils.write(item, label);
+		mxEvent.addListener(item, 'click', function(evt)
+		{
+			mxEvent.consume(evt);
+			list.style.display = 'none';
+			fn();
+			refresh();
+		});
+		list.appendChild(item);
+		items[key] = item;
+	};
+
+	for (var i = 0; i < HmiWindowManager.VIEWS.length; i++)
+	{
+		(function(view)
+		{
+			add(view, HmiRuntimeApp.VIEW_LABELS[view], function()
+			{
+				if (ui.hmiRuntime != null)
+				{
+					ui.hmiRuntime.setView(view);
+				}
+
+				try
+				{
+					window.localStorage.setItem(HmiRuntimeApp.viewKey(), view);
+				}
+				catch (e)
+				{
+					// Not remembered, still applied
+				}
+			});
+		})(HmiWindowManager.VIEWS[i]);
+	}
+
+	if (document.fullscreenEnabled)
+	{
+		add('fullscreen', 'Full screen', function()
+		{
+			if (document.fullscreenElement != null)
+			{
+				document.exitFullscreen();
+			}
+			else
+			{
+				document.documentElement.requestFullscreen();
+			}
+		});
+
+		delete items['fullscreen'];
+	}
+
+	mxEvent.addListener(button, 'click', function(evt)
+	{
+		mxEvent.consume(evt);
+		list.style.display = (list.style.display === 'none') ? '' : 'none';
+		refresh();
+	});
+
+	mxEvent.addListener(document, 'pointerdown', function(evt)
+	{
+		if (!menu.contains(evt.target))
+		{
+			list.style.display = 'none';
+		}
+	});
+
+	document.body.appendChild(menu);
+	HmiRuntimeApp.viewMenu = menu;
+	refresh();
 };
 
 /** A full-window reason instead of a blank screen. */

@@ -47,6 +47,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testAlarms(ui);
 		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testSecurity(ui);
+		HmiSelfTest.testViews(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
@@ -3244,6 +3245,97 @@ HmiSelfTest.testSecurity = function(ui)
 		built.settings.security.autoLogoutMin === 10 && errors.length === 2 &&
 		errors[0].indexOf('None') > 0 && errors[1].indexOf('colour') > 0, JSON.stringify(errors));
 
+	ui.hmiProject = savedProject;
+};
+
+/** The runtime's view modes (fit, fill, original) and the browser's view menu. */
+HmiSelfTest.testViews = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var p = HmiSelfTest.sampleProject();
+	p.settings.width = 800;
+	p.settings.height = 400;
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	HmiSelfTest.resetGraph(ui);
+
+	HmiMenus.startWith(ui, p, true, null, null, null);
+	var rt = ui.hmiRuntime;
+
+	if (rt == null || rt.windows.length === 0)
+	{
+		check('view.started', false, 'no run');
+		ui.hmiProject = savedProject;
+
+		return;
+	}
+
+	var W = window.innerWidth;
+	var H = window.innerHeight;
+	var fitScale = Math.min(W / 800, H / 400);
+	check('view.fitDefault', rt.view === 'fit' && Math.abs(rt.scale - fitScale) < 0.001 &&
+		rt.screen.style.transform === '', rt.view + ' ' + rt.scale);
+
+	rt.setView('fill');
+	var sx = W / 800;
+	var sy = H / 400;
+	check('view.fillStretches', rt.scale === 1 && rt.screen.style.transform === 'scale(' + sx + ', ' + sy + ')' &&
+		rt.windows[0].graph.view.scale === 1, rt.screen.style.transform);
+
+	// A tap 100, 50 page units into the stretched screen lands at 100, 50
+	var container = rt.windows[0].graph.container;
+	var r = container.getBoundingClientRect();
+	var pt = mxUtils.convertPoint(container, r.left + 100 * sx, r.top + 50 * sy);
+	check('view.fillTapsLand', Math.abs(pt.x - 100) < 0.5 && Math.abs(pt.y - 50) < 0.5, pt.x + ',' + pt.y);
+
+	rt.setView('original');
+	check('view.original', rt.scale === 1 && rt.screen.style.transform === '' && rt.backdrop.style.overflow === 'auto' &&
+		rt.screen.style.width === '800px' && rt.screen.hmiStretch == null, rt.backdrop.style.overflow);
+
+	pt = mxUtils.convertPoint(container, container.getBoundingClientRect().left + 30, container.getBoundingClientRect().top + 20);
+	check('view.originalTaps', Math.abs(pt.x - 30) < 0.5 && Math.abs(pt.y - 20) < 0.5, pt.x + ',' + pt.y);
+
+	rt.setView('nonsense');
+	check('view.unknownIgnored', rt.view === 'original');
+
+	rt.setView('fit');
+	check('view.backToFit', Math.abs(rt.scale - fitScale) < 0.001 && rt.screen.style.transform === '' &&
+		rt.backdrop.style.overflow === '');
+
+	// The starting view: this browser's choice, else hmiview, else fit
+	var savedInfo = HmiRuntimeApp.info;
+	var savedParam = urlParams['hmiview'];
+	HmiRuntimeApp.info = {productName: 'View Test'};
+
+	try { window.localStorage.removeItem(HmiRuntimeApp.viewKey()); } catch (e) {}
+
+	urlParams['hmiview'] = 'original';
+	check('view.initialFromUrl', HmiRuntimeApp.initialView() === 'original');
+	urlParams['hmiview'] = 'bogus';
+	check('view.initialDefault', HmiRuntimeApp.initialView() === 'fit');
+
+	HmiRuntimeApp.showViewMenu(ui);
+	var menu = HmiRuntimeApp.viewMenu;
+	var options = menu.querySelectorAll('[data-hmi-view]');
+	check('view.menu', options.length >= 3 && menu.querySelector('[data-hmi-view="fill"]') != null);
+	menu.querySelector('[data-hmi-view="fill"]').click();
+	var stored = null;
+	try { stored = window.localStorage.getItem(HmiRuntimeApp.viewKey()); } catch (e) {}
+	check('view.menuApplies', rt.view === 'fill' && stored === 'fill' && HmiRuntimeApp.initialView() === 'fill' &&
+		menu.querySelector('[data-hmi-view="fill"]').classList.contains('hmiViewSelected'), rt.view + ' ' + stored);
+
+	try { window.localStorage.removeItem(HmiRuntimeApp.viewKey()); } catch (e) {}
+	menu.parentNode.removeChild(menu);
+	HmiRuntimeApp.viewMenu = null;
+	HmiRuntimeApp.info = savedInfo;
+
+	if (savedParam == null) { delete urlParams['hmiview']; } else { urlParams['hmiview'] = savedParam; }
+
+	// A run-only Run never stops by itself (a published package)
+	ui.hmiRunOnly = false;
+	HmiMenus.stop(ui);
+	check('view.stopClears', ui.hmiRuntime == null && rt.backdrop == null ||
+		!HmiMenus.isRunning(ui), String(HmiMenus.isRunning(ui)));
 	ui.hmiProject = savedProject;
 };
 

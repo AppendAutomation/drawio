@@ -198,6 +198,9 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.scale = 1;
 	this.fit = options != null && options.fit === true;
 
+	// How the screen fills the window in a runtime (fit): see setView
+	this.view = 'fit';
+
 	// options.alarmStore names the alarm history (the project, or a
 	// published runtime's product)
 	var store = (options != null) ? options.alarmStore : null;
@@ -440,6 +443,25 @@ HmiWindowManager.prototype.createScreen = function()
 	this.layout();
 };
 
+/** The runtime's view modes (setView). */
+HmiWindowManager.VIEWS = ['fit', 'fill', 'original'];
+
+/**
+ * How a runtime's screen fills its window:
+ *   fit       the whole screen, as large as fits, keeping its proportions
+ *   fill      stretched to fill the window (proportions not kept)
+ *   original  1:1, with scroll bars when the window is smaller
+ * The editor's Run always fits the diagram area.
+ */
+HmiWindowManager.prototype.setView = function(view)
+{
+	if (mxUtils.indexOf(HmiWindowManager.VIEWS, view) >= 0 && view !== this.view)
+	{
+		this.view = view;
+		this.layout();
+	}
+};
+
 /**
  * Fits the device screen into the diagram area. Scaled down when it does not
  * fit, never up: a 800x480 panel shown at 1:1 is what the operator will see.
@@ -451,6 +473,15 @@ HmiWindowManager.prototype.layout = function()
 	{
 		return;
 	}
+
+	if (this.fit && this.view !== 'fit')
+	{
+		this.layoutView();
+
+		return;
+	}
+
+	this.clearStretch();
 
 	var area = (this.fit) ? {left: 0, top: 0, width: window.innerWidth,
 		height: window.innerHeight} : this.ui.diagramContainer.getBoundingClientRect();
@@ -478,6 +509,104 @@ HmiWindowManager.prototype.layout = function()
 	{
 		this.place(this.windows[i]);
 	}
+};
+
+/** The runtime's fill and original views (setView). */
+HmiWindowManager.prototype.layoutView = function()
+{
+	var width = window.innerWidth;
+	var height = window.innerHeight;
+	var res = this.project.settings;
+	var b = this.backdrop.style;
+	b.left = '0px';
+	b.top = '0px';
+	b.width = width + 'px';
+	b.height = height + 'px';
+
+	// Both draw the screen at 1:1; fill then stretches it as a whole
+	this.scale = 1;
+
+	var s = this.screen.style;
+	s.width = res.width + 'px';
+	s.height = res.height + 'px';
+
+	if (this.view === 'fill')
+	{
+		var sx = width / res.width;
+		var sy = height / res.height;
+		b.overflow = 'hidden';
+		s.left = '0px';
+		s.top = '0px';
+		s.transformOrigin = '0 0';
+		s.transform = 'scale(' + sx + ', ' + sy + ')';
+		this.screen.hmiStretch = {x: sx, y: sy};
+		HmiWindowManager.installStretchedPoints();
+	}
+	else
+	{
+		this.clearStretch();
+		b.overflow = 'auto';
+		s.left = Math.max(0, Math.round((width - res.width) / 2)) + 'px';
+		s.top = Math.max(0, Math.round((height - res.height) / 2)) + 'px';
+	}
+
+	for (var i = 0; i < this.windows.length; i++)
+	{
+		this.place(this.windows[i]);
+	}
+};
+
+HmiWindowManager.prototype.clearStretch = function()
+{
+	if (this.screen != null)
+	{
+		this.screen.style.transform = '';
+		this.screen.hmiStretch = null;
+	}
+
+	if (this.backdrop != null)
+	{
+		this.backdrop.style.overflow = '';
+	}
+};
+
+/**
+ * mxGraph maps a pointer's page position into a graph by the container's
+ * offset alone, which is wrong under the fill view's CSS stretch: taps would
+ * land beside their objects. Inside a stretched screen, distances from the
+ * container's corner are divided by the stretch.
+ */
+HmiWindowManager.installStretchedPoints = function()
+{
+	if (HmiWindowManager.convertPoint != null)
+	{
+		return;
+	}
+
+	var convert = mxUtils.convertPoint;
+	HmiWindowManager.convertPoint = convert;
+
+	mxUtils.convertPoint = function(container, x, y)
+	{
+		var pt = convert.apply(this, arguments);
+		var node = container;
+
+		while (node != null && node.hmiStretch == null)
+		{
+			node = node.parentNode;
+		}
+
+		if (node != null && node.hmiStretch != null && container.getBoundingClientRect != null)
+		{
+			var r = container.getBoundingClientRect();
+			var dx = x - r.left;
+			var dy = y - r.top;
+			pt.x += dx / node.hmiStretch.x - dx;
+			pt.y += dy / node.hmiStretch.y - dy;
+		}
+
+		return pt;
+	};
 };
 
 // ---------------------------------------------------------------- windows
