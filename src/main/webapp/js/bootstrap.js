@@ -70,9 +70,10 @@ if (window.location.hash != null && window.location.hash.substring(0, 2) == '#P'
 
 // Global variable for desktop
 // Append HMI Studio: the desktop app is recognised by its preload bridge, not
-// by the app name in the user agent
-var mxIsElectron = navigator.userAgent != null && navigator.userAgent.toLowerCase().indexOf(' electron/') > -1 && 
-                    window.electron != null;
+// by the app name in the user agent. Append HMI Web's browser bridge
+// (window.electron.hmiWeb) runs the page the same way in any browser.
+var mxIsElectron = window.electron != null && (window.electron.hmiWeb === true ||
+                    (navigator.userAgent != null && navigator.userAgent.toLowerCase().indexOf(' electron/') > -1));
 
 // Redirects page if required
 if (urlParams['dev'] != '1')
