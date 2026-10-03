@@ -19,6 +19,7 @@ HmiRecipes = function() {};
 HmiRecipes.LIST_SHAPE = 'hmiRecipeList';
 HmiRecipes.MAX_NAME = 64;
 HmiRecipes.SAVE_DELAY_MS = 300;
+HmiRecipes.REFRESH_MS = 5000;
 
 // Names of the functions a manager answers (HmiRuntime.context routes them)
 HmiRecipes.FUNCTIONS = ['RecipeSave', 'RecipeLoad', 'RecipeUpload', 'RecipeDownload', 'RecipeExport',
@@ -312,7 +313,10 @@ HmiRecipes.describeCall = function(name, args)
  * @param project  the HmiProject
  * @param driver   a hub client: values of the books' tags, and writes
  * @param options  {ui, store, saved (the PC's books, or null), persist(books)
- *                 (default: the main process), files ({exportCsv(name, text,
+ *                 (default: the main process), loadSaved(fn(books)): what the
+ *                 PC has now (default: the main process when persist is not
+ *                 given), refreshMs (default: every few seconds in Append HMI
+ *                 Web, never elsewhere), files ({exportCsv(name, text,
  *                 fn(error, file)), importCsv(fn(error, {text}))}: default the
  *                 main process, or the browser in Append HMI Web), report
  *                 (call, message): the Recipe Error window by default}
@@ -341,6 +345,8 @@ HmiRecipeManager = function(project, driver, options)
 			this.savedBooks[this.books[i].name] = true;
 		}
 	}
+
+	this.synced = this.snapshot();
 };
 
 HmiRecipeManager.prototype.on = function(event, fn)
@@ -416,6 +422,16 @@ HmiRecipeManager.prototype.start = function()
 	{
 		this.driver.subscribe(names, 250);
 	}
+
+	// Each browser of Append HMI Web has its own manager: what the others
+	// save reaches it here
+	var web = window.electron != null && window.electron.hmiWeb === true;
+	var refreshMs = (this.options.refreshMs != null) ? this.options.refreshMs : (web ? HmiRecipes.REFRESH_MS : 0);
+
+	if (refreshMs > 0 && this.loader() != null)
+	{
+		this.refreshTimer = window.setInterval(function() { that.refresh(); }, refreshMs);
+	}
 };
 
 HmiRecipeManager.prototype.stop = function()
@@ -426,6 +442,13 @@ HmiRecipeManager.prototype.stop = function()
 	}
 
 	this.running = false;
+
+	if (this.refreshTimer != null)
+	{
+		window.clearInterval(this.refreshTimer);
+		this.refreshTimer = null;
+	}
+
 	this.driver.off('change', this.onChange);
 	this.driver.off('writeError', this.onWriteError);
 	this.flush();
@@ -501,6 +524,43 @@ HmiRecipeManager.prototype.toSave = function()
 	return out;
 };
 
+/** Every book's recipes as they are now: {book: {recipe: {tag: value}}}. */
+HmiRecipeManager.prototype.snapshot = function()
+{
+	var out = {};
+
+	for (var i = 0; i < this.books.length; i++)
+	{
+		out[this.books[i].name] = JSON.parse(JSON.stringify(this.books[i].recipes));
+	}
+
+	return out;
+};
+
+/** How the PC's saved recipes are fetched, or null to save without merging. */
+HmiRecipeManager.prototype.loader = function()
+{
+	var that = this;
+
+	if (this.options.loadSaved != null)
+	{
+		return this.options.loadSaved;
+	}
+
+	if (this.options.persist == null && this.options.store && HmiRecipes.available())
+	{
+		return function(fn) { HmiRecipes.load(that.options.store, fn); };
+	}
+
+	return null;
+};
+
+/**
+ * Saving merges: what the PC has now, with only this manager's own changes
+ * since it last synchronized (added, replaced, renamed and deleted recipes)
+ * on top. Another browser of Append HMI Web, or another window, may have
+ * saved in the meantime; its recipes are kept.
+ */
 HmiRecipeManager.prototype.flush = function()
 {
 	if (this.saveTimer == null)
@@ -511,21 +571,165 @@ HmiRecipeManager.prototype.flush = function()
 	window.clearTimeout(this.saveTimer);
 	this.saveTimer = null;
 
-	var books = this.toSave();
+	var load = this.loader();
 	var that = this;
 
-	if (this.options.persist != null)
+	if (load == null)
 	{
-		this.options.persist(books);
-	}
-	else if (this.options.store && HmiRecipes.available())
-	{
-		window.electron.request({action: 'hmiRecipes.save', store: this.options.store, books: books},
-			function() {}, function(message)
+		if (this.options.persist != null)
 		{
-			that.report('', 'The recipes could not be saved on this computer: ' + message + '.');
-		});
+			this.options.persist(this.toSave());
+		}
+
+		return;
 	}
+
+	if (this.saving)
+	{
+		this.saveAgain = true;
+
+		return;
+	}
+
+	this.saving = true;
+
+	load(function(saved)
+	{
+		var books = that.merge(saved || {});
+		var done = function()
+		{
+			that.saving = false;
+
+			if (that.saveAgain)
+			{
+				that.saveAgain = false;
+				that.saveTimer = 0;
+				that.flush();
+			}
+		};
+
+		if (that.options.persist != null)
+		{
+			that.options.persist(books);
+			done();
+		}
+		else
+		{
+			window.electron.request({action: 'hmiRecipes.save', store: that.options.store, books: books},
+				done, function(message)
+			{
+				that.report('', 'The recipes could not be saved on this computer: ' + message + '.');
+				done();
+			});
+		}
+	});
+};
+
+/** The books to save: saved, with this manager's changes applied. Adopts the result. */
+HmiRecipeManager.prototype.merge = function(saved)
+{
+	var out = JSON.parse(JSON.stringify(saved));
+	var now = this.snapshot();
+
+	for (var i = 0; i < this.books.length; i++)
+	{
+		var b = this.books[i];
+
+		if (!this.savedBooks[b.name])
+		{
+			continue;
+		}
+
+		var before = this.synced[b.name] || {};
+		var local = now[b.name];
+		var key = HmiRecipes.findKey(out, b.name);
+		var merged = (key != null) ? out[key] : JSON.parse(JSON.stringify(before));
+		var name, k;
+
+		for (name in before)
+		{
+			if (!local.hasOwnProperty(name) && (k = HmiRecipes.findKey(merged, name)) != null)
+			{
+				delete merged[k];
+			}
+		}
+
+		for (name in local)
+		{
+			if (!before.hasOwnProperty(name) || JSON.stringify(before[name]) !== JSON.stringify(local[name]))
+			{
+				if ((k = HmiRecipes.findKey(merged, name)) != null)
+				{
+					delete merged[k];
+				}
+
+				merged[name] = local[name];
+			}
+		}
+
+		if (key != null && key !== b.name)
+		{
+			delete out[key];
+		}
+
+		out[b.name] = merged;
+	}
+
+	this.adopt(out);
+
+	return out;
+};
+
+/** Takes the PC's recipes for every book it has; fires change for those that differ. */
+HmiRecipeManager.prototype.adopt = function(saved)
+{
+	for (var i = 0; i < this.books.length; i++)
+	{
+		var b = this.books[i];
+		var key = HmiRecipes.findKey(saved, b.name);
+
+		if (key != null)
+		{
+			var differs = JSON.stringify(b.recipes) !== JSON.stringify(saved[key]);
+			b.recipes = JSON.parse(JSON.stringify(saved[key]));
+			this.savedBooks[b.name] = true;
+
+			if (differs)
+			{
+				this.fire('change', b.name);
+			}
+		}
+	}
+
+	this.synced = this.snapshot();
+};
+
+/** Append HMI Web: picks up what other browsers saved, unless a save is due. */
+HmiRecipeManager.prototype.refresh = function(fn)
+{
+	var load = this.loader();
+	var that = this;
+
+	if (load == null || this.saving || this.saveTimer != null || this.refreshing)
+	{
+		if (fn != null) fn(false);
+
+		return;
+	}
+
+	this.refreshing = true;
+
+	load(function(saved)
+	{
+		that.refreshing = false;
+
+		if (saved != null && that.running !== false && !that.saving && that.saveTimer == null)
+		{
+			that.adopt(saved);
+		}
+
+		if (fn != null) fn(saved != null);
+	});
 };
 
 // ------------------------------------------------------------------ errors

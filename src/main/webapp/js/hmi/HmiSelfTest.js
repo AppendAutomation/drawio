@@ -3403,6 +3403,30 @@ HmiSelfTest.testRecipes = function(ui)
 	check('recipe.persisted', saved.length === 1 && saved[0].Mix['Batch 1'] != null && saved[0].Plain == null,
 		JSON.stringify(saved));
 
+	// Two managers on one store (two browsers of Append HMI Web): neither loses the other's recipes
+	var store = null;
+	var shared = {loadSaved: function(fn) { fn(store && JSON.parse(JSON.stringify(store))); },
+		persist: function(b) { store = JSON.parse(JSON.stringify(b)); }, report: function() {}};
+	var mA = new HmiRecipeManager(p, sim, shared);
+	var mB = new HmiRecipeManager(p, sim, shared);
+	var bChanged = 0;
+	mB.on('change', function() { bChanged++; });
+	mA.call('RecipeSave', ['Mix', 'From A']);
+	mA.flush();
+	mB.call('RecipeSave', ['Mix', 'From B']);
+	mB.flush();
+	check('recipe.mergeKeepsOthers', store.Mix['From A'] != null && store.Mix['From B'] != null &&
+		store.Mix['Start A'] != null && mB.recipe('Mix', 'From A') != null, JSON.stringify(store));
+	mA.refresh();
+	mA.call('RecipeRename', ['Mix', 'From A', 'A2']);
+	mA.call('RecipeDelete', ['Mix', 'From B']);
+	mA.flush();
+	check('recipe.mergeRenameDelete', store.Mix['A2'] != null && store.Mix['From A'] == null &&
+		store.Mix['From B'] == null && store.Mix['Start A'] != null, JSON.stringify(store));
+	mB.refresh();
+	check('recipe.refreshAdopts', mB.recipe('Mix', 'A2') != null && mB.recipe('Mix', 'From B') == null && bChanged >= 2,
+		JSON.stringify(mB.recipeNames('Mix')) + ' ' + bChanged);
+
 	sim.write({Plast1: 0, Plast2: 0, Note: '', Heat: 0});
 	check('recipe.load', m.call('RecipeLoad', ['mix', 'BATCH 1']) === 1 && sim.get('Plast1').value === 12.5 &&
 		sim.get('Plast2').value === 7 && sim.get('Note').value === 'Batch, "one"' && sim.get('Heat').value === 1);
