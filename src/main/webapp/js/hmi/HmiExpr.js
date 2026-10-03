@@ -58,7 +58,60 @@ HmiExpr.FUNCTIONS = {
 	'Login': {arity: 2, action: true},
 	'Logout': {arity: 0, action: true},
 	'ChangePassword': {arity: 2, action: true},
-	'ShowUserManager': {arity: 0, action: true}
+	'ShowUserManager': {arity: 0, action: true},
+
+	// Recipes (HmiRecipes.js). ShowRecipeSelect is asynchronous: the script
+	// pauses at it until the operator closes the window (Evaluator.resume)
+	'RecipeSave': {arity: 2, action: true},
+	'RecipeLoad': {arity: 2, action: true},
+	'RecipeUpload': {arity: 2, action: true},
+	'RecipeDownload': {arity: 2, action: true},
+	'RecipeExport': {arity: 2, action: true},
+	'RecipeImport': {arity: 2, action: true},
+	'RecipeDelete': {minArity: 2, maxArity: 3, action: true},
+	'RecipeRename': {arity: 3, action: true},
+	'ShowRecipeSelect': {minArity: 1, maxArity: 5, action: true, async: true}
+};
+
+/** A function's accepted argument counts. */
+HmiExpr.arityOf = function(def)
+{
+	return (def.arity != null) ? {min: def.arity, max: def.arity} : {min: def.minArity, max: def.maxArity};
+};
+
+/** Whether a node, or anything inside it, calls an asynchronous function. */
+HmiExpr.hasAsync = function(node)
+{
+	if (node == null || typeof node !== 'object')
+	{
+		return false;
+	}
+
+	if (node.type === 'call' && HmiExpr.FUNCTIONS[node.name] != null && HmiExpr.FUNCTIONS[node.name].async)
+	{
+		return true;
+	}
+
+	for (var key in node)
+	{
+		var v = node[key];
+
+		if (v != null && typeof v === 'object' && (Array.isArray(v) ? v.some(HmiExpr.hasAsync) : HmiExpr.hasAsync(v)))
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+/** The asynchronous call a statement is made of, or null. */
+HmiExpr.asyncCallOf = function(statement)
+{
+	var call = (statement.type === 'expr' || statement.type === 'assign') ? statement.value : null;
+
+	return (call != null && call.type === 'call' && HmiExpr.FUNCTIONS[call.name] != null &&
+		HmiExpr.FUNCTIONS[call.name].async) ? call : null;
 };
 
 HmiExpr.num = function(v)
@@ -473,10 +526,55 @@ HmiExpr.Parser.prototype.parseStatement = function()
 			this.writes.push(node.name);
 		}
 
-		return {type: 'assign', target: node, value: this.parseOr()};
+		var valueStart = this.i;
+		var assign = {type: 'assign', target: node, value: this.parseOr()};
+		this.checkAsync(assign, this.tokens[valueStart]);
+
+		return assign;
 	}
 
-	return {type: 'expr', value: node};
+	var statement = {type: 'expr', value: node};
+	this.checkAsync(statement, this.tokens[start]);
+
+	return statement;
+};
+
+/**
+ * An asynchronous function (ShowRecipeSelect) pauses the script, so it can
+ * only be a statement of its own or the whole value of an assignment.
+ */
+HmiExpr.Parser.prototype.checkAsync = function(statement, token)
+{
+	var call = HmiExpr.asyncCallOf(statement);
+	var rest = (call != null) ? call.args : statement.value;
+
+	if (HmiExpr.hasAsync(rest))
+	{
+		this.asyncError(rest, token);
+	}
+};
+
+HmiExpr.Parser.prototype.asyncError = function(node, token)
+{
+	var name = 'ShowRecipeSelect';
+
+	(function find(n)
+	{
+		if (n != null && typeof n === 'object')
+		{
+			if (n.type === 'call' && HmiExpr.FUNCTIONS[n.name] != null && HmiExpr.FUNCTIONS[n.name].async)
+			{
+				name = n.name;
+			}
+
+			for (var k in n)
+			{
+				find(n[k]);
+			}
+		}
+	})(node);
+
+	this.error(name + '() must be a statement or the value of an assignment', token);
 };
 
 /**
@@ -490,7 +588,13 @@ HmiExpr.Parser.prototype.parseIf = function()
 {
 	this.next();
 
+	var condStart = this.i;
 	var condition = this.parseOr();
+
+	if (HmiExpr.hasAsync(condition))
+	{
+		this.asyncError(condition, this.tokens[condStart]);
+	}
 
 	if (!this.eatOp('THEN'))
 	{
@@ -829,10 +933,12 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		this.error('unknown function "' + name + '"', token);
 	}
-	else if (args.length !== def.arity)
+	else if (args.length < HmiExpr.arityOf(def).min || args.length > HmiExpr.arityOf(def).max)
 	{
-		this.error(name + ' takes ' + def.arity + ' argument' +
-			((def.arity === 1) ? '' : 's') + ', got ' + args.length, token);
+		var arity = HmiExpr.arityOf(def);
+		var count = (arity.min === arity.max) ? '' + arity.min : arity.min + ' to ' + arity.max;
+		this.error(name + ' takes ' + count + ' argument' +
+			((arity.max === 1) ? '' : 's') + ', got ' + args.length, token);
 	}
 	else if (def.action && this.opts.mode !== 'script')
 	{
@@ -1124,17 +1230,112 @@ HmiExpr.Evaluator.prototype.eval_expr = function(node)
 	return this.run(node.value);
 };
 
+/**
+ * A script runs from a stack of statement lists, so it can pause at an
+ * asynchronous call (ShowRecipeSelect) and carry on from the same place when
+ * the call completes: ctx.callAsync(name, args, done) shows the window and
+ * done(value) assigns the value, if the call was an assignment's, and resumes.
+ * IF conditions are evaluated once, as their branch is entered.
+ */
 HmiExpr.Evaluator.prototype.eval_script = function(node)
 {
-	var last = {value: null, quality: HmiTypes.QUALITY_GOOD,
-		timestamp: Date.now()};
+	this.frames = [{body: node.body, i: 0}];
 
-	for (var i = 0; i < node.body.length; i++)
+	return this.resume({value: null, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
+};
+
+HmiExpr.Evaluator.prototype.resume = function(last)
+{
+	var frames = this.frames;
+
+	while (frames.length > 0)
 	{
-		last = this.run(node.body[i]);
+		var frame = frames[frames.length - 1];
+
+		if (frame.i >= frame.body.length)
+		{
+			frames.pop();
+			continue;
+		}
+
+		var statement = frame.body[frame.i++];
+
+		if (statement.type === 'if')
+		{
+			var cond = this.run(statement.condition);
+
+			// See eval_if: bad data takes neither branch
+			if (cond.quality <= HmiTypes.QUALITY_BAD)
+			{
+				last = {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: cond.timestamp};
+				continue;
+			}
+
+			frames.push({body: (HmiExpr.truthy(cond.value)) ? statement.then : statement.otherwise, i: 0});
+			last = {value: null, quality: cond.quality, timestamp: cond.timestamp};
+			continue;
+		}
+
+		var call = HmiExpr.asyncCallOf(statement);
+
+		if (call != null)
+		{
+			return this.suspend(statement, call);
+		}
+
+		last = this.run(statement);
 	}
 
 	return last;
+};
+
+HmiExpr.Evaluator.prototype.suspend = function(statement, call)
+{
+	var args = [];
+
+	for (var i = 0; i < call.args.length; i++)
+	{
+		args.push(this.run(call.args[i]).value);
+	}
+
+	var that = this;
+	var ctx = this.ctx;
+
+	if (ctx.callAsync == null)
+	{
+		throw new HmiExpr.RuntimeError(call.name + '() is not available here');
+	}
+
+	var called = false;
+
+	ctx.callAsync(call.name, args, function(value)
+	{
+		if (called)
+		{
+			return;
+		}
+
+		called = true;
+
+		try
+		{
+			if (statement.type === 'assign' && ctx.write != null)
+			{
+				ctx.write(statement.target.name, value, statement.target.field);
+			}
+
+			that.resume({value: value, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
+		}
+		catch (e)
+		{
+			if (ctx.scriptError != null)
+			{
+				ctx.scriptError((e != null) ? e.message : 'evaluation failed');
+			}
+		}
+	});
+
+	return {value: null, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now(), suspended: true};
 };
 
 // ------------------------------------------------------------------ cache

@@ -20,6 +20,10 @@ HmiProject = function()
 	// Users: {name, level, salt, hash, iterations} (see HmiSecurity)
 	this.users = [];
 
+	// Recipe books (see HmiRecipes): {name, uploadDownload, items: [{tag,
+	// ioTag}], recipes: {name: {tag: value}}}; recipes are the starting ones
+	this.recipeBooks = [];
+
 	// Compilation resolves tag names against this dictionary, so the expression
 	// cache is keyed on both of these. The uid is needed as well as the
 	// revision because two different projects can easily sit at the same
@@ -51,7 +55,7 @@ HmiProject.prototype.isEmpty = function()
 		JSON.stringify(this.settings.runtime) === JSON.stringify(d.runtime) &&
 		JSON.stringify(this.settings.publish) === JSON.stringify(d.publish) &&
 		JSON.stringify(this.settings.security) === JSON.stringify(d.security) &&
-		this.users.length === 0 &&
+		this.users.length === 0 && this.recipeBooks.length === 0 &&
 		Object.keys(this.windows).length === 0;
 };
 
@@ -640,6 +644,63 @@ HmiProject.prototype.toXml = function(doc)
 		root.appendChild(users);
 	}
 
+	// Element names unlike any other project element: fromXml finds those by
+	// name anywhere in the project
+	if (this.recipeBooks.length > 0)
+	{
+		var books = doc.createElement('recipeBooks');
+
+		for (var i = 0; i < this.recipeBooks.length; i++)
+		{
+			var b = this.recipeBooks[i];
+			var bn = doc.createElement('recipeBook');
+			bn.setAttribute('name', b.name);
+			bn.setAttribute('uploadDownload', (b.uploadDownload) ? '1' : '0');
+
+			for (var j = 0; j < b.items.length; j++)
+			{
+				var item = doc.createElement('recipeItem');
+				item.setAttribute('tag', b.items[j].tag || '');
+
+				if (b.items[j].ioTag)
+				{
+					item.setAttribute('ioTag', b.items[j].ioTag);
+				}
+
+				bn.appendChild(item);
+			}
+
+			var names = Object.keys(b.recipes || {});
+
+			for (var j = 0; j < names.length; j++)
+			{
+				var data = doc.createElement('recipeData');
+				data.setAttribute('name', names[j]);
+				var values = b.recipes[names[j]];
+
+				for (var tag in values)
+				{
+					var vn = doc.createElement('recipeValue');
+					vn.setAttribute('tag', tag);
+					vn.setAttribute('value', (values[tag] == null) ? '' : '' + values[tag]);
+
+					if (typeof values[tag] === 'number')
+					{
+						vn.setAttribute('number', '1');
+					}
+
+					data.appendChild(vn);
+				}
+
+				bn.appendChild(data);
+			}
+
+			books.appendChild(bn);
+		}
+
+		root.appendChild(books);
+	}
+
 	var windows = doc.createElement('windows');
 	var ids = Object.keys(this.windows).sort();
 
@@ -897,6 +958,40 @@ HmiProject.fromXml = function(node)
 			level: isNaN(level) ? 0 : level,
 			salt: un.getAttribute('salt') || '', hash: un.getAttribute('hash') || '',
 			iterations: parseInt(un.getAttribute('iterations'), 10) || HmiSecurity.ITERATIONS});
+	}
+
+	var bookNodes = node.getElementsByTagName('recipeBook');
+
+	for (var i = 0; i < bookNodes.length; i++)
+	{
+		var bn = bookNodes[i];
+		var book = {name: bn.getAttribute('name') || '', uploadDownload: bn.getAttribute('uploadDownload') === '1',
+			items: [], recipes: {}};
+		var itemNodes = bn.getElementsByTagName('recipeItem');
+
+		for (var j = 0; j < itemNodes.length; j++)
+		{
+			book.items.push({tag: itemNodes[j].getAttribute('tag') || '', ioTag: itemNodes[j].getAttribute('ioTag') || ''});
+		}
+
+		var dataNodes = bn.getElementsByTagName('recipeData');
+
+		for (var j = 0; j < dataNodes.length; j++)
+		{
+			var values = {};
+			var valueNodes = dataNodes[j].getElementsByTagName('recipeValue');
+
+			for (var k = 0; k < valueNodes.length; k++)
+			{
+				var raw = valueNodes[k].getAttribute('value');
+				values[valueNodes[k].getAttribute('tag') || ''] = (valueNodes[k].getAttribute('number') === '1') ?
+					parseFloat(raw) : raw;
+			}
+
+			book.recipes[dataNodes[j].getAttribute('name') || ''] = values;
+		}
+
+		project.recipeBooks.push(book);
 	}
 
 	var windows = node.getElementsByTagName('window');

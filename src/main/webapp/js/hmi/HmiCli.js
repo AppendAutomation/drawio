@@ -213,8 +213,11 @@ HmiCli.TYPES = {
 	triangle: 'triangle;whiteSpace=wrap;html=1;',
 	cylinder: 'shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;',
 	alarmList: 'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;',
-	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;'
+	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;',
+	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;'
 };
+
+HmiCli.RECIPE_BOOK_FIELDS = ['name', 'uploadDownload', 'items', 'recipes'];
 
 HmiCli.TAG_FIELDS = ['comment', 'engUnits', 'initial', 'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw',
 	'device', 'address', 'onMsg', 'offMsg', 'scanMs', 'alarms', 'sim', 'retentive'];
@@ -428,6 +431,7 @@ HmiCli.buildProject = function(spec, errors)
 	}
 
 	HmiCli.buildUsers(hmi, spec.users || [], errors);
+	HmiCli.buildRecipeBooks(hmi, spec.recipeBooks || [], errors);
 
 	return hmi;
 };
@@ -727,6 +731,105 @@ HmiCli.applyLinks = function(graph, cell, links, what, errors)
 	HmiProject.setCellLinks(graph, cell, out);
 };
 
+/**
+ * Recipe books: [{name, uploadDownload, items: [{tag, ioTag}] or ["tag"],
+ * recipes: {name: {tag: value}}}].
+ */
+HmiCli.buildRecipeBooks = function(hmi, books, errors)
+{
+	if (!Array.isArray(books))
+	{
+		errors.push('recipeBooks: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < books.length; i++)
+	{
+		var b = books[i] || {};
+		var what = 'recipe book ' + (b.name || (i + 1));
+
+		for (var key in b)
+		{
+			if (mxUtils.indexOf(HmiCli.RECIPE_BOOK_FIELDS, key) < 0)
+			{
+				errors.push(what + ': unknown field "' + key + '" (allowed: ' + HmiCli.RECIPE_BOOK_FIELDS.join(', ') + ')');
+			}
+		}
+
+		if (!HmiRecipes.validName(b.name))
+		{
+			errors.push(what + ': the name must be 1 to 64 characters');
+			continue;
+		}
+
+		if (HmiRecipes.findBook(hmi.recipeBooks, b.name) != null)
+		{
+			errors.push(what + ': defined twice');
+			continue;
+		}
+
+		var book = HmiRecipes.newBook(b.name.trim());
+		book.uploadDownload = b.uploadDownload === true;
+
+		(Array.isArray(b.items) ? b.items : []).forEach(function(it, j)
+		{
+			var item = (typeof it === 'string') ? {tag: it} : (it || {});
+
+			for (var k in item)
+			{
+				if (k !== 'tag' && k !== 'ioTag')
+				{
+					errors.push(what + ' item ' + (j + 1) + ': unknown field "' + k + '" (allowed: tag, ioTag)');
+				}
+			}
+
+			if (item.ioTag && !book.uploadDownload)
+			{
+				errors.push(what + ' item ' + (j + 1) + ': ioTag needs "uploadDownload": true');
+			}
+
+			book.items.push({tag: String(item.tag || ''), ioTag: String(item.ioTag || '')});
+		});
+
+		var problems = HmiRecipes.bookProblems(hmi, book);
+
+		for (var p = 0; p < problems.length; p++)
+		{
+			errors.push(what + ': ' + problems[p]);
+		}
+
+		var recipes = b.recipes || {};
+
+		for (var name in recipes)
+		{
+			if (!HmiRecipes.validName(name) || recipes[name] == null || typeof recipes[name] !== 'object')
+			{
+				errors.push(what + ': recipe "' + name + '" needs a name of 1 to 64 characters and {tag: value}');
+				continue;
+			}
+
+			book.recipes[name] = {};
+
+			for (var tag in recipes[name])
+			{
+				var v = recipes[name][tag];
+
+				if (typeof v !== 'number' && typeof v !== 'string')
+				{
+					errors.push(what + ' recipe "' + name + '": ' + tag + ' must be a number or text');
+				}
+				else
+				{
+					book.recipes[name][tag] = v;
+				}
+			}
+		}
+
+		hmi.recipeBooks.push(book);
+	}
+};
+
 /** The open project as a spec. */
 HmiCli.dump = function(ui)
 {
@@ -769,6 +872,28 @@ HmiCli.dump = function(ui)
 		spec.users = hmi.users.map(function(u)
 		{
 			return {name: u.name, level: u.level, salt: u.salt, hash: u.hash, iterations: u.iterations};
+		});
+	}
+
+	if (hmi.recipeBooks.length > 0)
+	{
+		spec.recipeBooks = hmi.recipeBooks.map(function(b)
+		{
+			var out = {name: b.name};
+
+			if (b.uploadDownload)
+			{
+				out.uploadDownload = true;
+			}
+
+			out.items = b.items.map(function(it) { return (b.uploadDownload) ? {tag: it.tag, ioTag: it.ioTag} : {tag: it.tag}; });
+
+			if (Object.keys(b.recipes).length > 0)
+			{
+				out.recipes = JSON.parse(JSON.stringify(b.recipes));
+			}
+
+			return out;
 		});
 	}
 

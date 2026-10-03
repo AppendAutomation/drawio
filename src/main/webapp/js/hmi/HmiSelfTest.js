@@ -47,6 +47,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testAlarms(ui);
 		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testSecurity(ui);
+		HmiSelfTest.testRecipes(ui);
 		HmiSelfTest.testViews(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
@@ -3337,6 +3338,352 @@ HmiSelfTest.testViews = function(ui)
 	check('view.stopClears', ui.hmiRuntime == null && rt.backdrop == null ||
 		!HmiMenus.isRunning(ui), String(HmiMenus.isRunning(ui)));
 	ui.hmiProject = savedProject;
+};
+
+/** Recipe books, the recipe functions, ShowRecipeSelect and the Recipe List. */
+HmiSelfTest.testRecipes = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var p = HmiSelfTest.sampleProject();
+	var add = function(name, type) { return p.addTag(HmiProject.createTag(name, type)); };
+	add('Plast1', 'MemoryReal');
+	add('Plast2', 'MemoryInteger');
+	add('Note', 'MemoryMessage');
+	add('Heat', 'MemoryDiscrete');
+	add('Plc1', 'MemoryReal');
+	add('Plc2', 'MemoryInteger');
+	add('Sel', 'MemoryMessage');
+	add('After', 'MemoryMessage');
+	add('Copy', 'MemoryMessage');
+	add('Up', 'MemoryDiscrete');
+	add('Down', 'MemoryDiscrete');
+	add('Go', 'MemoryDiscrete');
+
+	p.recipeBooks = [
+		{name: 'Mix', uploadDownload: true, items: [{tag: 'Plast1', ioTag: 'Plc1'}, {tag: 'Plast2', ioTag: 'Plc2'},
+			{tag: 'Note', ioTag: ''}, {tag: 'Heat', ioTag: ''}], recipes: {'Start A': {Plast1: 1.5, Plast2: 2, Note: 'a, "b"', Heat: 1}}},
+		{name: 'Plain', uploadDownload: false, items: [{tag: 'Plast1', ioTag: ''}], recipes: {}}
+	];
+
+	// Model
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	check('recipe.roundTrip', JSON.stringify(back.recipeBooks) === JSON.stringify(p.recipeBooks),
+		JSON.stringify(back.recipeBooks));
+	var only = new HmiProject();
+	only.recipeBooks = [HmiRecipes.newBook('B')];
+	check('recipe.notEmpty', !only.isEmpty());
+	check('recipe.noTagElementClash', back.tags.length === p.tags.length && back.users.length === 0);
+
+	// Script functions
+	var errs = function(src) { return HmiExpr.compile(src, {project: p, mode: 'script'}).errors.map(function(e) { return e.message; }); };
+	check('recipe.compile', errs('RecipeSave("Mix", Sel); RecipeDelete("Mix", "x"); RecipeDelete("Mix", "x", 1); ' +
+		'Sel = ShowRecipeSelect("Mix"); ShowRecipeSelect("Mix", 10, 20, 300, 400); RecipeRename("Mix", "a", "b");').length === 0,
+		errs('RecipeSave("Mix", Sel);').join('|'));
+	check('recipe.arity', errs('RecipeDelete("Mix");')[0] === 'RecipeDelete takes 2 to 3 arguments, got 1' &&
+		errs('RecipeLoad("Mix");').length === 1);
+	check('recipe.asyncPlacement', errs('IF ShowRecipeSelect("Mix") == "" THEN Go = 1; ENDIF;').length === 1 &&
+		errs('Sel = ShowRecipeSelect("Mix") + "x";').length === 1 &&
+		errs('Sel = ShowRecipeSelect("Mix") + "x";')[0].indexOf('must be a statement or the value of an assignment') > 0);
+	check('recipe.scriptOnly', HmiExpr.compile('RecipeSave("Mix", "a")', {project: p}).errors.length > 0);
+
+	// Manager on a simulator
+	var sim = new HmiSimulator(p);
+	sim.connect();
+	var saved = [];
+	var reports = [];
+	var m = new HmiRecipeManager(p, sim, {persist: function(b) { saved.push(b); },
+		report: function(call, message) { reports.push({call: call, message: message}); }});
+	m.start();
+	sim.write({Plast1: 12.5, Plast2: 7, Note: 'Batch, "one"', Heat: 1});
+
+	check('recipe.save', m.call('RecipeSave', ['Mix', 'Batch 1']) === 1 &&
+		JSON.stringify(m.recipe('Mix', 'batch 1')) === '{"Plast1":12.5,"Plast2":7,"Note":"Batch, \\"one\\"","Heat":1}',
+		JSON.stringify(m.recipe('Mix', 'Batch 1')));
+	m.flush();
+	check('recipe.persisted', saved.length === 1 && saved[0].Mix['Batch 1'] != null && saved[0].Plain == null,
+		JSON.stringify(saved));
+
+	sim.write({Plast1: 0, Plast2: 0, Note: '', Heat: 0});
+	check('recipe.load', m.call('RecipeLoad', ['mix', 'BATCH 1']) === 1 && sim.get('Plast1').value === 12.5 &&
+		sim.get('Plast2').value === 7 && sim.get('Note').value === 'Batch, "one"' && sim.get('Heat').value === 1);
+
+	check('recipe.download', m.call('RecipeDownload', ['Mix', '']) === 1 && sim.get('Plc1').value === 12.5 &&
+		sim.get('Plc2').value === 7);
+	sim.write({Plc1: 3.25, Plc2: 9});
+	check('recipe.upload', m.call('RecipeUpload', ['Mix', 'x']) === 1 && sim.get('Plast1').value === 3.25 &&
+		sim.get('Plast2').value === 9);
+	check('recipe.noUploadTags', m.call('RecipeUpload', ['Plain', 'x']) === 0 &&
+		reports[reports.length - 1].message === 'The recipe book "Plain" has no Upload/Download tags.');
+
+	check('recipe.rename', m.call('RecipeRename', ['Mix', 'Batch 1', 'Batch 2']) === 1 &&
+		m.recipe('Mix', 'Batch 2') != null && m.recipe('Mix', 'Batch 1') == null);
+	check('recipe.renameTaken', m.call('RecipeRename', ['Mix', 'Batch 2', 'start a']) === 0 &&
+		reports[reports.length - 1].message === 'A recipe named "Start A" already exists in "Mix".');
+	check('recipe.renameCase', m.call('RecipeRename', ['Mix', 'Batch 2', 'BATCH 2']) === 1 &&
+		m.recipeNames('Mix').join('|') === 'BATCH 2|Start A');
+
+	// Errors, each with its reason
+	var before = reports.length;
+	var fails = [
+		[['RecipeLoad', ['Mix', '']], 'The recipe name is empty.'],
+		[['RecipeLoad', ['', 'x']], 'The recipe book name is empty.'],
+		[['RecipeLoad', ['Nope', 'x']], 'There is no recipe book named "Nope".'],
+		[['RecipeLoad', ['Mix', 'Missing']], 'There is no recipe named "Missing" in "Mix".'],
+		[['RecipeDelete', ['Mix', 'Missing']], 'There is no recipe named "Missing" in "Mix".'],
+		[['RecipeSave', ['Mix', new Array(70).join('x')]], 'Recipe names can have up to 64 characters, without control characters.'],
+		[['RecipeSave', ['Mix', null]], 'The recipe name must be text.']
+	];
+	var allRight = true;
+	var detail = '';
+
+	for (var i = 0; i < fails.length; i++)
+	{
+		var r = m.call(fails[i][0][0], fails[i][0][1]);
+
+		if (r !== 0 || reports[reports.length - 1].message !== fails[i][1])
+		{
+			allRight = false;
+			detail += fails[i][0][0] + ': ' + reports[reports.length - 1].message + '; ';
+		}
+	}
+
+	check('recipe.errorReasons', allRight && reports.length === before + fails.length, detail);
+	check('recipe.errorNamesCall', reports[before].call === 'RecipeLoad("Mix", "")', reports[before].call);
+
+	m.values['plast2'] = {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+	check('recipe.badQuality', m.call('RecipeSave', ['Mix', 'Bad']) === 0 && m.recipe('Mix', 'Bad') == null &&
+		reports[reports.length - 1].message === 'These tags have no good value: Plast2 (the PLC may not be connected).');
+	delete m.values['plast2'];
+
+	m.books[0].recipes['Odd'] = {Plast1: 'abc'};
+	check('recipe.writeRefused', m.call('RecipeLoad', ['Mix', 'Odd']) === 0 &&
+		reports[reports.length - 1].message === 'Could not write Plast1: "abc" is not a number.');
+
+	p.recipeBooks.push({name: 'Broken', uploadDownload: false, items: [{tag: 'Gone', ioTag: ''}], recipes: {}});
+	var m2 = new HmiRecipeManager(p, sim, {report: function(c, msg) { reports.push({call: c, message: msg}); }});
+	p.recipeBooks.pop();
+	check('recipe.missingTags', m2.call('RecipeSave', ['Broken', 'x']) === 0 &&
+		reports[reports.length - 1].message === 'The recipe book "Broken" uses tags that no longer exist: Gone.');
+
+	// Delete, with and without confirmation
+	var answer = false;
+	m.options.confirm = function(q, fn) { fn(answer); };
+	check('recipe.deleteDeclined', m.call('RecipeDelete', ['Mix', 'Odd', 1]) === 1 && m.recipe('Mix', 'Odd') != null);
+	answer = true;
+	check('recipe.deleteConfirmed', m.call('RecipeDelete', ['Mix', 'Odd', 1]) === 1 && m.recipe('Mix', 'Odd') == null);
+	check('recipe.delete', m.call('RecipeDelete', ['Mix', 'BATCH 2']) === 1 && m.recipeNames('Mix').join('|') === 'Start A');
+
+	// The PC's recipes replace the starting ones, book by book
+	var m3 = new HmiRecipeManager(p, sim, {saved: {mix: {'From PC': {Plast1: 4}}}});
+	check('recipe.savedOverrides', m3.recipeNames('Mix').join('|') === 'From PC' && m3.recipeNames('Plain').length === 0);
+
+	// Export and import
+	var exported = null;
+	var importText = null;
+	m.options.files = {
+		exportCsv: function(name, text, fn) { exported = {name: name, text: text}; fn(null, name + '.csv'); },
+		importCsv: function(fn) { fn(null, {text: importText}); }
+	};
+	check('recipe.export', m.call('RecipeExport', ['Mix', 'start a']) === 1 && exported.name === 'Start A' &&
+		exported.text === '#Recipe,Mix,Start A\r\nTag,Value\r\nPlast1,1.5\r\nPlast2,2\r\nNote,"a, ""b"""\r\nHeat,1\r\n',
+		JSON.stringify(exported));
+	importText = exported.text;
+	check('recipe.import', m.call('RecipeImport', ['Mix', 'Copy A']) === 1 &&
+		JSON.stringify(m.recipe('Mix', 'Copy A')) === JSON.stringify(m.recipe('Mix', 'Start A')),
+		JSON.stringify(m.recipe('Mix', 'Copy A')));
+	importText = 'Tag,Value\nPlast1,5\nOther,1\nPlast2,x\n';
+	before = reports.length;
+	m.call('RecipeImport', ['Mix', 'Partial']);
+	check('recipe.importWarnings', JSON.stringify(m.recipe('Mix', 'Partial')) === '{"Plast1":5}' &&
+		reports.length === before + 1 && reports[before].message.indexOf('not in the book and were ignored: Other') > 0 &&
+		reports[before].message.indexOf('not numbers and were left out: Plast2') > 0, reports[before] && reports[before].message);
+	importText = 'Tag,Value\nSomething,1\n';
+	m.call('RecipeImport', ['Mix', 'None']);
+	check('recipe.importForeign', m.recipe('Mix', 'None') == null &&
+		reports[reports.length - 1].message.indexOf('This file is not a recipe for "Mix"') === 0);
+	check('recipe.csvParse', JSON.stringify(HmiRecipes.fromCsv('#Recipe,a,b\r\nTag,Value\r\n"x,y","1,""2"""\r\n').values) ===
+		'{"x,y":"1,\\"2\\""}');
+	m.stop();
+
+	// Scripts in a runtime: functions, and a pause at ShowRecipeSelect
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var pending = null;
+	var rm = new HmiRecipeManager(p, sim, {select: function(book, names, rect, done) { pending = {names: names, done: done, rect: rect}; },
+		report: function(c, msg) { reports.push({call: c, message: msg}); }});
+	rm.start();
+	var rt = new HmiRuntime({graph: graph, project: p, driver: sim, recipes: rm});
+	rt.start();
+	sim.write({Plast1: 8, Plast2: 1, Note: 'n', Heat: 0, Go: 1, Sel: '', After: '', Copy: ''});
+	rt.runScript('RecipeSave("Mix", "Script");');
+	check('recipe.fromScript', rm.recipe('Mix', 'Script') != null && rm.recipe('Mix', 'Script').Plast1 === 8);
+
+	rt.runScript('IF Go THEN Sel = ShowRecipeSelect("Mix", 10, 20); After = "done"; ENDIF; Copy = Sel;');
+	check('recipe.scriptPauses', pending != null && sim.get('After').value === '' && pending.rect.x === 10 &&
+		pending.names.join('|') === 'Script|Start A', pending && pending.names.join('|'));
+	pending.done('Script');
+	check('recipe.scriptResumes', sim.get('Sel').value === 'Script' && sim.get('After').value === 'done' &&
+		sim.get('Copy').value === 'Script', JSON.stringify([sim.get('Sel'), sim.get('After'), sim.get('Copy')]));
+
+	pending = null;
+	sim.write({Sel: 'x', After: ''});
+	rt.runScript('Sel = ShowRecipeSelect("Mix"); After = "cancelled";');
+	pending.done('');
+	check('recipe.scriptCancel', sim.get('Sel').value === '' && sim.get('After').value === 'cancelled');
+
+	pending = null;
+	sim.write({After: ''});
+	rt.runScript('Sel = ShowRecipeSelect("Mix"); After = "late";');
+	rt.stop();
+	pending.done('Script');
+	check('recipe.stopDropsScript', sim.get('After').value === '');
+
+	// The real window, through the dialogs
+	rt = new HmiRuntime({graph: graph, project: p, driver: sim, recipes: rm});
+	rt.start();
+	rm.options.select = null;
+	rm.options.ui = ui;
+	sim.write({Sel: ''});
+	rt.runScript('Sel = ShowRecipeSelect("Mix");');
+	var dlg = document.querySelector('[data-hmi-recipe-select="Mix"]');
+	var field = function(name) { return (dlg != null) ? dlg.querySelector('[data-hmi-field="' + name + '"]') : null; };
+	check('recipe.selectWindow', dlg != null && dlg.querySelectorAll('[data-hmi-recipe]').length === 2 &&
+		dlg.querySelector('.hmiRecipeSelected').getAttribute('data-hmi-recipe') === 'Script');
+
+	if (dlg != null)
+	{
+		field('recipeDown').click();
+		field('recipeDown').click();
+		field('recipeUp').click();
+		check('recipe.selectArrows', dlg.querySelector('.hmiRecipeSelected').getAttribute('data-hmi-recipe') === 'Script');
+		field('recipeDown').click();
+		field('recipeSelect').click();
+		check('recipe.selectReturns', sim.get('Sel').value === 'Start A' &&
+			document.querySelector('[data-hmi-recipe-select]') == null, sim.get('Sel').value);
+	}
+
+	rt.runScript('Sel = ShowRecipeSelect("Mix");');
+	dlg = document.querySelector('[data-hmi-recipe-select="Mix"]');
+
+	if (dlg != null)
+	{
+		dlg.querySelector('[data-hmi-field="recipeCancel"]').click();
+	}
+
+	check('recipe.selectCancel', sim.get('Sel').value === '');
+
+	// The Recipe Error window: failures listed once the script is done, the
+	// same one counted
+	rm.options.report = null;
+	rt.runScript('RecipeLoad("Mix", ""); RecipeLoad("Mix", ""); RecipeLoad("Nope", "x"); After = "ran";');
+	check('recipe.errorAfterScript', sim.get('After').value === 'ran' && document.querySelector('[data-hmi-field="recipeErrors"]') == null);
+	HmiDialogs.flushRecipeErrors();
+	var errList = document.querySelector('[data-hmi-field="recipeErrors"]');
+	check('recipe.errorWindow', errList != null && errList.children.length === 2 &&
+		errList.children[0].textContent.indexOf('RecipeLoad("Mix", "")  (×2)') === 0 &&
+		errList.children[1].textContent.indexOf('There is no recipe book named "Nope".') > 0,
+		(errList != null) ? errList.textContent : 'no window');
+	rt.runScript('RecipeLoad("Mix", "Missing");');
+	check('recipe.errorAdded', errList != null && errList.children.length === 3);
+
+	if (errList != null)
+	{
+		document.querySelector('[data-hmi-field="recipeErrorOk"]').click();
+	}
+
+	check('recipe.errorClosed', document.querySelector('[data-hmi-field="recipeErrors"]') == null);
+	rt.stop();
+
+	// Recipe List object
+	HmiSelfTest.resetGraph(ui);
+	check('recipe.listShape', mxCellRenderer.defaultShapes[HmiRecipes.LIST_SHAPE] != null);
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 240, 300,
+		'html=1;noLabel=1;shape=' + HmiRecipes.LIST_SHAPE + ';');
+	HmiProject.setCellLinks(graph, cell, {recipeList: {book: 'Mix', title: '', selectedTag: 'Sel', upTag: 'Up',
+		downTag: 'Down', arrows: true}});
+	sim.write({Sel: 'script', Up: 0, Down: 0});
+	rt = new HmiRuntime({graph: graph, project: p, driver: sim, recipes: rm});
+	rt.start();
+	sim.write({Sel: 'script'});
+	var view = document.querySelector('[data-hmi-recipe-view="Mix"]');
+	var selectedName = function() { var s = view.querySelector('.hmiRecipeSelected'); return (s != null) ? s.getAttribute('data-hmi-recipe') : ''; };
+	check('recipe.listRows', view != null && view.querySelectorAll('[data-hmi-recipe]').length === 2);
+	check('recipe.listInitial', view != null && selectedName() === 'Script', view && selectedName());
+
+	if (view != null)
+	{
+		view.querySelector('[data-hmi-recipe="Start A"]').click();
+		check('recipe.listClickWrites', sim.get('Sel').value === 'Start A' && selectedName() === 'Start A');
+		sim.write({Up: 1});
+		check('recipe.listUpEdge', selectedName() === 'Script' && sim.get('Sel').value === 'Script', selectedName());
+		sim.write({Up: 1});
+		check('recipe.listNoRepeat', selectedName() === 'Script');
+		sim.write({Up: 0});
+		sim.write({Down: 1});
+		check('recipe.listDownEdge', selectedName() === 'Start A');
+		view.querySelector('[data-hmi-recipe-move="up"]').click();
+		check('recipe.listArrows', selectedName() === 'Script');
+		sim.write({Sel: 'nothing like it'});
+		check('recipe.listUnknownNone', selectedName() === '');
+		rm.call('RecipeSave', ['Mix', 'Added']);
+		check('recipe.listFollowsBook', view.querySelectorAll('[data-hmi-recipe]').length === 3);
+		graph.zoomIn();
+		var st = graph.view.getState(cell);
+		check('recipe.listFollowsZoom', Math.abs(parseFloat(view.style.width) - st.width) < 1.5);
+	}
+
+	rt.stop();
+	rm.stop();
+	check('recipe.listRemoved', document.querySelector('[data-hmi-recipe-view]') == null);
+	graph.zoomActual();
+	check('recipe.listValidated', HmiMenus.checkLink(p, {book: 'Gone', selectedTag: 'Nope'}).length === 2);
+
+	// HMI > Recipes
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	HmiDialogs.showRecipes(ui);
+	var box = ui.dialog.container;
+	var f = function(name) { return box.querySelector('[data-hmi-field="' + name + '"]'); };
+	check('recipe.dialogBooks', box.querySelectorAll('[data-hmi-book]').length === 2);
+	f('addBook').click();
+	f('bookName').value = 'Third';
+	f('bookName').dispatchEvent(new Event('input'));
+	f('addItem').click();
+	var tagField = box.querySelectorAll('[data-hmi-field="itemTag"]');
+	tagField[0].value = 'Nope';
+	tagField[0].dispatchEvent(new Event('input'));
+	check('recipe.dialogInvalidTag', tagField[0].classList.contains('hmiInvalid'));
+	box.querySelector('.hmiOk').click();
+	check('recipe.dialogRefuses', ui.dialog != null && f('recipeError').innerText.indexOf('unknown tag "Nope"') > 0,
+		f('recipeError') && f('recipeError').innerText);
+	tagField = box.querySelectorAll('[data-hmi-field="itemTag"]');
+	tagField[0].value = 'Plast1';
+	tagField[0].dispatchEvent(new Event('input'));
+	f('uploadDownload').click();
+	check('recipe.dialogUploadColumn', box.querySelectorAll('[data-hmi-field="itemIoTag"]').length === 1);
+	box.querySelectorAll('[data-hmi-field="itemIoTag"]')[0].value = 'Plc1';
+	box.querySelectorAll('[data-hmi-field="itemIoTag"]')[0].dispatchEvent(new Event('input'));
+	box.querySelector('.hmiOk').click();
+	var third = HmiRecipes.findBook(p.recipeBooks, 'Third');
+	check('recipe.dialogSaves', third != null && third.uploadDownload && third.items.length === 1 &&
+		third.items[0].tag === 'Plast1' && third.items[0].ioTag === 'Plc1');
+	ui.hmiProject = savedProject;
+
+	var json = JSON.stringify({version: 1, recipeBooks: p.recipeBooks});
+	var parsed = HmiDialogs.parseRecipeBooks(json);
+	check('recipe.exportImportBooks', parsed.books != null && JSON.stringify(parsed.books) === JSON.stringify(p.recipeBooks));
+	check('recipe.importBad', HmiDialogs.parseRecipeBooks('{"recipeBooks": []}').error != null &&
+		HmiDialogs.parseRecipeBooks('nope').error != null);
+
+	// Automation spec
+	var errors = [];
+	var built = HmiCli.buildProject({tags: [{name: 'A', type: 'MemoryReal'}, {name: 'B', type: 'MemoryReal'}],
+		recipeBooks: [{name: 'Bk', uploadDownload: true, items: [{tag: 'A', ioTag: 'B'}], recipes: {R1: {A: 1}}},
+			{name: 'Bad', items: ['Gone'], color: 1}]}, errors);
+	check('recipe.cliBuild', built.recipeBooks.length === 2 && built.recipeBooks[0].items[0].ioTag === 'B' &&
+		built.recipeBooks[0].recipes.R1.A === 1 && errors.length === 2 &&
+		errors.some(function(e) { return e.indexOf('color') > 0; }) && errors.some(function(e) { return e.indexOf('Gone') > 0; }),
+		JSON.stringify(errors));
 };
 
 HmiSelfTest.hasFileType = function(types, ext)

@@ -214,6 +214,11 @@ HmiWindowManager = function(ui, project, driver, options)
 		users: (options != null) ? options.users : null});
 
 	// Retentive tags' values are saved while the Run goes on
+	// Recipes: options.recipes are the ones saved on this PC
+	this.recipes = new HmiRecipeManager(project, this.hub.client(), {ui: ui,
+		store: (options != null) ? options.retentiveStore : null,
+		saved: (options != null) ? options.recipes : null});
+
 	this.retentive = new HmiRetentiveKeeper(project, this.hub.client(), {
 		store: (options != null) ? options.retentiveStore : null,
 		values: (options != null) ? options.retained : null});
@@ -241,6 +246,7 @@ HmiWindowManager.prototype.start = function()
 	this.alarms.start();
 	this.retentive.start();
 	this.security.start();
+	this.recipes.start();
 
 	var pages = this.startupPages();
 
@@ -269,6 +275,8 @@ HmiWindowManager.prototype.stop = function()
 	}
 
 	this.security.stop();
+	this.recipes.stop();
+	this.recipes.driver.disconnect();
 
 	// The last values are saved as the Run ends
 	this.retentive.stop();
@@ -761,7 +769,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	this.place(win);
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
-		driver: this.hub.client(), alarms: this.alarms, security: this.security});
+		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

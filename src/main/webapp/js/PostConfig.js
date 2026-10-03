@@ -37,7 +37,7 @@ window.ICON_SERVICE_PATH = null;
 	// as they are in every build (there is no minified bundle); the self test
 	// only in dev/test runs.
 	var files = ['HmiLog.js', 'HmiTypes.js', 'HmiProject.js', 'HmiFile.js',
-		'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js', 'HmiAlarms.js', 'HmiSecurity.js', 'HmiRetentive.js',
+		'HmiResources.js', 'HmiExpr.js', 'HmiSimulator.js', 'HmiComms.js', 'HmiCommsDriver.js', 'HmiRuntime.js', 'HmiAlarms.js', 'HmiSecurity.js', 'HmiRetentive.js', 'HmiRecipes.js',
 		'HmiWindows.js', 'HmiFrame.js',
 		'HmiFormatPanel.js', 'HmiLinkPanels.js', 'HmiFormat.js',
 		'HmiDialogs.js', 'HmiMenus.js', 'HmiRuntimeApp.js', 'HmiBrand.js', 'HmiCli.js'];

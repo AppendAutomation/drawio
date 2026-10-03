@@ -47,13 +47,25 @@ HmiFormatPanel.prototype.init = function()
 		this.addAlarmObjectSection(alarmKind);
 	}
 
+	// A Recipe List's settings are its recipeList link, shown first and open
+	if (HmiRecipes.isListCell(graph, this.cell))
+	{
+		if (this.links.recipeList == null)
+		{
+			this.links.recipeList = HmiTypes.LINKS['recipeList'].defaults();
+		}
+
+		ui.hmiUiState.expanded['recipeList'] = true;
+		this.addLinkSection('recipeList', HmiTypes.LINKS['recipeList']);
+	}
+
 	this.container.appendChild(this.addLauncher(this.createPanel()));
 
 	for (var key in this.links)
 	{
 		var def = HmiTypes.LINKS[key];
 
-		if (def != null)
+		if (def != null && key !== 'recipeList')
 		{
 			this.addLinkSection(key, def);
 		}

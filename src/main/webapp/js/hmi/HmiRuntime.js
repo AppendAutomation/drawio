@@ -32,6 +32,9 @@ HmiRuntime = function(config)
 	// The Run's HmiSecurityManager (_Username, _AccessLevel, Login() ...)
 	this.security = config.security || null;
 
+	// The Run's HmiRecipeManager (RecipeSave() ..., Recipe List objects)
+	this.recipes = config.recipes || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -106,7 +109,10 @@ HmiRuntime.prototype.start = function()
 	this.startAlarmViews();
 };
 
-/** Live tables over the Alarm List and Alarm History objects. */
+/**
+ * Live views over the Alarm List, Alarm History and Recipe List objects.
+ * Recipe lists also follow tag values (applyBatch).
+ */
 HmiRuntime.prototype.startAlarmViews = function()
 {
 	var graph = this.graph;
@@ -115,11 +121,21 @@ HmiRuntime.prototype.startAlarmViews = function()
 
 	for (var id in model.cells)
 	{
-		var kind = HmiAlarms.objectKind(graph, model.cells[id]);
+		var cell = model.cells[id];
+		var kind = HmiAlarms.objectKind(graph, cell);
+		var view = null;
 
 		if (kind != null)
 		{
-			var view = new HmiAlarmView(graph, model.cells[id], kind, this.alarms);
+			view = new HmiAlarmView(graph, cell, kind, this.alarms);
+		}
+		else if (HmiRecipes.isListCell(graph, cell))
+		{
+			view = new HmiRecipeListView(this, cell, HmiProject.getCellLinks(graph, cell).recipeList);
+		}
+
+		if (view != null)
+		{
 			view.start();
 			this.alarmViews.push(view);
 		}
@@ -312,6 +328,9 @@ HmiRuntime.prototype.bind = function()
 	}
 };
 
+/** Link config fields holding a tag name (the Recipe List's three). */
+HmiRuntime.TAG_FIELDS = ['tag', 'selectedTag', 'upTag', 'downTag'];
+
 /** Link config fields whose contents are expressions. */
 HmiRuntime.EXPR_FIELDS = ['expr', 'enableExpr', 'min', 'max', 'rateMs'];
 
@@ -349,10 +368,15 @@ HmiRuntime.prototype.dependencies = function(cfg)
 	}
 
 	// A tag field holds a bare name, not an expression.
-	if (cfg.tag != null && cfg.tag !== '' &&
-		mxUtils.indexOf(deps, cfg.tag) < 0)
+	for (var i = 0; i < HmiRuntime.TAG_FIELDS.length; i++)
 	{
-		deps.push(cfg.tag);
+		var tagName = cfg[HmiRuntime.TAG_FIELDS[i]];
+
+		if (tagName != null && tagName !== '' && typeof tagName === 'string' &&
+			mxUtils.indexOf(deps, tagName) < 0)
+		{
+			deps.push(tagName);
+		}
 	}
 
 	if (cfg.bands != null)
@@ -420,7 +444,32 @@ HmiRuntime.prototype.context = function()
 			read: function(name, field) { return that.readField(name, field); },
 			write: function(name, value, field) { that.writeField(name, value, field); },
 			// Script actions (Login(), ShowLogin() ...)
-			call: function(name, args) { return (that.security != null) ? that.security.call(name, args) : null; },
+			call: function(name, args)
+			{
+				var owner = HmiRecipes.isFunction(name) ? that.recipes : that.security;
+
+				return (owner != null) ? owner.call(name, args) : null;
+			},
+			// ShowRecipeSelect: the script resumes when the window closes,
+			// unless the runtime stopped meanwhile
+			callAsync: function(name, args, done)
+			{
+				if (that.recipes == null)
+				{
+					done('');
+
+					return;
+				}
+
+				that.recipes.callAsync(name, args, function(value)
+				{
+					if (that.running)
+					{
+						done(value);
+					}
+				});
+			},
+			scriptError: function(message) { HmiLog.warn('script: ' + message); },
 			now: function() { return Date.now(); }
 		};
 	}
@@ -549,6 +598,17 @@ HmiRuntime.prototype.applyBatch = function(batch)
 			for (var i = 0; i < cells.length; i++)
 			{
 				this.markDirty(cells[i]);
+			}
+		}
+	}
+
+	if (this.alarmViews != null)
+	{
+		for (var v = 0; v < this.alarmViews.length; v++)
+		{
+			if (this.alarmViews[v].applyBatch != null)
+			{
+				this.alarmViews[v].applyBatch(batch);
 			}
 		}
 	}

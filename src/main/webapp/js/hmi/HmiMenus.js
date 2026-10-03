@@ -278,6 +278,16 @@ HmiMenus.installActions = function()
 				HmiDialogs.showUsers(ui);
 			});
 
+			this.addAction('hmiRecipes...', function()
+			{
+				HmiDialogs.showRecipes(ui);
+			});
+
+			this.addAction('hmiClearRuntimeRecipes...', function()
+			{
+				HmiMenus.clearRuntimeRecipes(ui);
+			});
+
 			this.addAction('hmiClearRuntimeUsers...', function()
 			{
 				HmiMenus.clearRuntimeUsers(ui);
@@ -307,13 +317,13 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
-					'hmiDevices', 'hmiUsers', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'hmiDevices', 'hmiUsers', 'hmiRecipes', '-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
 
-				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers'], parent);
+				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers', 'hmiClearRuntimeRecipes'], parent);
 			})));
 		}));
 	};
@@ -440,7 +450,8 @@ HmiMenus.start = function(ui, options)
 
 		var retained = {};
 		var users = null;
-		var pending = 2;
+		var recipes = null;
+		var pending = 3;
 
 		var ready = function()
 		{
@@ -453,7 +464,7 @@ HmiMenus.start = function(ui, options)
 
 			if (!HmiMenus.isRunning(ui) && ui.hmiProject === project)
 			{
-				HmiMenus.startWith(ui, project, runtime, store, retained, users);
+				HmiMenus.startWith(ui, project, runtime, store, retained, users, recipes);
 			}
 		};
 
@@ -467,6 +478,7 @@ HmiMenus.start = function(ui, options)
 		}
 
 		HmiSecurity.loadUsers(store, function(list) { users = list; ready(); });
+		HmiRecipes.load(store, function(books) { recipes = books; ready(); });
 
 		return;
 	}
@@ -474,7 +486,7 @@ HmiMenus.start = function(ui, options)
 	HmiMenus.startWith(ui, project, runtime, store, {}, null);
 };
 
-HmiMenus.startWith = function(ui, project, runtime, store, retained, users)
+HmiMenus.startWith = function(ui, project, runtime, store, retained, users, recipes)
 {
 	HmiLog.guard('run.start', function()
 	{
@@ -504,7 +516,7 @@ HmiMenus.startWith = function(ui, project, runtime, store, retained, users)
 
 		ui.hmiRunOnly = runtime;
 		ui.hmiRuntime = new HmiWindowManager(ui, project, driver, {fit: runtime,
-			alarmStore: store, retentiveStore: store, retained: retained, users: users});
+			alarmStore: store, retentiveStore: store, retained: retained, users: users, recipes: recipes});
 		ui.hmiRuntime.start();
 		HmiMenus.setRunning(ui, true);
 	});
@@ -590,6 +602,39 @@ HmiMenus.clearRuntimeUsers = function(ui)
 		window.electron.request({action: 'hmiUsers.clear', store: store}, function() {}, function(message)
 		{
 			ui.showError(mxResources.get('error'), message, mxResources.get('ok'));
+		});
+	}, null, 'Clear', mxResources.get('cancel'));
+};
+
+/**
+ * Forgets the recipes saved at run time on this computer, so the next Run
+ * uses the starting recipes in HMI > Recipes again.
+ */
+HmiMenus.clearRuntimeRecipes = function(ui)
+{
+	var store = HmiMenus.alarmStore(ui, false);
+
+	if (store == null || !HmiRecipes.available())
+	{
+		return;
+	}
+
+	if (HmiMenus.isRunning(ui))
+	{
+		ui.showError(mxResources.get('hmiClearRuntimeRecipes'), 'Stop the Run first.', mxResources.get('ok'));
+
+		return;
+	}
+
+	ui.confirm('Forget the recipes saved at run time on this computer? The next Run uses the starting ' +
+		'recipes in HMI > Recipes.', function()
+	{
+		HmiRecipes.clear(store, function(message)
+		{
+			if (message != null)
+			{
+				ui.showError(mxResources.get('error'), message, mxResources.get('ok'));
+			}
 		});
 	}, null, 'Clear', mxResources.get('cancel'));
 };
@@ -847,6 +892,17 @@ HmiMenus.collectProblems = function(ui, fn)
 		return;
 	}
 
+	for (var i = 0; i < project.recipeBooks.length; i++)
+	{
+		var bookProblems = HmiRecipes.bookProblems(project, project.recipeBooks[i]);
+
+		for (var j = 0; j < bookProblems.length; j++)
+		{
+			problems.push({page: 'Recipes', cell: null, link: 'Recipe book ' + project.recipeBooks[i].name,
+				message: bookProblems[j]});
+		}
+	}
+
 	var pending = HmiMenus.checkTags(project, problems);
 
 	if (pending.length === 0 || !HmiComms.available())
@@ -1067,10 +1123,22 @@ HmiMenus.checkLink = function(project, cfg)
 	checkExpr(cfg.max, 'Maximum');
 	checkExpr(cfg.rateMs, 'Rate');
 
-	if (cfg.tag != null && cfg.tag !== '' && project != null &&
-		project.getTag(cfg.tag) == null)
+	var tagLabels = {tag: 'Unknown tag', selectedTag: 'Selected recipe: unknown tag',
+		upTag: 'Select up: unknown tag', downTag: 'Select down: unknown tag'};
+
+	for (var field in tagLabels)
 	{
-		errors.push('Unknown tag "' + cfg.tag + '"');
+		if (cfg[field] != null && cfg[field] !== '' && typeof cfg[field] === 'string' && project != null &&
+			project.getTag(cfg[field]) == null)
+		{
+			errors.push(tagLabels[field] + ' "' + cfg[field] + '"');
+		}
+	}
+
+	if (cfg.book != null && cfg.book !== '' && project != null && project.recipeBooks != null &&
+		HmiRecipes.findBook(project.recipeBooks, cfg.book) == null)
+	{
+		errors.push('No recipe book named "' + cfg.book + '"');
 	}
 
 	if (cfg.bands != null)

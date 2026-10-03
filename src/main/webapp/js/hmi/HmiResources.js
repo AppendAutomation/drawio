@@ -24,6 +24,8 @@ HmiResources.install = function()
 		'hmiClearRetentive=Clear Retentive Values',
 		'hmiUsers=Users',
 		'hmiClearRuntimeUsers=Clear Runtime User Changes',
+		'hmiRecipes=Recipes',
+		'hmiClearRuntimeRecipes=Clear Runtime Recipes',
 		'hmiAppSettings=Application Settings',
 		'hmiWindowProps=Window Properties',
 		// The menubar looks its label up by the menu's own name.

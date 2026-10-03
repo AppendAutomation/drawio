@@ -3335,3 +3335,969 @@ HmiDialogs.showUsers = function(ui, options)
 	render();
 	ui.showDialog(div, 560, (security != null) ? 720 : 560, true, true);
 };
+
+// ----------------------------------------------------------------- recipes
+
+/** A shared datalist of the project's tag names, for tag fields. */
+HmiDialogs.tagDatalist = function(project)
+{
+	var id = 'hmiTagList';
+	var list = document.getElementById(id);
+
+	if (list == null)
+	{
+		list = document.createElement('datalist');
+		list.setAttribute('id', id);
+		document.body.appendChild(list);
+	}
+
+	list.innerText = '';
+
+	for (var i = 0; i < project.tags.length; i++)
+	{
+		var opt = document.createElement('option');
+		opt.setAttribute('value', project.tags[i].name);
+		list.appendChild(opt);
+	}
+
+	return id;
+};
+
+/**
+ * HMI > Recipes: the project's Recipe Books. Edits a copy, applied on OK.
+ * Each book has a name, its Save/Load tags and, when Upload/Download tags is
+ * ticked, an Upload/Download tag paired with each. Recipes saved in the
+ * project are the starting recipes a Run uses until the PC has its own.
+ */
+HmiDialogs.showRecipes = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var books = HmiRecipes.copyBooks(project.recipeBooks);
+	var current = (books.length > 0) ? books[0] : null;
+	var listId = HmiDialogs.tagDatalist(project);
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipesDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Recipes'));
+	div.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'A recipe book lists the tags a recipe holds. Scripts save and load recipes with RecipeSave(book, name) ' +
+		'and RecipeLoad(book, name); with Upload/Download tags, RecipeDownload and RecipeUpload copy each tag ' +
+		'to and from its pair. Recipes saved while the application runs are kept on that computer.'));
+
+	var body = HmiDialogs.el('div', 'hmiRecipeBooks');
+	var left = HmiDialogs.el('div', 'hmiRecipeBookList');
+	var right = HmiDialogs.el('div', 'hmiRecipeBookEditor');
+	body.appendChild(left);
+	body.appendChild(right);
+	div.appendChild(body);
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	error.setAttribute('data-hmi-field', 'recipeError');
+	div.appendChild(error);
+
+	var uniqueName = function(base)
+	{
+		var name = base;
+
+		for (var n = 2; HmiRecipes.findBook(books, name) != null; n++)
+		{
+			name = base + ' ' + n;
+		}
+
+		return name;
+	};
+
+	var renderBooks = function()
+	{
+		left.innerHTML = '';
+		left.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Recipe books'));
+
+		var wrap = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable');
+		var tbody = table.appendChild(HmiDialogs.el('tbody'));
+
+		if (books.length === 0)
+		{
+			var empty = HmiDialogs.el('td', 'hmiEmpty', 'No recipe books.');
+			tbody.appendChild(HmiDialogs.el('tr')).appendChild(empty);
+		}
+
+		for (var i = 0; i < books.length; i++)
+		{
+			(function(b)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow' + ((b === current) ? ' hmiSelected' : ''));
+				row.setAttribute('data-hmi-book', b.name);
+				row.style.cursor = 'pointer';
+				var cell = HmiDialogs.el('td', 'hmiUserName', b.name);
+
+				if (b === current)
+				{
+					cell.style.fontWeight = '600';
+				}
+
+				row.appendChild(cell);
+				mxEvent.addListener(row, 'click', function()
+				{
+					current = b;
+					error.innerText = '';
+					renderBooks();
+					renderEditor();
+				});
+				tbody.appendChild(row);
+			})(books[i]);
+		}
+
+		wrap.appendChild(table);
+		left.appendChild(wrap);
+
+		var buttons = HmiDialogs.el('div', 'hmiRecipeButtons');
+		var add = HmiDialogs.button('Add', function()
+		{
+			current = HmiRecipes.newBook(uniqueName('Recipes'));
+			books.push(current);
+			renderBooks();
+			renderEditor();
+		});
+		add.setAttribute('data-hmi-field', 'addBook');
+		buttons.appendChild(add);
+
+		var dup = HmiDialogs.button('Duplicate', function()
+		{
+			if (current != null)
+			{
+				var copy = HmiRecipes.copyBooks([current])[0];
+				copy.name = uniqueName(current.name + ' copy');
+				books.push(copy);
+				current = copy;
+				renderBooks();
+				renderEditor();
+			}
+		});
+		buttons.appendChild(dup);
+
+		var del = HmiDialogs.button('Delete', function()
+		{
+			if (current != null)
+			{
+				books.splice(mxUtils.indexOf(books, current), 1);
+				current = (books.length > 0) ? books[0] : null;
+				renderBooks();
+				renderEditor();
+			}
+		});
+		del.setAttribute('data-hmi-field', 'deleteBook');
+		buttons.appendChild(del);
+
+		var imp = HmiDialogs.button('Import...', function() { importBooks(); });
+		imp.setAttribute('data-hmi-field', 'importBooks');
+		var exp = HmiDialogs.button('Export...', function() { exportBooks(); });
+		exp.setAttribute('data-hmi-field', 'exportBooks');
+		buttons.appendChild(imp);
+		buttons.appendChild(exp);
+		left.appendChild(buttons);
+	};
+
+	var tagInput = function(value, onChange, field)
+	{
+		var input = document.createElement('input');
+		input.className = 'hmiInput';
+		input.setAttribute('type', 'text');
+		input.setAttribute('list', listId);
+		input.setAttribute('placeholder', 'tag name');
+		input.setAttribute('data-hmi-field', field);
+		input.value = value || '';
+
+		var validate = function()
+		{
+			var bad = input.value !== '' && project.getTag(input.value) == null;
+			input.classList.toggle('hmiInvalid', bad);
+			input.setAttribute('title', bad ? 'Unknown tag' : '');
+		};
+
+		mxEvent.addListener(input, 'input', function()
+		{
+			onChange(input.value.trim());
+			validate();
+		});
+		validate();
+
+		return input;
+	};
+
+	var renderEditor = function()
+	{
+		right.innerHTML = '';
+
+		if (current == null)
+		{
+			right.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'Add a recipe book to begin.'));
+
+			return;
+		}
+
+		var book = current;
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Book'));
+
+		var name = HmiDialogs.field(right, 'Name', book.name, function() {});
+		name.setAttribute('data-hmi-field', 'bookName');
+		mxEvent.addListener(name, 'input', function()
+		{
+			book.name = name.value.trim();
+			var row = left.querySelector('tr.hmiSelected td');
+
+			if (row != null)
+			{
+				row.innerText = book.name;
+			}
+		});
+
+		var ud = HmiDialogs.field(right, 'Upload/Download tags', book.uploadDownload, function(v)
+		{
+			book.uploadDownload = v;
+			renderEditor();
+		}, 'checkbox');
+		ud.setAttribute('data-hmi-field', 'uploadDownload');
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Tags'));
+
+		var wrap = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable hmiRecipeTagTable');
+		var head = HmiDialogs.el('tr');
+		head.appendChild(HmiDialogs.el('th', null, 'Save/Load tag'));
+
+		if (book.uploadDownload)
+		{
+			head.appendChild(HmiDialogs.el('th', null, 'Upload/Download tag'));
+		}
+
+		head.appendChild(HmiDialogs.el('th', 'hmiUserActions', ''));
+		table.appendChild(HmiDialogs.el('thead')).appendChild(head);
+		var tbody = table.appendChild(HmiDialogs.el('tbody'));
+
+		if (book.items.length === 0)
+		{
+			var empty = HmiDialogs.el('td', 'hmiEmpty', 'No tags.');
+			empty.setAttribute('colspan', book.uploadDownload ? '3' : '2');
+			tbody.appendChild(HmiDialogs.el('tr')).appendChild(empty);
+		}
+
+		for (var i = 0; i < book.items.length; i++)
+		{
+			(function(item, index)
+			{
+				var row = HmiDialogs.el('tr');
+				row.setAttribute('data-hmi-item', '' + index);
+				row.appendChild(HmiDialogs.el('td')).appendChild(tagInput(item.tag, function(v) { item.tag = v; },
+					'itemTag'));
+
+				if (book.uploadDownload)
+				{
+					row.appendChild(HmiDialogs.el('td')).appendChild(tagInput(item.ioTag, function(v) { item.ioTag = v; },
+						'itemIoTag'));
+				}
+
+				var actions = row.appendChild(HmiDialogs.el('td', 'hmiUserActions'));
+				var up = HmiDialogs.button('▲', function()
+				{
+					if (index > 0)
+					{
+						book.items.splice(index - 1, 0, book.items.splice(index, 1)[0]);
+						renderEditor();
+					}
+				});
+				up.setAttribute('title', 'Move up');
+				var down = HmiDialogs.button('▼', function()
+				{
+					if (index < book.items.length - 1)
+					{
+						book.items.splice(index + 1, 0, book.items.splice(index, 1)[0]);
+						renderEditor();
+					}
+				});
+				down.setAttribute('title', 'Move down');
+				var remove = HmiDialogs.button('Remove', function()
+				{
+					book.items.splice(index, 1);
+					renderEditor();
+				});
+				remove.setAttribute('data-hmi-field', 'removeItem');
+				actions.appendChild(up);
+				actions.appendChild(down);
+				actions.appendChild(remove);
+				tbody.appendChild(row);
+			})(book.items[i], i);
+		}
+
+		wrap.appendChild(table);
+		right.appendChild(wrap);
+
+		var buttons = HmiDialogs.el('div', 'hmiRecipeButtons');
+		var addTag = HmiDialogs.button('Add tag', function()
+		{
+			book.items.push({tag: '', ioTag: ''});
+			renderEditor();
+
+			var inputs = right.querySelectorAll('[data-hmi-field="itemTag"]');
+
+			if (inputs.length > 0)
+			{
+				inputs[inputs.length - 1].focus();
+			}
+		});
+		addTag.setAttribute('data-hmi-field', 'addItem');
+		buttons.appendChild(addTag);
+		right.appendChild(buttons);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Starting recipes'));
+		right.appendChild(HmiDialogs.el('div', 'hmiHint', 'Used by a Run until the computer has recipes of its own. ' +
+			'Recipes come from RecipeSave or RecipeImport while running, or from importing a book.'));
+
+		var names = HmiRecipes.sortedNames(book.recipes);
+		var rwrap = HmiDialogs.el('div', 'hmiUserList');
+		var rtable = HmiDialogs.el('table', 'hmiUserTable');
+		var rbody = rtable.appendChild(HmiDialogs.el('tbody'));
+
+		if (names.length === 0)
+		{
+			rbody.appendChild(HmiDialogs.el('tr')).appendChild(HmiDialogs.el('td', 'hmiEmpty', 'No starting recipes.'));
+		}
+
+		for (var i = 0; i < names.length; i++)
+		{
+			(function(rname)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow');
+				row.setAttribute('data-hmi-recipe', rname);
+				row.appendChild(HmiDialogs.el('td', 'hmiUserName', rname));
+				row.appendChild(HmiDialogs.el('td', 'hmiUserLevel',
+					Object.keys(book.recipes[rname]).length + ' values'));
+				var actions = row.appendChild(HmiDialogs.el('td', 'hmiUserActions'));
+				actions.appendChild(HmiDialogs.button('Remove', function()
+				{
+					delete book.recipes[rname];
+					renderEditor();
+				}));
+				rbody.appendChild(row);
+			})(names[i]);
+		}
+
+		rwrap.appendChild(rtable);
+		right.appendChild(rwrap);
+	};
+
+	/** Problems with the books as edited, or null when they can be saved. */
+	var check = function()
+	{
+		var seen = {};
+
+		for (var i = 0; i < books.length; i++)
+		{
+			var b = books[i];
+			b.items = b.items.filter(function(it) { return it.tag || it.ioTag; });
+
+			if (!b.uploadDownload)
+			{
+				b.items.forEach(function(it) { it.ioTag = ''; });
+			}
+
+			var problem = null;
+
+			if (!HmiRecipes.validName(b.name))
+			{
+				problem = 'A recipe book name has 1 to 64 characters.';
+			}
+			else if (seen[b.name.toLowerCase()])
+			{
+				problem = 'There are two recipe books named "' + b.name + '".';
+			}
+			else
+			{
+				var problems = HmiRecipes.bookProblems(project, b);
+
+				if (problems.length > 0)
+				{
+					problem = 'Recipe book "' + b.name + '": ' + problems.join('; ') + '.';
+				}
+			}
+
+			if (problem != null)
+			{
+				current = b;
+				renderBooks();
+				renderEditor();
+				error.innerText = problem;
+
+				return problem;
+			}
+
+			seen[b.name.toLowerCase()] = true;
+		}
+
+		return null;
+	};
+
+	var exportBooks = function()
+	{
+		var text = JSON.stringify({version: 1, recipeBooks: HmiRecipes.copyBooks(books)}, null, 2);
+
+		HmiDialogs.saveTextFile(ui, 'recipe-books.json', text, 'json', function(message)
+		{
+			error.innerText = (message != null) ? 'The file could not be written: ' + message : '';
+		});
+	};
+
+	var importBooks = function()
+	{
+		HmiDialogs.openTextFile(ui, 'json', function(message, text)
+		{
+			if (message != null)
+			{
+				error.innerText = 'The file could not be read: ' + message;
+
+				return;
+			}
+
+			var found = HmiDialogs.parseRecipeBooks(text);
+
+			if (found.error != null)
+			{
+				error.innerText = found.error;
+
+				return;
+			}
+
+			var replace = found.books.filter(function(b) { return HmiRecipes.findBook(books, b.name) != null; });
+			var apply = function()
+			{
+				for (var i = 0; i < found.books.length; i++)
+				{
+					var old = HmiRecipes.findBook(books, found.books[i].name);
+
+					if (old != null)
+					{
+						books[mxUtils.indexOf(books, old)] = found.books[i];
+					}
+					else
+					{
+						books.push(found.books[i]);
+					}
+				}
+
+				current = found.books[0];
+				error.innerText = '';
+				renderBooks();
+				renderEditor();
+			};
+
+			if (replace.length > 0)
+			{
+				HmiDialogs.showRecipeConfirm(ui, 'Import Recipe Books', 'Replace ' + replace.map(function(b)
+				{
+					return '"' + b.name + '"';
+				}).join(', ') + ' with the imported book' + ((replace.length > 1) ? 's' : '') + '?', 'Replace',
+				function(yes)
+				{
+					if (yes)
+					{
+						apply();
+					}
+				});
+			}
+			else
+			{
+				apply();
+			}
+		});
+	};
+
+	renderBooks();
+	renderEditor();
+
+	HmiDialogs.okCancel(ui, div, function()
+	{
+		if (check() != null)
+		{
+			return false;
+		}
+
+		if (JSON.stringify(books) !== JSON.stringify(project.recipeBooks))
+		{
+			project.recipeBooks = books;
+			project.touch();
+			ui.editor.setModified(true);
+		}
+
+		return true;
+	});
+
+	ui.showDialog(div, 860, 620, true, true);
+};
+
+/** {books} or {error} from a recipe book export. */
+HmiDialogs.parseRecipeBooks = function(text)
+{
+	var data;
+
+	try
+	{
+		data = JSON.parse(text);
+	}
+	catch (e)
+	{
+		return {error: 'This file is not a recipe book export (not JSON).'};
+	}
+
+	var list = (data != null) ? data.recipeBooks : null;
+
+	if (!Array.isArray(list) || list.length === 0)
+	{
+		return {error: 'This file has no recipe books.'};
+	}
+
+	var books = [];
+
+	for (var i = 0; i < list.length; i++)
+	{
+		var b = list[i] || {};
+
+		if (!HmiRecipes.validName(b.name))
+		{
+			return {error: 'Book ' + (i + 1) + ' in the file has no valid name.'};
+		}
+
+		var book = HmiRecipes.newBook(b.name.trim());
+		book.uploadDownload = b.uploadDownload === true;
+
+		(Array.isArray(b.items) ? b.items : []).forEach(function(it)
+		{
+			if (it != null && (typeof it.tag === 'string' || typeof it.ioTag === 'string'))
+			{
+				book.items.push({tag: String(it.tag || ''), ioTag: String(it.ioTag || '')});
+			}
+		});
+
+		var recipes = (b.recipes != null && typeof b.recipes === 'object') ? b.recipes : {};
+
+		for (var name in recipes)
+		{
+			if (HmiRecipes.validName(name) && recipes[name] != null && typeof recipes[name] === 'object')
+			{
+				book.recipes[name] = {};
+
+				for (var tag in recipes[name])
+				{
+					var v = recipes[name][tag];
+
+					if (typeof v === 'number' || typeof v === 'string')
+					{
+						book.recipes[name][tag] = v;
+					}
+				}
+			}
+		}
+
+		books.push(book);
+	}
+
+	return {books: books};
+};
+
+/** Saves text to a file the user picks; fn(error or null). */
+HmiDialogs.saveTextFile = function(ui, defaultName, text, ext, fn)
+{
+	if (window.electron == null || typeof window.electron.request !== 'function' || window.electron.hmiWeb)
+	{
+		HmiRecipes.browserFiles.exportCsv(defaultName.replace(/\.[^.]+$/, ''), text, function(error)
+		{
+			fn(error || null);
+		});
+
+		return;
+	}
+
+	window.electron.request({action: 'showSaveDialog', defaultPath: defaultName,
+		filters: [{name: ext.toUpperCase() + ' files', extensions: [ext]}]}, function(path)
+	{
+		if (path == null)
+		{
+			fn(null);
+
+			return;
+		}
+
+		window.electron.request({action: 'writeFile', path: path, data: text, enc: 'utf8'},
+			function() { fn(null); }, function(message) { fn(message); });
+	}, function(message) { fn(message); });
+};
+
+/** Reads a file the user picks; fn(error, text) (both null on cancel). */
+HmiDialogs.openTextFile = function(ui, ext, fn)
+{
+	if (window.electron == null || typeof window.electron.request !== 'function' || window.electron.hmiWeb)
+	{
+		HmiRecipes.browserFiles.importCsv(function(error, result)
+		{
+			if (error != null || result != null)
+			{
+				fn(error, (result != null) ? result.text : null);
+			}
+		});
+
+		return;
+	}
+
+	window.electron.request({action: 'showOpenDialog', filters: [{name: ext.toUpperCase() + ' files', extensions: [ext]}],
+		properties: ['openFile']}, function(paths)
+	{
+		if (paths == null || paths.length === 0)
+		{
+			return;
+		}
+
+		window.electron.request({action: 'readFile', filename: paths[0], encoding: 'utf8'},
+			function(text) { fn(null, text); }, function(message) { fn(message); });
+	}, function(message) { fn(message); });
+};
+
+/** Where a rectangle in target-screen pixels is in the window, in a Run. */
+HmiDialogs.screenRect = function(ui, rect)
+{
+	var rt = ui.hmiRuntime;
+
+	if (rt == null || rt.screen == null)
+	{
+		return rect;
+	}
+
+	var box = rt.screen.getBoundingClientRect();
+	var res = rt.project.settings;
+	var sx = box.width / res.width;
+	var sy = box.height / res.height;
+
+	return {x: box.left + rect.x * sx, y: box.top + rect.y * sy,
+		width: (rect.width != null) ? rect.width * sx : null, height: (rect.height != null) ? rect.height * sy : null};
+};
+
+/**
+ * ShowRecipeSelect(book[, x, y[, w, h]]): the book's recipes in a modal list
+ * with Up and Down arrows; done(name) on Select, done('') on Cancel. x, y,
+ * w, h are target-screen pixels; by default 40% x 60% of the screen,
+ * centered.
+ */
+HmiDialogs.showRecipeSelect = function(ui, manager, bookName, rect, done)
+{
+	var names = manager.recipeNames(bookName);
+	var res = (ui.hmiProject != null) ? ui.hmiProject.settings : {width: 1024, height: 768};
+	var r = {x: null, y: null, width: Math.max(320, res.width * 0.4), height: Math.max(300, res.height * 0.6)};
+
+	if (rect != null)
+	{
+		r.x = rect.x;
+		r.y = rect.y;
+
+		if (rect.width != null)
+		{
+			r.width = rect.width;
+			r.height = rect.height;
+		}
+	}
+
+	if (r.x == null)
+	{
+		r.x = (res.width - r.width) / 2;
+		r.y = (res.height - r.height) / 2;
+	}
+
+	var place = HmiDialogs.screenRect(ui, r);
+	var selected = (names.length > 0) ? 0 : -1;
+	var finished = false;
+
+	var finish = function(value)
+	{
+		if (!finished)
+		{
+			finished = true;
+			done(value);
+		}
+	};
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipeSelect');
+	div.setAttribute('data-hmi-recipe-select', bookName);
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', bookName));
+
+	var body = HmiDialogs.el('div', 'hmiRecipeSelectBody');
+	var list = HmiDialogs.el('div', 'hmiRecipeSelectList');
+	var arrows = HmiDialogs.el('div', 'hmiRecipeArrows');
+	body.appendChild(list);
+	body.appendChild(arrows);
+	div.appendChild(body);
+
+	var render = function()
+	{
+		list.innerHTML = '';
+
+		if (names.length === 0)
+		{
+			list.appendChild(HmiDialogs.el('div', 'hmiRecipeEmpty', 'No recipes.'));
+		}
+
+		for (var i = 0; i < names.length; i++)
+		{
+			(function(index)
+			{
+				var row = HmiDialogs.el('div', 'hmiRecipeOption' + ((index === selected) ? ' hmiRecipeSelected' : ''),
+					names[index]);
+				row.setAttribute('data-hmi-recipe', names[index]);
+				mxEvent.addListener(row, 'click', function()
+				{
+					selected = index;
+					render();
+				});
+				mxEvent.addListener(row, 'dblclick', function()
+				{
+					selected = index;
+					select();
+				});
+				list.appendChild(row);
+			})(i);
+		}
+
+		var sel = list.querySelector('.hmiRecipeSelected');
+
+		if (sel != null && sel.scrollIntoView != null)
+		{
+			sel.scrollIntoView({block: 'nearest'});
+		}
+
+		ok.disabled = selected < 0;
+	};
+
+	var move = function(step)
+	{
+		if (names.length > 0)
+		{
+			selected = Math.max(0, Math.min(names.length - 1, selected + step));
+			render();
+		}
+	};
+
+	var up = HmiDialogs.button('▲', function() { move(-1); });
+	up.setAttribute('data-hmi-field', 'recipeUp');
+	up.setAttribute('title', 'Previous recipe');
+	var down = HmiDialogs.button('▼', function() { move(1); });
+	down.setAttribute('data-hmi-field', 'recipeDown');
+	down.setAttribute('title', 'Next recipe');
+	arrows.appendChild(up);
+	arrows.appendChild(down);
+
+	var select = function()
+	{
+		if (selected >= 0)
+		{
+			finish(names[selected]);
+			ui.hideDialog();
+		}
+	};
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	var cancel = HmiDialogs.button(mxResources.get('cancel'), function()
+	{
+		finish('');
+		ui.hideDialog();
+	});
+	cancel.setAttribute('data-hmi-field', 'recipeCancel');
+	footer.appendChild(cancel);
+	var ok = HmiDialogs.button('Select', select, true);
+	ok.setAttribute('data-hmi-field', 'recipeSelect');
+	footer.appendChild(ok);
+	div.appendChild(footer);
+
+	mxEvent.addListener(div, 'keydown', function(evt)
+	{
+		if (evt.keyCode == 38) { move(-1); mxEvent.consume(evt); }
+		else if (evt.keyCode == 40) { move(1); mxEvent.consume(evt); }
+		else if (evt.keyCode == 13) { select(); mxEvent.consume(evt); }
+	});
+
+	render();
+	div.setAttribute('tabindex', '0');
+
+	// Closing the window any other way (Escape, the x) is a Cancel
+	ui.showDialog(div, Math.round(place.width), Math.round(place.height), true, true, function()
+	{
+		finish('');
+	});
+
+	if (ui.dialog != null && ui.dialog.container != null && rect != null)
+	{
+		var c = ui.dialog.container.style;
+		c.left = Math.round(place.x) + 'px';
+		c.top = Math.round(place.y) + 'px';
+	}
+
+	div.focus();
+};
+
+/** A Yes/No question for the operator; fn(true) for the action button. */
+HmiDialogs.showRecipeConfirm = function(ui, title, question, action, fn)
+{
+	var answered = false;
+	var answer = function(yes)
+	{
+		if (!answered)
+		{
+			answered = true;
+			fn(yes);
+		}
+	};
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipeConfirm');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', title));
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', null, question));
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	var no = HmiDialogs.button('No', function() { answer(false); ui.hideDialog(); });
+	no.setAttribute('data-hmi-field', 'confirmNo');
+	var yes = HmiDialogs.button(action, function() { answer(true); ui.hideDialog(); }, true);
+	yes.setAttribute('data-hmi-field', 'confirmYes');
+	footer.appendChild(no);
+	footer.appendChild(yes);
+	div.appendChild(footer);
+
+	ui.showDialog(div, 440, 180, true, true, function() { answer(false); });
+};
+
+HmiDialogs.MAX_RECIPE_ERRORS = 10;
+
+/**
+ * A failed recipe function, for the operator. Failures are collected and
+ * shown once the running script has finished: in one Recipe Error window,
+ * listed, with identical ones counted rather than repeated.
+ */
+HmiDialogs.queueRecipeError = function(ui, call, message)
+{
+	var state = HmiDialogs.recipeErrors;
+
+	if (state == null || state.ui !== ui)
+	{
+		state = HmiDialogs.recipeErrors = {ui: ui, items: [], extra: 0, open: false, scheduled: false};
+	}
+
+	var same = null;
+
+	for (var i = 0; i < state.items.length; i++)
+	{
+		if (state.items[i].call === call && state.items[i].message === message)
+		{
+			same = state.items[i];
+		}
+	}
+
+	if (same != null)
+	{
+		same.count++;
+	}
+	else if (state.items.length < HmiDialogs.MAX_RECIPE_ERRORS)
+	{
+		state.items.push({call: call, message: message, count: 1});
+	}
+	else
+	{
+		state.extra++;
+	}
+
+	if (state.open)
+	{
+		HmiDialogs.renderRecipeErrors(state);
+	}
+	else if (!state.scheduled)
+	{
+		state.scheduled = true;
+
+		window.setTimeout(function()
+		{
+			HmiDialogs.flushRecipeErrors();
+		}, 0);
+	}
+};
+
+/** Shows queued recipe errors now rather than after the running script. */
+HmiDialogs.flushRecipeErrors = function()
+{
+	var state = HmiDialogs.recipeErrors;
+
+	if (state != null && state.scheduled)
+	{
+		state.scheduled = false;
+		HmiDialogs.showRecipeErrors(state);
+	}
+};
+
+HmiDialogs.showRecipeErrors = function(state)
+{
+	var ui = state.ui;
+	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipeErrorDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Recipe Error'));
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	state.list = HmiDialogs.el('ul', 'hmiRecipeErrors');
+	state.list.setAttribute('data-hmi-field', 'recipeErrors');
+	body.appendChild(state.list);
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	var ok = HmiDialogs.button(mxResources.get('ok'), function() { ui.hideDialog(); }, true);
+	ok.setAttribute('data-hmi-field', 'recipeErrorOk');
+	footer.appendChild(ok);
+	div.appendChild(footer);
+
+	state.open = true;
+	HmiDialogs.renderRecipeErrors(state);
+
+	ui.showDialog(div, 520, 300, true, true, function()
+	{
+		state.open = false;
+		state.items = [];
+		state.extra = 0;
+		state.list = null;
+	});
+};
+
+HmiDialogs.renderRecipeErrors = function(state)
+{
+	if (state.list == null)
+	{
+		return;
+	}
+
+	state.list.innerHTML = '';
+
+	for (var i = 0; i < state.items.length; i++)
+	{
+		var item = state.items[i];
+		var li = HmiDialogs.el('li');
+
+		if (item.call)
+		{
+			li.appendChild(HmiDialogs.el('div', 'hmiRecipeErrorCall', item.call +
+				((item.count > 1) ? '  (×' + item.count + ')' : '')));
+		}
+
+		li.appendChild(HmiDialogs.el('div', null, item.message));
+		state.list.appendChild(li);
+	}
+
+	if (state.extra > 0)
+	{
+		state.list.appendChild(HmiDialogs.el('li', null, 'and ' + state.extra + ' more'));
+	}
+};

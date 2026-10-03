@@ -135,6 +135,34 @@
 			]));
 	};
 
+	// The Recipe List object (HmiRecipes.js)
+	B['recipeList'] = function(content, cfg)
+	{
+		var project = this.editorUi.hmiProject;
+		var books = (project != null) ? project.recipeBooks : [];
+		var options = [{value: '', label: '(choose a book)'}];
+
+		for (var i = 0; i < books.length; i++)
+		{
+			options.push({value: books[i].name, label: books[i].name});
+		}
+
+		if (cfg.book && HmiRecipes.findBook(books, cfg.book) == null)
+		{
+			options.push({value: cfg.book, label: cfg.book + ' (not defined)'});
+		}
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'At Run, lists the recipes in the book. Touching one selects it and writes its name to ' +
+			'Selected recipe. Define books in HMI > Recipes.'));
+		this.addRow(content, 'Recipe book', this.createSelectField(cfg, 'book', options));
+		this.addRow(content, 'Title', this.createTextField(cfg, 'title', 'the book name'));
+		this.addRow(content, 'Selected recipe (message tag)', this.createTagField(cfg, 'selectedTag'));
+		this.addRow(content, 'Select up (discrete tag)', this.createTagField(cfg, 'upTag'));
+		this.addRow(content, 'Select down (discrete tag)', this.createTagField(cfg, 'downTag'));
+		this.addRow(content, '', this.createCheckField(cfg, 'arrows', 'Up and down arrow buttons'));
+	};
+
 	// Enable, in the Visibility style: touch links work only while enabled
 	B['enable'] = function(content, cfg)
 	{

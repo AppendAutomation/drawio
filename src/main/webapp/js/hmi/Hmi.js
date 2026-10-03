@@ -28,6 +28,7 @@ Hmi.install = function()
 	HmiMenus.install();
 	HmiFrame.install();
 	HmiAlarms.install();
+	HmiRecipes.install();
 	Hmi.captureUi();
 
 	HmiLog.log('HMI module ' + Hmi.VERSION + ' installed');

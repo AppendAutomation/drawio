@@ -233,6 +233,14 @@ HmiTypes.defineLink = function(key, def)
 			return {expr: '', sense: 'enabled'};
 		}});
 
+	// The Recipe List object's settings (HmiRecipes.js): edited in its own
+	// section, never offered as a link
+	def('recipeList', {code: 9001, family: 'display', label: 'Recipe List', milestone: 99,
+		defaults: function()
+		{
+			return {book: '', title: '', selectedTag: '', upTag: '', downTag: '', arrows: false};
+		}});
+
 	// Superseded by Enable; still applied in existing projects, not offered
 	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 99,
 		defaults: function()
