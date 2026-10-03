@@ -57,6 +57,17 @@ HmiSimulator.coerce = function(tag, value)
 	return (value != null) ? String(value) : null;
 };
 
+/** A tag's starting value: its initial value, or "" (message) or 0. An empty message stays text. */
+HmiSimulator.initialOf = function(tag)
+{
+	if (tag.initial != null && tag.initial !== '')
+	{
+		return tag.initial;
+	}
+
+	return (HmiTypes.isMessage(tag.type)) ? '' : 0;
+};
+
 HmiSimulator.prototype.id = 'simulator';
 HmiSimulator.prototype.displayName = 'Simulator';
 
@@ -67,7 +78,7 @@ HmiSimulator.prototype.connect = function()
 	for (var i = 0; i < tags.length; i++)
 	{
 		var key = tags[i].name.toLowerCase();
-		var start = (tags[i].initial != null) ? tags[i].initial : 0;
+		var start = HmiSimulator.initialOf(tags[i]);
 
 		if (this.presets[key] !== undefined && !HmiTypes.isIO(tags[i].type))
 		{
@@ -309,7 +320,7 @@ HmiSimulator.prototype.simulate = function(tag, elapsed, prev)
 	if (!HmiTypes.isIO(tag.type) && (mode == null || mode === ''))
 	{
 		return (prev != null) ? prev :
-			{value: tag.initial || 0, quality: HmiTypes.QUALITY_GOOD,
+			{value: HmiSimulator.initialOf(tag), quality: HmiTypes.QUALITY_GOOD,
 				timestamp: now};
 	}
 
@@ -349,7 +360,7 @@ HmiSimulator.prototype.simulate = function(tag, elapsed, prev)
 	else if (mode === 'static')
 	{
 		return (prev != null) ? prev :
-			{value: tag.initial || 0, quality: HmiTypes.QUALITY_GOOD,
+			{value: HmiSimulator.initialOf(tag), quality: HmiTypes.QUALITY_GOOD,
 				timestamp: now};
 	}
 	else

@@ -349,6 +349,7 @@
 	color: gray;
 	font-size: 12px;
 	margin-bottom: 8px;
+	white-space: normal;
 }
 
 .hmiError

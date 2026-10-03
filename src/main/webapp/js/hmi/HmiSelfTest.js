@@ -3389,6 +3389,9 @@ HmiSelfTest.testRecipes = function(ui)
 	// Manager on a simulator
 	var sim = new HmiSimulator(p);
 	sim.connect();
+	check('sim.emptyMessageIsText', sim.get('Note').value === '' && sim.get('Plast1').value === 0 &&
+		sim.simulate(p.getTag('Note'), 0, null).value === '' && sim.simulate(p.getTag('Plast1'), 0, null).value === 0,
+		JSON.stringify(sim.get('Note')));
 	var saved = [];
 	var reports = [];
 	var m = new HmiRecipeManager(p, sim, {persist: function(b) { saved.push(b); },
