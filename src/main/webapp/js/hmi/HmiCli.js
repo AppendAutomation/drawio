@@ -358,7 +358,8 @@ HmiCli.buildProject = function(spec, errors)
 		try
 		{
 			var tag = HmiProject.createTag(t.name, t.type);
-			HmiCli.copyFields(tag, t, HmiCli.TAG_FIELDS, 'tag ' + t.name, errors);
+			HmiCli.copyFields(tag, t, HmiTypes.isIndirect(t.type) ? ['comment'] : HmiCli.TAG_FIELDS,
+				'tag ' + t.name + (HmiTypes.isIndirect(t.type) ? ' (an indirect tag takes only a comment)' : ''), errors);
 			hmi.addTag(tag);
 		}
 		catch (e)

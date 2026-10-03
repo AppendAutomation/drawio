@@ -302,6 +302,12 @@ HmiProject.createTag = function(name, type)
 {
 	var tag = {name: name, type: type, comment: ''};
 
+	// No value, range or device of its own: those are the linked tag's
+	if (HmiTypes.isIndirect(type))
+	{
+		return tag;
+	}
+
 	if (HmiTypes.isAnalog(type))
 	{
 		tag.engUnits = '';
@@ -1046,6 +1052,14 @@ HmiProject.fromXml = function(node)
 HmiProject.tagFromXml = function(node)
 {
 	var tag = {name: node.getAttribute('name'), type: node.getAttribute('type')};
+
+	// An indirect tag is only a name, a type and a comment
+	if (HmiTypes.isIndirect(tag.type))
+	{
+		tag.comment = node.getAttribute('comment') || '';
+
+		return tag;
+	}
 
 	var strings = ['comment', 'engUnits', 'device', 'address', 'onMsg', 'offMsg'];
 

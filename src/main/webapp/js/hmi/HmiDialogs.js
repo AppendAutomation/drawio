@@ -302,6 +302,31 @@ HmiTagDialog.prototype.renderForm = function()
 		function(value)
 		{
 			tag.type = value;
+
+			// An indirect tag keeps only its name, type and comment
+			if (HmiTypes.isIndirect(value))
+			{
+				for (var key in tag)
+				{
+					if (key !== 'name' && key !== 'type' && key !== 'comment')
+					{
+						delete tag[key];
+					}
+				}
+			}
+			else if (tag.initial === undefined)
+			{
+				var fresh = HmiProject.createTag(tag.name, value);
+
+				for (var k in fresh)
+				{
+					if (tag[k] === undefined)
+					{
+						tag[k] = fresh[k];
+					}
+				}
+			}
+
 			that.markModified();
 			that.renderList();
 			that.renderForm();
@@ -317,6 +342,17 @@ HmiTagDialog.prototype.renderForm = function()
 				that.markModified();
 			}
 		}).setAttribute('data-hmi-prop', 'comment');
+
+	if (HmiTypes.isIndirect(tag.type))
+	{
+		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'An indirect tag stands for another tag, chosen while the application runs by a script: ' +
+			'LinkIndirectTag("' + tag.name + '", "TagName"). Reading or writing it reads or writes that tag. ' +
+			'It can be linked to ' + (HmiTypes.isDiscrete(tag.type) ? 'discrete' :
+			(HmiTypes.isMessage(tag.type) ? 'message' : 'integer and real')) + ' tags.'));
+
+		return;
+	}
 
 	if (HmiTypes.isAnalog(tag.type))
 	{
@@ -922,12 +958,25 @@ HmiTagDialog.prototype.applyCsv = function(text)
 
 		tag.type = type;
 
+		// An indirect tag keeps only its name, type and comment
+		if (HmiTypes.isIndirect(type))
+		{
+			for (var key in tag)
+			{
+				if (key !== 'name' && key !== 'type' && key !== 'comment')
+				{
+					delete tag[key];
+				}
+			}
+		}
+
 		for (var f = 0; f < HmiTagDialog.CSV_FIELDS.length; f++)
 		{
 			var field = HmiTagDialog.CSV_FIELDS[f];
 
 			if (field === 'name' || field === 'type' ||
-				record[field] == null || record[field] === '')
+				record[field] == null || record[field] === '' ||
+				(HmiTypes.isIndirect(type) && field !== 'comment'))
 			{
 				continue;
 			}
@@ -4185,11 +4234,11 @@ HmiDialogs.showRecipeConfirm = function(ui, title, question, action, fn)
 HmiDialogs.MAX_RECIPE_ERRORS = 10;
 
 /**
- * A failed recipe function, for the operator. Failures are collected and
- * shown once the running script has finished: in one Recipe Error window,
- * listed, with identical ones counted rather than repeated.
+ * A failed script function (recipes, LinkIndirectTag), for the operator.
+ * Failures are collected and shown once the running script has finished: in
+ * one window, listed, with identical ones counted rather than repeated.
  */
-HmiDialogs.queueRecipeError = function(ui, call, message)
+HmiDialogs.queueFunctionError = function(ui, call, message)
 {
 	var state = HmiDialogs.recipeErrors;
 
@@ -4236,6 +4285,30 @@ HmiDialogs.queueRecipeError = function(ui, call, message)
 	}
 };
 
+HmiDialogs.queueRecipeError = HmiDialogs.queueFunctionError;
+
+/** The window's title: Recipe Error, Indirect Tag Error, or Script Error for a mix. */
+HmiDialogs.functionErrorTitle = function(items)
+{
+	var recipe = 0;
+	var indirect = 0;
+
+	for (var i = 0; i < items.length; i++)
+	{
+		if (/^Recipe|^ShowRecipeSelect/.test(items[i].call || ''))
+		{
+			recipe++;
+		}
+		else if (/^LinkIndirectTag/.test(items[i].call || ''))
+		{
+			indirect++;
+		}
+	}
+
+	return (recipe === items.length) ? 'Recipe Error' :
+		((indirect === items.length) ? 'Indirect Tag Error' : 'Script Error');
+};
+
 /** Shows queued recipe errors now rather than after the running script. */
 HmiDialogs.flushRecipeErrors = function()
 {
@@ -4252,7 +4325,8 @@ HmiDialogs.showRecipeErrors = function(state)
 {
 	var ui = state.ui;
 	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipeErrorDialog');
-	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Recipe Error'));
+	state.title = HmiDialogs.el('div', 'hmiDialogTitle', HmiDialogs.functionErrorTitle(state.items));
+	div.appendChild(state.title);
 	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
 	state.list = HmiDialogs.el('ul', 'hmiRecipeErrors');
 	state.list.setAttribute('data-hmi-field', 'recipeErrors');
@@ -4275,6 +4349,7 @@ HmiDialogs.showRecipeErrors = function(state)
 		state.items = [];
 		state.extra = 0;
 		state.list = null;
+		state.title = null;
 	});
 };
 
@@ -4286,6 +4361,11 @@ HmiDialogs.renderRecipeErrors = function(state)
 	}
 
 	state.list.innerHTML = '';
+
+	if (state.title != null)
+	{
+		state.title.textContent = HmiDialogs.functionErrorTitle(state.items);
+	}
 
 	for (var i = 0; i < state.items.length; i++)
 	{

@@ -14,11 +14,106 @@
  * unsubscribes and disconnects as it pleases. HmiDriverHub hands each one a
  * client and keeps the single real driver subscribed to the union of what the
  * open windows read.
+ *
+ * The hub also resolves indirect tags, so everything above it (windows, alarm
+ * views, recipes, scripts) reads and writes them like any tag: a client's
+ * indirect name is subscribed as its linked tag, the linked tag's changes are
+ * delivered under the indirect name too, and writes go to the linked tag.
+ * There is one set of links for the Run (LinkIndirectTag in any window).
  */
-HmiDriverHub = function(driver)
+HmiDriverHub = function(driver, project)
 {
 	this.driver = driver;
+	this.project = project || null;
 	this.clients = [];
+	// lower-case indirect name -> {indirect, target} (dictionary names)
+	this.links = {};
+};
+
+HmiDriverHub.prototype.isIndirect = function(name)
+{
+	var tag = (this.project != null && name != null) ? this.project.getTag('' + name) : null;
+
+	return tag != null && HmiTypes.isIndirect(tag.type);
+};
+
+/** The linked tag's name for an indirect name; null while unlinked; other names unchanged. */
+HmiDriverHub.prototype.resolve = function(name)
+{
+	if (!this.isIndirect(name))
+	{
+		return name;
+	}
+
+	var link = this.links[('' + name).toLowerCase()];
+
+	return (link != null) ? link.target : null;
+};
+
+/**
+ * Points an indirect tag at a tag, replacing any earlier link (both checked
+ * by the caller: HmiIndirect.check). Every client is sent the linked tag's
+ * current value under the indirect name, so screens follow at once.
+ */
+HmiDriverHub.prototype.link = function(indirect, target)
+{
+	var itag = this.project.getTag(indirect);
+	var ttag = this.project.getTag(target);
+	this.links[itag.name.toLowerCase()] = {indirect: itag.name, target: ttag.name};
+	this.resubscribe();
+
+	var now = this.driver.get(ttag.name);
+	var batch = {};
+	batch[itag.name] = (now != null) ? now :
+		{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: Date.now()};
+
+	for (var i = 0; i < this.clients.length; i++)
+	{
+		this.clients[i].emit('change', batch);
+	}
+};
+
+/** A driver batch with each linked tag's value also under its indirect names. */
+HmiDriverHub.prototype.alias = function(batch)
+{
+	var out = null;
+	var lower = null;
+
+	for (var key in this.links)
+	{
+		if (lower == null)
+		{
+			lower = {};
+
+			for (var name in batch)
+			{
+				lower[name.toLowerCase()] = batch[name];
+			}
+		}
+
+		var link = this.links[key];
+		var v = lower[link.target.toLowerCase()];
+
+		if (v !== undefined)
+		{
+			out = out || HmiDriverHub.copy(batch);
+			out[link.indirect] = v;
+		}
+	}
+
+	return out || batch;
+};
+
+HmiDriverHub.copy = function(batch)
+{
+	var out = {};
+
+	for (var name in batch)
+	{
+		out[name] = batch[name];
+	}
+
+	return out;
 };
 
 HmiDriverHub.prototype.connect = function()
@@ -35,6 +130,7 @@ HmiDriverHub.prototype.disconnect = function()
 
 	this.driver.unsubscribe();
 	this.driver.disconnect();
+	this.links = {};
 };
 
 HmiDriverHub.prototype.client = function()
@@ -77,12 +173,14 @@ HmiDriverHub.prototype.resubscribe = function()
 
 		for (var j = 0; j < c.paths.length; j++)
 		{
-			var key = ('' + c.paths[j]).toLowerCase();
+			// An unlinked indirect tag reads nothing yet
+			var path = this.resolve(c.paths[j]);
+			var key = (path != null) ? ('' + path).toLowerCase() : null;
 
-			if (!seen[key])
+			if (key != null && !seen[key])
 			{
 				seen[key] = true;
-				paths.push(c.paths[j]);
+				paths.push(path);
 			}
 		}
 	}
@@ -130,21 +228,38 @@ HmiDriverClient.prototype.status = function()
 
 HmiDriverClient.prototype.on = function(event, cb)
 {
-	this.listeners.push({event: event, cb: cb});
-	this.hub.driver.on(event, cb);
+	var hub = this.hub;
+	var wrapped = (event === 'change') ? function(batch) { cb(hub.alias(batch)); } : cb;
+	this.listeners.push({event: event, cb: cb, wrapped: wrapped});
+	this.hub.driver.on(event, wrapped);
 };
 
 HmiDriverClient.prototype.off = function(event, cb)
 {
 	for (var i = this.listeners.length - 1; i >= 0; i--)
 	{
-		if (this.listeners[i].event === event && this.listeners[i].cb === cb)
+		var l = this.listeners[i];
+
+		if (l.event === event && l.cb === cb)
 		{
 			this.listeners.splice(i, 1);
+			this.hub.driver.off(event, l.wrapped);
 		}
 	}
+};
 
-	this.hub.driver.off(event, cb);
+/** Delivers a batch from the hub itself (a new indirect link) to this client's listeners. */
+HmiDriverClient.prototype.emit = function(event, batch)
+{
+	var list = this.listeners.slice(0);
+
+	for (var i = 0; i < list.length; i++)
+	{
+		if (list[i].event === event)
+		{
+			list[i].cb(batch);
+		}
+	}
 };
 
 HmiDriverClient.prototype.subscribe = function(paths, rateMs)
@@ -167,17 +282,39 @@ HmiDriverClient.prototype.unsubscribe = function()
 
 HmiDriverClient.prototype.read = function(paths)
 {
-	return this.hub.driver.read(paths);
+	var hub = this.hub;
+
+	return hub.driver.read(paths.map(function(p) { return hub.resolve(p); })
+		.filter(function(p) { return p != null; }));
 };
 
 HmiDriverClient.prototype.get = function(name)
 {
-	return this.hub.driver.get(name);
+	var target = this.hub.resolve(name);
+
+	return (target != null) ? this.hub.driver.get(target) : null;
 };
 
+/** Writes to an indirect tag go to its linked tag; while unlinked they go nowhere. */
 HmiDriverClient.prototype.write = function(writes)
 {
-	return this.hub.driver.write(writes);
+	var out = {};
+
+	for (var name in writes)
+	{
+		var target = this.hub.resolve(name);
+
+		if (target == null)
+		{
+			HmiLog.warn('write to ' + name + ' ignored: the indirect tag is not linked');
+		}
+		else
+		{
+			out[target] = writes[name];
+		}
+	}
+
+	return this.hub.driver.write(out);
 };
 
 // ------------------------------------------------------------ window manager
@@ -191,8 +328,10 @@ HmiWindowManager = function(ui, project, driver, options)
 {
 	this.ui = ui;
 	this.project = project;
-	this.hub = new HmiDriverHub(driver);
+	this.hub = new HmiDriverHub(driver, project);
 	this.driver = driver;
+	// LinkIndirectTag: one set of links for every window of the Run
+	this.indirect = new HmiIndirect(project, this.hub, {ui: ui});
 	this.windows = [];
 	this.running = false;
 	this.scale = 1;
@@ -769,7 +908,8 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	this.place(win);
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
-		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes});
+		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
+		indirect: this.indirect});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

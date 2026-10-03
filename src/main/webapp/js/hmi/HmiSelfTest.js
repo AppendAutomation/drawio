@@ -48,6 +48,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testRecipes(ui);
+		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testViews(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
@@ -3711,6 +3712,126 @@ HmiSelfTest.testRecipes = function(ui)
 		built.recipeBooks[0].recipes.R1.A === 1 && errors.length === 2 &&
 		errors.some(function(e) { return e.indexOf('color') > 0; }) && errors.some(function(e) { return e.indexOf('Gone') > 0; }),
 		JSON.stringify(errors));
+};
+
+/** Indirect tags and LinkIndirectTag. */
+HmiSelfTest.testIndirect = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var p = HmiSelfTest.sampleProject();
+	var add = function(name, type) { return p.addTag(HmiProject.createTag(name, type)); };
+	add('Real1', 'MemoryReal');
+	add('Real2', 'MemoryInteger');
+	add('Msg1', 'MemoryMessage');
+	add('Disc1', 'MemoryDiscrete');
+	add('N', 'MemoryInteger');
+	add('Which', 'MemoryMessage');
+	add('IndA', 'IndirectAnalog');
+	add('IndM', 'IndirectMessage');
+	add('IndD', 'IndirectDiscrete');
+	p.getTag('Real1').alarms = {high: 50};
+
+	// Types and the model
+	check('ind.types', HmiTypes.isIndirect('IndirectAnalog') && !HmiTypes.isIO('IndirectAnalog') &&
+		HmiTypes.isAnalog('IndirectAnalog') && HmiTypes.isDiscrete('IndirectDiscrete') && HmiTypes.isMessage('IndirectMessage'));
+	check('ind.accepts', HmiTypes.indirectAccepts('IndirectAnalog', 'IOInteger') &&
+		HmiTypes.indirectAccepts('IndirectAnalog', 'MemoryReal') && !HmiTypes.indirectAccepts('IndirectAnalog', 'MemoryMessage') &&
+		HmiTypes.indirectAccepts('IndirectDiscrete', 'IODiscrete') && !HmiTypes.indirectAccepts('IndirectDiscrete', 'MemoryReal') &&
+		!HmiTypes.indirectAccepts('IndirectAnalog', 'IndirectAnalog'));
+	check('ind.createBare', JSON.stringify(p.getTag('IndA')) === '{"name":"IndA","type":"IndirectAnalog","comment":""}');
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	check('ind.roundTrip', JSON.stringify(back.getTag('IndM')) === JSON.stringify(p.getTag('IndM')),
+		JSON.stringify(back.getTag('IndM')));
+	check('ind.notRetentiveOrAlarmed', !HmiRetentive.isRetentive({name: 'X', type: 'IndirectAnalog', retentive: true}) &&
+		!HmiAlarms.isAlarmed({name: 'X', type: 'IndirectAnalog', alarms: {high: 1}}));
+
+	// Compile
+	var errs = function(src, mode) { return HmiExpr.compile(src, {project: p, mode: mode || 'script'}).errors.map(function(e) { return e.message; }); };
+	check('ind.compileOk', errs('LinkIndirectTag("IndA", "Real1"); LinkIndirectTag("indm", Which); ' +
+		'LinkIndirectTag("IndA", "Real" + Text(N, "0")); LinkIndirectTag(Which, "Disc1"); IndA = IndA + 1;').length === 0,
+		errs('LinkIndirectTag("IndA", "Real" + Text(N, "0"));').join('|'));
+	check('ind.compileNotIndirect', errs('LinkIndirectTag("Real1", "Real2");')[0] ===
+		'LinkIndirectTag: "Real1" is a MemoryReal tag, not an indirect tag', errs('LinkIndirectTag("Real1", "Real2");')[0]);
+	check('ind.compileIncompatible', /cannot be linked to "Msg1"/.test(errs('LinkIndirectTag("IndA", "Msg1");')[0] || ''));
+	check('ind.compileUnknown', /no tag named "Nope"/.test(errs('LinkIndirectTag("IndA", "Nope");')[0] || ''));
+	check('ind.compileBareRef', /write "IndA" in quotes/.test(errs('LinkIndirectTag(IndA, "Real1");')[0] || ''));
+	check('ind.compileScriptOnly', errs('LinkIndirectTag("IndA", "Real1")', 'expr').length === 1);
+	check('ind.readCompiles', errs('IndA * 2 + IndD', 'expr').length === 0);
+
+	// Strings: + joins text and converts tag values
+	var strCtx = {read: function(n) { return {value: (n === 'N') ? 2 : (n === 'Disc1' ? true : 'Mix'), quality: 192, timestamp: 0}; }};
+	var joined = HmiExpr.compile('"Real" + N + "/" + Msg1 + Disc1', {project: p}).eval(strCtx);
+	check('ind.stringJoin', joined.value === 'Real2/Mix1', JSON.stringify(joined));
+
+	// The hub and a runtime on a simulator
+	var sim = new HmiSimulator(p);
+	sim.connect();
+	check('ind.simSkips', sim.get('IndA') == null || sim.get('IndA').value == null);
+	var hub = new HmiDriverHub(sim, p);
+	var reports = [];
+	var ind = new HmiIndirect(p, hub, {report: function(call, message) { reports.push(call + ' ' + message); }});
+	var other = hub.client();
+	var seen = {};
+	other.on('change', function(b) { for (var k in b) { seen[k] = b[k].value; } });
+	other.subscribe(['IndA', 'IndM'], 250);
+
+	HmiSelfTest.resetGraph(ui);
+	var graph = ui.editor.graph;
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, 'x', 20, 20, 120, 40, 'html=1;');
+	HmiProject.setCellLinks(graph, cell, {valueDisplay: {kind: 'analog', expr: 'IndA', format: '0.0', prefix: '', suffix: '',
+		onText: '', offText: ''}});
+	var rt = new HmiRuntime({graph: graph, project: p, driver: hub.client(), indirect: ind});
+	rt.start();
+	sim.write({Real1: 12.5, Real2: 7, N: 2, Which: 'IndM', Msg1: 'hello'});
+	rt.flush();
+	check('ind.unlinkedBad', rt.getValue('IndA').quality <= HmiTypes.QUALITY_BAD);
+
+	rt.runScript('LinkIndirectTag("IndA", "Real1");');
+	rt.flush();
+	check('ind.linkShows', rt.bindings[cell.id].visual.label === '12.5' && seen.IndA === 12.5,
+		rt.bindings[cell.id].visual.label + ' ' + seen.IndA);
+	sim.write({Real1: 60});
+	rt.flush();
+	check('ind.followsChanges', rt.bindings[cell.id].visual.label === '60.0' && seen.IndA === 60);
+	check('ind.dotfields', rt.readField('IndA', 'Name').value === 'Real1' && rt.readField('IndA', 'InAlarm').value === 1 &&
+		rt.readField('IndA', 'MaxEU').value === 100, JSON.stringify(rt.readField('IndA', 'Name')));
+	rt.runScript('IndA = 33;');
+	check('ind.writeThrough', sim.get('Real1').value === 33);
+
+	rt.runScript('LinkIndirectTag("IndA", "Real" + N);');
+	rt.flush();
+	check('ind.relinkByExpression', rt.bindings[cell.id].visual.label === '7.0' && rt.readField('IndA', 'Name').value === 'Real2',
+		rt.bindings[cell.id].visual.label);
+	sim.write({Real1: 1});
+	rt.flush();
+	check('ind.oldLinkGone', rt.bindings[cell.id].visual.label === '7.0' && seen.IndA === 7);
+	rt.runScript('LinkIndirectTag(Which, "Msg1");');
+	check('ind.sharedAcrossClients', seen.IndM === 'hello' && hub.client().get('IndM').value === 'hello');
+
+	// Failures: 0, the reason reported, the link unchanged
+	var before = reports.length;
+	var r = [ind.call('LinkIndirectTag', ['', 'Real1']), ind.call('LinkIndirectTag', ['IndA', 'Nope']),
+		ind.call('LinkIndirectTag', ['Real1', 'Real2']), ind.call('LinkIndirectTag', ['IndA', 'Msg1']),
+		ind.call('LinkIndirectTag', ['IndA', 'IndM'])];
+	check('ind.failures', r.join('') === '00000' && reports.length === before + 5 &&
+		reports[before].indexOf('The indirect tag name is empty.') > 0 && hub.resolve('IndA') === 'Real2', reports.join(' | '));
+	check('ind.callReturns1', ind.call('LinkIndirectTag', ['inda', 'real1']) === 1 && hub.resolve('IndA') === 'Real1');
+	rt.stop();
+	other.disconnect();
+	hub.disconnect();
+	check('ind.linksClearedOnStop', hub.resolve('IndA') == null);
+
+	// Error window title for indirect and mixed failures
+	check('ind.errorTitle', HmiDialogs.functionErrorTitle([{call: 'LinkIndirectTag("A", "B")'}]) === 'Indirect Tag Error' &&
+		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}]) === 'Recipe Error' &&
+		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}, {call: 'LinkIndirectTag("A", "B")'}]) === 'Script Error');
+
+	// Automation spec
+	var errors = [];
+	var built = HmiCli.buildProject({tags: [{name: 'P', type: 'IndirectAnalog', comment: 'pointer'},
+		{name: 'Q', type: 'IndirectDiscrete', address: 'X'}]}, errors);
+	check('ind.cli', built.getTag('P') != null && built.getTag('P').comment === 'pointer' && errors.length === 1 &&
+		errors[0].indexOf('only a comment') > 0, JSON.stringify(errors));
 };
 
 HmiSelfTest.hasFileType = function(types, ext)

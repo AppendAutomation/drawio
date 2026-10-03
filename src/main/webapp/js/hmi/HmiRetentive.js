@@ -13,7 +13,7 @@ HmiRetentive.SAVE_DELAY_MS = 1000;
 
 HmiRetentive.isRetentive = function(tag)
 {
-	return tag != null && tag.retentive === true && !HmiTypes.isIO(tag.type);
+	return tag != null && tag.retentive === true && !HmiTypes.isIO(tag.type) && !HmiTypes.isIndirect(tag.type);
 };
 
 HmiRetentive.tags = function(project)

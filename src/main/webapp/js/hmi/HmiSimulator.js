@@ -77,6 +77,12 @@ HmiSimulator.prototype.connect = function()
 
 	for (var i = 0; i < tags.length; i++)
 	{
+		// An indirect tag's value is its linked tag's (HmiDriverHub)
+		if (HmiTypes.isIndirect(tags[i].type))
+		{
+			continue;
+		}
+
 		var key = tags[i].name.toLowerCase();
 		var start = HmiSimulator.initialOf(tags[i]);
 
@@ -155,7 +161,7 @@ HmiSimulator.prototype.subscribe = function(paths, rateMs)
 	{
 		var tag = this.project.getTag(paths[i]);
 
-		if (tag != null)
+		if (tag != null && !HmiTypes.isIndirect(tag.type))
 		{
 			snapshot[tag.name] = this.get(tag.name);
 		}
@@ -274,6 +280,12 @@ HmiSimulator.prototype.scan = function()
 	for (var i = 0; i < this.project.tags.length; i++)
 	{
 		var tag = this.project.tags[i];
+
+		if (HmiTypes.isIndirect(tag.type))
+		{
+			continue;
+		}
+
 		var key = tag.name.toLowerCase();
 		var prev = this.values[key];
 		var next = this.simulate(tag, elapsed, prev);

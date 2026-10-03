@@ -13,7 +13,8 @@ HmiTypes = function() {};
 
 HmiTypes.TAG_TYPES = [
 	'MemoryDiscrete', 'MemoryInteger', 'MemoryReal', 'MemoryMessage',
-	'IODiscrete', 'IOInteger', 'IOReal', 'IOMessage'
+	'IODiscrete', 'IOInteger', 'IOReal', 'IOMessage',
+	'IndirectDiscrete', 'IndirectAnalog', 'IndirectMessage'
 ];
 
 HmiTypes.isIO = function(type)
@@ -23,12 +24,35 @@ HmiTypes.isIO = function(type)
 
 HmiTypes.isDiscrete = function(type)
 {
-	return type === 'MemoryDiscrete' || type === 'IODiscrete';
+	return type === 'MemoryDiscrete' || type === 'IODiscrete' || type === 'IndirectDiscrete';
 };
 
 HmiTypes.isMessage = function(type)
 {
-	return type === 'MemoryMessage' || type === 'IOMessage';
+	return type === 'MemoryMessage' || type === 'IOMessage' || type === 'IndirectMessage';
+};
+
+/**
+ * An indirect tag holds no value of its own: at run time LinkIndirectTag
+ * points it at another tag, and reading or writing it reads or writes that
+ * tag (HmiDriverHub).
+ */
+HmiTypes.isIndirect = function(type)
+{
+	return type != null && type.indexOf('Indirect') === 0;
+};
+
+/** Whether an indirect tag of this type may be linked to a tag of that type. */
+HmiTypes.indirectAccepts = function(indirectType, type)
+{
+	if (!HmiTypes.isIndirect(indirectType) || type == null || HmiTypes.isIndirect(type))
+	{
+		return false;
+	}
+
+	return (HmiTypes.isDiscrete(indirectType) && HmiTypes.isDiscrete(type)) ||
+		(HmiTypes.isMessage(indirectType) && HmiTypes.isMessage(type)) ||
+		(HmiTypes.isAnalog(indirectType) && HmiTypes.isAnalog(type));
 };
 
 HmiTypes.isAnalog = function(type)

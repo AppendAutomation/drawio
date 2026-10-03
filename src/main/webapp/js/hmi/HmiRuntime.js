@@ -31,6 +31,8 @@ HmiRuntime = function(config)
 
 	// The Run's HmiSecurityManager (_Username, _AccessLevel, Login() ...)
 	this.security = config.security || null;
+	// LinkIndirectTag, and the tag an indirect tag stands for (HmiIndirect)
+	this.indirect = config.indirect || null;
 
 	// The Run's HmiRecipeManager (RecipeSave() ..., Recipe List objects)
 	this.recipes = config.recipes || null;
@@ -446,7 +448,8 @@ HmiRuntime.prototype.context = function()
 			// Script actions (Login(), ShowLogin() ...)
 			call: function(name, args)
 			{
-				var owner = HmiRecipes.isFunction(name) ? that.recipes : that.security;
+				var owner = HmiRecipes.isFunction(name) ? that.recipes :
+					((name === HmiIndirect.FUNCTION) ? that.indirect : that.security);
 
 				return (owner != null) ? owner.call(name, args) : null;
 			},
@@ -493,9 +496,9 @@ HmiRuntime.prototype.writeField = function(name, value, field)
 			{
 				this.alarms.ackAll();
 			}
-			else if (field === 'Acked' && system == null)
+			else if (field === 'Acked' && system == null && this.linked(name) != null)
 			{
-				this.alarms.ack(name);
+				this.alarms.ack(this.linked(name));
 			}
 		}
 
@@ -529,7 +532,8 @@ HmiRuntime.prototype.readField = function(name, field)
 		return live;
 	}
 
-	var tag = this.project.getTag(name);
+	// An indirect tag's dotfields describe the tag it is linked to
+	var tag = this.project.getTag(this.linked(name));
 	var good = {quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
 
 	// Metadata reads are good quality even when the value itself is bad: they
@@ -565,6 +569,12 @@ HmiRuntime.prototype.readField = function(name, field)
 	}
 
 	return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+};
+
+/** The tag a name stands for: an indirect tag's linked tag (null while unlinked), else the name. */
+HmiRuntime.prototype.linked = function(name)
+{
+	return (this.indirect != null) ? this.indirect.resolve(name) : name;
 };
 
 HmiRuntime.truthy = function(value)
@@ -619,6 +629,12 @@ HmiRuntime.prototype.applyBatch = function(batch)
 /** Re-evaluates what depends on these names, though no value changed. */
 HmiRuntime.prototype.invalidateNames = function(names)
 {
+	// And the indirect tags linked to them (an alarm on the linked tag)
+	if (this.indirect != null)
+	{
+		names = names.concat(this.indirect.aliases(names));
+	}
+
 	for (var i = 0; i < names.length; i++)
 	{
 		var cells = this.reverseIndex[names[i]] || this.reverseIndex[('' + names[i]).toLowerCase()];
@@ -959,7 +975,7 @@ HmiRuntime.ALARM_TARGET = {
  */
 HmiRuntime.prototype.alarmState = function(name)
 {
-	var tag = this.project.getTag(name);
+	var tag = this.project.getTag(this.linked(name));
 	var live = this.getValue(name);
 
 	// The alarm manager's state (deadband, held through bad quality)
@@ -996,7 +1012,7 @@ HmiRuntime.prototype.alarmState = function(name)
 
 HmiRuntime.prototype.inAlarm = function(name)
 {
-	var tag = this.project.getTag(name);
+	var tag = this.project.getTag(this.linked(name));
 
 	if (this.alarms != null && tag != null)
 	{

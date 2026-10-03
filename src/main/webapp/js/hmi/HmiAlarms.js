@@ -27,7 +27,7 @@ HmiAlarms.HISTORY_SIZE = 1000;
 /** True when the tag has an alarm configured. */
 HmiAlarms.isAlarmed = function(tag)
 {
-	var a = (tag != null) ? tag.alarms : null;
+	var a = (tag != null && !HmiTypes.isIndirect(tag.type)) ? tag.alarms : null;
 
 	if (a == null)
 	{

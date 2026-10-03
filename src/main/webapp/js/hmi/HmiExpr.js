@@ -70,7 +70,10 @@ HmiExpr.FUNCTIONS = {
 	'RecipeImport': {arity: 2, action: true},
 	'RecipeDelete': {minArity: 2, maxArity: 3, action: true},
 	'RecipeRename': {arity: 3, action: true},
-	'ShowRecipeSelect': {minArity: 1, maxArity: 5, action: true, async: true}
+	'ShowRecipeSelect': {minArity: 1, maxArity: 5, action: true, async: true},
+
+	// Indirect tags (HmiIndirect.js): LinkIndirectTag("Indirect", "Tag")
+	'LinkIndirectTag': {arity: 2, action: true}
 };
 
 /** A function's accepted argument counts. */
@@ -944,8 +947,53 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		this.error(name + '() can only be used in a script', token);
 	}
+	else if (name === 'LinkIndirectTag' && this.project != null)
+	{
+		this.checkLink(args, token);
+	}
 
 	return {type: 'call', name: name, args: args};
+};
+
+/**
+ * LinkIndirectTag takes tag names as text. Names given as literals are
+ * checked here, at Validate; a bare tag reference is a likely mistake unless
+ * it is a message tag holding a name.
+ */
+HmiExpr.Parser.prototype.checkLink = function(args, token)
+{
+	var names = [null, null];
+
+	for (var i = 0; i < 2; i++)
+	{
+		var a = args[i];
+
+		if (a.type === 'literal' && typeof a.value === 'string')
+		{
+			names[i] = a.value;
+		}
+		else if (a.type === 'ref' && a.field == null)
+		{
+			var tag = this.project.getTag(a.name);
+
+			if (tag != null && !HmiTypes.isMessage(tag.type))
+			{
+				this.error('LinkIndirectTag takes tag names as text: write "' + tag.name + '" in quotes', token);
+
+				return;
+			}
+		}
+	}
+
+	if (names[0] != null || names[1] != null)
+	{
+		var problem = HmiIndirect.check(this.project, names[0], names[1]);
+
+		if (problem != null)
+		{
+			this.error('LinkIndirectTag: ' + problem.replace(/\.$/, ''), token);
+		}
+	}
 };
 
 HmiExpr.Parser.prototype.describe = function(t)
