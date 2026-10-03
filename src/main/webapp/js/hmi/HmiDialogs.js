@@ -4128,15 +4128,21 @@ HmiDialogs.showRecipeSelect = function(ui, manager, bookName, rect, done)
 	render();
 	div.setAttribute('tabindex', '0');
 
+	// The rectangle is the window's outer box; a dialog adds 48 px of padding.
 	// Closing the window any other way (Escape, the x) is a Cancel
-	ui.showDialog(div, Math.round(place.width), Math.round(place.height), true, true, function()
+	var outerW = Math.max(260, Math.round(place.width));
+	var outerH = Math.max(220, Math.round(place.height));
+
+	ui.showDialog(div, outerW - 48, outerH - 48, true, true, function()
 	{
 		finish('');
 	});
 
 	if (ui.dialog != null && ui.dialog.container != null && rect != null)
 	{
+		// Dialogs are centered with a transform; a given place replaces it
 		var c = ui.dialog.container.style;
+		c.transform = 'none';
 		c.left = Math.round(place.x) + 'px';
 		c.top = Math.round(place.y) + 'px';
 	}

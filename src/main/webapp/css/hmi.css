@@ -1475,10 +1475,31 @@
 	overflow-y: auto;
 }
 
-.hmiRecipeBookList .hmiUserList,
+.hmiRecipeBookList > *,
+.hmiRecipeBookEditor > *
+{
+	flex: none;
+}
+
+.hmiRecipeBookList .hmiUserList
+{
+	max-height: 330px;
+}
+
 .hmiRecipeBookEditor .hmiUserList
 {
-	max-height: none;
+	max-height: 210px;
+}
+
+.hmiRecipeBookList tr.hmiSelected td
+{
+	background-color: rgba(26, 127, 193, 0.14);
+}
+
+.hmiRecipeSelect:focus,
+.hmiRecipeSelect:focus-visible
+{
+	outline: none;
 }
 
 .hmiRecipeTagTable td input
