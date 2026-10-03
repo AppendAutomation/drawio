@@ -3817,6 +3817,20 @@ HmiSelfTest.testIndirect = function(ui)
 		reports[before].indexOf('The indirect tag name is empty.') > 0 && hub.resolve('IndA') === 'Real2', reports.join(' | '));
 	check('ind.callReturns1', ind.call('LinkIndirectTag', ['inda', 'real1']) === 1 && hub.resolve('IndA') === 'Real1');
 	rt.stop();
+
+	// Scripts read tags no object shows: subscribed, and read from the driver until delivered
+	var btn = graph.insertVertex(graph.getDefaultParent(), null, 'b', 20, 80, 80, 30, 'html=1;');
+	HmiProject.setCellLinks(graph, btn, {'pushbutton.action': {onDown: 'IF Real2 > 5 THEN N = 9; ENDIF;', whileDown: '', onUp: '', everyMs: '1000'}});
+	var srt = new HmiRuntime({graph: graph, project: p, driver: hub.client(), indirect: ind, scripts: ['Which = Msg1;', null]});
+	srt.start();
+	var subs = srt.subscriptionPaths();
+	check('script.depsSubscribed', subs.indexOf('Real2') >= 0 && subs.indexOf('Msg1') >= 0 && subs.indexOf('Which') >= 0,
+		JSON.stringify(subs));
+	srt.values = {};
+	check('script.readsDriver', srt.getValue('Msg1').value === 'hello');
+	srt.runScript('IF Msg1 == "hello" THEN N = 4; ENDIF;');
+	check('script.unshownTagRead', sim.get('N').value === 4);
+	srt.stop();
 	other.disconnect();
 	hub.disconnect();
 	check('ind.linksClearedOnStop', hub.resolve('IndA') == null);

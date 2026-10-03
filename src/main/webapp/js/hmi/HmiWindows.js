@@ -909,7 +909,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
-		indirect: this.indirect});
+		indirect: this.indirect, scripts: [props.onShow, props.whileShowing, props.onHide]});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

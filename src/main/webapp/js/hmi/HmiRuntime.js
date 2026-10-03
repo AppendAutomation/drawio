@@ -31,6 +31,8 @@ HmiRuntime = function(config)
 
 	// The Run's HmiSecurityManager (_Username, _AccessLevel, Login() ...)
 	this.security = config.security || null;
+	// The window's own scripts (On show, While showing, On hide): their tags are subscribed too
+	this.scripts = config.scripts || null;
 	// LinkIndirectTag, and the tag an indirect tag stands for (HmiIndirect)
 	this.indirect = config.indirect || null;
 
@@ -74,19 +76,7 @@ HmiRuntime.prototype.start = function()
 	this.onChange = function(batch) { that.applyBatch(batch); };
 	this.driver.on('change', this.onChange);
 	this.driver.connect();
-
-	var paths = [];
-
-	for (var name in this.reverseIndex)
-	{
-		// System tags come from the alarm manager, not a device
-		if (HmiTypes.systemTag(name) == null)
-		{
-			paths.push(name);
-		}
-	}
-
-	this.driver.subscribe(paths, this.scanRateMs());
+	this.driver.subscribe(this.subscriptionPaths(), this.scanRateMs());
 
 	// Alarm state changes repaint what depends on it (Tag.InAlarm, the
 	// system tags) although no value changed
@@ -223,16 +213,8 @@ HmiRuntime.prototype.rebind = function()
 	}
 
 	this.bind();
-
-	var paths = [];
-
-	for (var name in this.reverseIndex)
-	{
-		paths.push(name);
-	}
-
 	this.driver.unsubscribe();
-	this.driver.subscribe(paths, this.scanRateMs());
+	this.driver.subscribe(this.subscriptionPaths(), this.scanRateMs());
 	this.startBlinkTimers();
 	this.graph.refresh();
 };
@@ -328,6 +310,70 @@ HmiRuntime.prototype.bind = function()
 
 		this.markDirty(cell.id);
 	}
+
+	this.bindScripts();
+};
+
+/**
+ * The tags scripts read (action scripts, and the window's own scripts:
+ * config.scripts), so they have values although no object shows them. They
+ * are subscribed but repaint nothing.
+ */
+HmiRuntime.prototype.bindScripts = function()
+{
+	var sources = (this.scripts || []).slice(0);
+
+	for (var id in this.bindings)
+	{
+		var action = this.bindings[id].links['pushbutton.action'];
+
+		if (action != null)
+		{
+			sources.push(action.onDown, action.whileDown, action.onUp);
+		}
+	}
+
+	this.scriptPaths = [];
+
+	for (var i = 0; i < sources.length; i++)
+	{
+		if (sources[i] == null || sources[i] === '')
+		{
+			continue;
+		}
+
+		var deps = HmiExpr.compile('' + sources[i], {project: this.project, mode: 'script'}).deps;
+
+		for (var d = 0; d < deps.length; d++)
+		{
+			if (mxUtils.indexOf(this.scriptPaths, deps[d]) < 0)
+			{
+				this.scriptPaths.push(deps[d]);
+			}
+		}
+	}
+};
+
+/** What the driver is asked for: what objects show and what scripts read. */
+HmiRuntime.prototype.subscriptionPaths = function()
+{
+	var paths = [];
+	var seen = {};
+	var names = Object.keys(this.reverseIndex).concat(this.scriptPaths || []);
+
+	for (var i = 0; i < names.length; i++)
+	{
+		var key = names[i].toLowerCase();
+
+		// System tags come from the alarm manager and security, not a device
+		if (!seen[key] && HmiTypes.systemTag(names[i]) == null)
+		{
+			seen[key] = true;
+			paths.push(names[i]);
+		}
+	}
+
+	return paths;
 };
 
 /** Link config fields holding a tag name (the Recipe List's three). */
@@ -406,6 +452,13 @@ HmiRuntime.baseTag = function(src)
 HmiRuntime.prototype.getValue = function(name)
 {
 	var v = this.values[('' + name).toLowerCase()];
+
+	// Not delivered to this window yet (a script reading a tag just
+	// subscribed, or written by another window): what the driver holds
+	if (v == null && this.driver != null && this.driver.get != null)
+	{
+		v = this.driver.get(name);
+	}
 
 	return (v != null) ? v :
 		{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
