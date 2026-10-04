@@ -845,6 +845,13 @@ HmiMenus.collectProblems = function(ui, fn)
 						links[key].window + '"');
 				}
 
+				if (key === 'pushbutton.action')
+				{
+					errors = errors.concat(HmiMenus.scriptWindowProblems(ui, links[key].onDown),
+						HmiMenus.scriptWindowProblems(ui, links[key].whileDown),
+						HmiMenus.scriptWindowProblems(ui, links[key].onUp));
+				}
+
 				for (var e = 0; e < errors.length; e++)
 				{
 					problems.push({page: pageName, cell: cell,
@@ -874,8 +881,10 @@ HmiMenus.collectProblems = function(ui, fn)
 					link: mxResources.get('hmiWindowProps'), message: msg});
 			}
 
+			var props = project.getWindow(ui.pages[i].getId());
 			var scripts = HmiMenus.checkWindowScripts(project,
-				ui.pages[i].getId());
+				ui.pages[i].getId()).concat(HmiMenus.scriptWindowProblems(ui, props.onShow),
+				HmiMenus.scriptWindowProblems(ui, props.whileShowing), HmiMenus.scriptWindowProblems(ui, props.onHide));
 
 			for (var j = 0; j < scripts.length; j++)
 			{
@@ -949,6 +958,41 @@ HmiMenus.collectProblems = function(ui, fn)
 				});
 		})(pending[i]);
 	}
+};
+
+/** ShowWindow("Name") in a script, where no page has that name. */
+HmiMenus.scriptWindowProblems = function(ui, src)
+{
+	var out = [];
+
+	if (src == null || src === '' || ui.pages == null || ui.hmiProject == null)
+	{
+		return out;
+	}
+
+	var compiled = HmiExpr.compile('' + src, {project: ui.hmiProject, mode: 'script'});
+
+	(function find(n)
+	{
+		if (n == null || typeof n !== 'object')
+		{
+			return;
+		}
+
+		if (n.type === 'call' && n.name === 'ShowWindow' && n.args.length > 0 && n.args[0].type === 'literal' &&
+			typeof n.args[0].value === 'string' && n.args[0].value.trim() !== '' &&
+			!HmiMenus.hasPage(ui, n.args[0].value.trim()))
+		{
+			out.push('ShowWindow: no window (page) named "' + n.args[0].value + '"');
+		}
+
+		for (var k in n)
+		{
+			find(n[k]);
+		}
+	})(compiled.ast);
+
+	return out;
 };
 
 HmiMenus.tagProblem = function(tag, message)

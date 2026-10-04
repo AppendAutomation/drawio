@@ -33,6 +33,8 @@ HmiRuntime = function(config)
 	this.security = config.security || null;
 	// The window's own scripts (On show, While showing, On hide): their tags are subscribed too
 	this.scripts = config.scripts || null;
+	// ShowWindow(): the Run's window manager
+	this.windows = config.windows || null;
 	// LinkIndirectTag, and the tag an indirect tag stands for (HmiIndirect)
 	this.indirect = config.indirect || null;
 
@@ -510,6 +512,31 @@ HmiRuntime.prototype.context = function()
 			// unless the runtime stopped meanwhile
 			callAsync: function(name, args, done)
 			{
+				// A waiting ShowWindow resumes when its window closes, unless
+				// this window closed meanwhile
+				if (name === 'ShowWindow')
+				{
+					var resume = function(value)
+					{
+						if (that.running)
+						{
+							done(value);
+						}
+					};
+
+					if (that.windows != null)
+					{
+						that.windows.callShowWindow(args, resume);
+					}
+					else
+					{
+						HmiWindowManager.reportShowWindow(null, args, 'Windows can only be shown while the application runs.');
+						done(0);
+					}
+
+					return;
+				}
+
 				if (that.recipes == null)
 				{
 					done('');
@@ -1806,7 +1833,7 @@ HmiRuntime.prototype.installInput = function()
 	this.mouseListener = {
 		mouseDown: function(sender, me)
 		{
-			var cell = me.getCell();
+			var cell = that.touchedCell(me);
 			that.downCell = cell;
 			that.downAt = {x: me.getGraphX(), y: me.getGraphY()};
 
@@ -1819,7 +1846,7 @@ HmiRuntime.prototype.installInput = function()
 		mouseMove: function(sender, me) { that.handleDrag(me); },
 		mouseUp: function(sender, me)
 		{
-			var cell = me.getCell();
+			var cell = that.touchedCell(me);
 
 			if (cell != null)
 			{
@@ -1838,6 +1865,43 @@ HmiRuntime.prototype.installInput = function()
 	};
 
 	this.graph.addMouseListener(this.mouseListener);
+};
+
+/**
+ * The object a touch lands on: the topmost one at the point that is not
+ * hidden by a Visibility link. A hidden object lets the touch through to
+ * what is beneath it, as on the device (a faceplate's note hidden over its
+ * mode buttons must not swallow their touches).
+ */
+HmiRuntime.prototype.touchedCell = function(me)
+{
+	var cell = me.getCell();
+	var that = this;
+
+	var hidden = function(c)
+	{
+		for (; c != null; c = that.graph.getModel().getParent(c))
+		{
+			var b = that.bindings[c.id];
+
+			if (b != null && b.visual.visible === false)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	};
+
+	if (cell == null || !hidden(cell))
+	{
+		return cell;
+	}
+
+	return this.graph.getCellAt(me.getGraphX(), me.getGraphY(), null, true, true, function(state)
+	{
+		return hidden(state.cell);
+	});
 };
 
 HmiRuntime.prototype.removeInput = function()

@@ -3840,6 +3840,25 @@ HmiSelfTest.testIndirect = function(ui)
 		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}]) === 'Recipe Error' &&
 		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}, {call: 'LinkIndirectTag("A", "B")'}]) === 'Script Error');
 
+	// A hidden object over a button lets touches through to it
+	HmiSelfTest.resetGraph(ui);
+	var under = graph.insertVertex(graph.getDefaultParent(), null, 'button', 20, 20, 120, 40, 'html=1;');
+	HmiProject.setCellLinks(graph, under, {pushbutton: {kind: 'discrete', tag: 'Disc1', action: 'set', enableExpr: ''}});
+	var over = graph.insertVertex(graph.getDefaultParent(), null, 'note', 10, 10, 200, 60, 'html=1;');
+	HmiProject.setCellLinks(graph, over, {visibility: {expr: 'Disc1', sense: 'visible'}});
+	var trt = new HmiRuntime({graph: graph, project: p, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0});
+	trt.flush();
+	var ust = graph.view.getState(under);
+	var fakeMe = {getCell: function() { return over; }, getGraphX: function() { return ust.getCenterX(); },
+		getGraphY: function() { return ust.getCenterY(); }};
+	check('touch.throughHidden', trt.touchedCell(fakeMe) === under);
+	sim.write({Disc1: 1});
+	trt.flush();
+	check('touch.visibleOnTopWins', trt.touchedCell(fakeMe) === over);
+	trt.stop();
+
 	// Automation spec
 	var errors = [];
 	var built = HmiCli.buildProject({tags: [{name: 'P', type: 'IndirectAnalog', comment: 'pointer'},
@@ -5068,7 +5087,59 @@ HmiSelfTest.testWindows = function(ui)
 		check('script.onHideOnReplace', wm2.windowFor(pc) == null &&
 			sim.get('Pump1_Run').value == 0);
 
+		// --- ShowWindow() ---------------------------------------------------
+
+		wm2.show('WinB');
+		var caller = wm2.windowFor(pb).runtime;
+		caller.runScript('ShowWindow("WinC", 50, 60, 0); Recipe_Name = "carried on";');
+		var shownC = wm2.windowFor(pc);
+		check('showWin.movedShowsItsPage', shownC != null && shownC.graph.view.translate.x === -300 &&
+			shownC.div.style.left === Math.round(50 * wm2.scale) + 'px', shownC && JSON.stringify(shownC.graph.view.translate));
+		check('showWin.async', shownC != null && shownC.props.x === 50 && shownC.props.y === 60 &&
+			sim.get('Recipe_Name').value === 'carried on', shownC && JSON.stringify(shownC.props));
+		check('showWin.notModal', !wm2.isBlocked(wm2.windowFor(pb)) &&
+			project.getWindow(pc.getId()).x === 300 && project.getWindow(pc.getId()).modal === undefined);
+		wm2.hide('WinC');
+
+		sim.write({Recipe_Name: 'waiting'});
+		caller.runScript('Pump1_Run = 0; ShowWindow("WinC", "", "", 1, 1); Recipe_Name = "resumed";');
+		check('showWin.waits', wm2.windowFor(pc) != null && wm2.windowFor(pc).props.x === 300 &&
+			sim.get('Recipe_Name').value === 'waiting' && wm2.isBlocked(wm2.windowFor(pb)),
+			JSON.stringify(sim.get('Recipe_Name')));
+		wm2.hide('WinC');
+		check('showWin.resumesOnClose', sim.get('Recipe_Name').value === 'resumed',
+			JSON.stringify(sim.get('Recipe_Name')));
+
+		var results = [];
+		var collect = function(v) { results.push(v); };
+		wm2.callShowWindow([''], collect);
+		wm2.callShowWindow(['Nope'], collect);
+		wm2.callShowWindow(['WinC', 'abc'], collect);
+		wm2.callShowWindow(['WinC', 5000, 0], collect);
+		var errState = HmiDialogs.recipeErrors;
+		var errText = (errState != null) ? errState.items.map(function(it) { return it.message; }) : [];
+		check('showWin.errors', results.join('') === '0000' && errText.length === 4 &&
+			errText[0] === 'The window name is empty.' && errText[1] === 'There is no window named "Nope".' &&
+			errText[2].indexOf('Left must be a number') === 0 && errText[3].indexOf('would be off the') > 0 &&
+			HmiDialogs.functionErrorTitle(errState.items) === 'Window Error', errText.join(' | '));
+		HmiDialogs.flushRecipeErrors();
+		check('showWin.errorWindow', document.querySelector('[data-hmi-field="recipeErrors"]') != null &&
+			ui.dialog.container.innerText.indexOf('Window Error') >= 0);
+		ui.hideDialog();
+
+		var werrs = function(src, mode) { return HmiExpr.compile(src, {project: project, mode: mode || 'script'}).errors.map(function(e) { return e.message; }); };
+		check('showWin.compile', werrs('ShowWindow("WinC"); ShowWindow(Recipe_Name, 10, 20, 1, 0);').length === 0 &&
+			/as text/.test(werrs('ShowWindow(Pump1_Run);')[0] || '') &&
+			/left must be a number/.test(werrs('ShowWindow("WinC", "abc");')[0] || '') &&
+			/must be a statement/.test(werrs('IF ShowWindow("WinC") THEN Pump1_Run = 1; ENDIF;')[0] || '') &&
+			werrs('ShowWindow("WinC")', 'expr').length === 1, werrs('ShowWindow(Recipe_Name, 10, 20, 1, 0);').join(' | '));
+		check('showWin.validate', HmiMenus.scriptWindowProblems(ui, 'ShowWindow("Nope");').length === 1 &&
+			HmiMenus.scriptWindowProblems(ui, 'ShowWindow("winc"); ShowWindow(Recipe_Name);').length === 0);
+
+		sim.write({Recipe_Name: 'before stop'});
+		caller.runScript('ShowWindow("WinC", "", "", 1, 1); Recipe_Name = "after stop";');
 		HmiMenus.stop(ui);
+		check('showWin.stopDropsWait', sim.get('Recipe_Name').value !== 'after stop', JSON.stringify(sim.get('Recipe_Name')));
 		project.settings.startup = [];
 
 		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200,

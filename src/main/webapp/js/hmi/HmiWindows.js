@@ -776,8 +776,12 @@ HmiWindowManager.prototype.windowFor = function(page)
 	return null;
 };
 
-/** ShowWindow by name, from a link or a script. */
-HmiWindowManager.prototype.show = function(name)
+/**
+ * ShowWindow by name, from a link or a script. options {x, y, modal}
+ * override the window's own properties for this showing: the position for
+ * any window, modal for a popup (false lets the windows beneath be touched).
+ */
+HmiWindowManager.prototype.show = function(name, options)
 {
 	var page = this.findPage(name);
 
@@ -788,7 +792,157 @@ HmiWindowManager.prototype.show = function(name)
 		return null;
 	}
 
-	return this.showPage(page);
+	return this.showPage(page, options);
+};
+
+/** A window's properties for one showing: its own, with options applied (a copy). */
+HmiWindowManager.propsWith = function(props, options)
+{
+	var out = {};
+
+	for (var key in props)
+	{
+		out[key] = props[key];
+	}
+
+	// What the window shows stays the part of its page it is defined over:
+	// a window moved by ShowWindow shows the same objects somewhere else
+	if (out.pageX == null) { out.pageX = out.x; }
+	if (out.pageY == null) { out.pageY = out.y; }
+
+	if (options != null)
+	{
+		if (options.x != null) { out.x = options.x; }
+		if (options.y != null) { out.y = options.y; }
+		if (options.modal != null && out.type === 'popup') { out.modal = options.modal; }
+	}
+
+	return out;
+};
+
+/**
+ * ShowWindow(name[, left, top[, modal[, wait]]]) from a script. done(1) once
+ * the window is shown, or, with wait, once it has closed; done(0) when it
+ * cannot be shown, with the reason in the function error window.
+ */
+HmiWindowManager.prototype.callShowWindow = function(args, done)
+{
+	var name = HmiExpr.text(args[0]).trim();
+	var that = this;
+	var fail = function(message)
+	{
+		HmiWindowManager.reportShowWindow(that.ui, args, message);
+		done(0);
+	};
+
+	if (name === '')
+	{
+		fail('The window name is empty.');
+
+		return;
+	}
+
+	var page = this.findPage(name);
+
+	if (page == null)
+	{
+		fail('There is no window named "' + name + '".');
+
+		return;
+	}
+
+	var coord = function(v, what)
+	{
+		if (v == null || v === '')
+		{
+			return null;
+		}
+
+		var n = (typeof v === 'number') ? v : parseFloat(v);
+
+		if (typeof v === 'boolean' || isNaN(n) || !isFinite(n))
+		{
+			throw what + ' must be a number of pixels, not "' + HmiExpr.text(v) + '".';
+		}
+
+		return Math.round(n);
+	};
+
+	var options = {};
+
+	try
+	{
+		options.x = coord(args[1], 'Left');
+		options.y = coord(args[2], 'Top');
+	}
+	catch (message)
+	{
+		fail(message);
+
+		return;
+	}
+
+	options.modal = (args[3] == null || args[3] === '') ? null : HmiRuntime.truthy(args[3]);
+	var wait = HmiRuntime.truthy(args[4]);
+	var props = HmiWindowManager.propsWith(this.project.getWindow(page.getId()), options);
+	var screen = this.project.settings;
+
+	if (props.x >= screen.width || props.y >= screen.height || props.x + props.width <= 0 || props.y + props.height <= 0)
+	{
+		fail('At ' + props.x + ', ' + props.y + ' the window "' + HmiWindowManager.pageName(page) +
+			'" would be off the ' + screen.width + ' × ' + screen.height + ' screen.');
+
+		return;
+	}
+
+	var win = this.showPage(page, options);
+
+	if (win == null)
+	{
+		fail('The window "' + name + '" could not be shown.');
+
+		return;
+	}
+
+	if (!wait)
+	{
+		done(1);
+
+		return;
+	}
+
+	// Not when the Run stops: everything closes then, and nothing carries on
+	(win.onClosed = win.onClosed || []).push(function()
+	{
+		if (that.running)
+		{
+			done(1);
+		}
+	});
+};
+
+/** A failed ShowWindow: logged and shown to the operator after the script. */
+HmiWindowManager.reportShowWindow = function(ui, args, message)
+{
+	var shown = [];
+
+	for (var i = 0; i < args.length; i++)
+	{
+		shown.push((typeof args[i] === 'string' || typeof args[i] === 'number') ? args[i] : HmiExpr.text(args[i]));
+	}
+
+	var call = HmiRecipes.describeCall('ShowWindow', shown);
+	HmiLog.warn('window: ' + call + ' failed: ' + message);
+
+	if (typeof HmiRuntimeApp !== 'undefined' && HmiRuntimeApp.isActive())
+	{
+		HmiRuntimeApp.log('warn', call + ' failed: ' + message);
+	}
+
+	if (ui != null)
+	{
+		HmiDialogs.queueFunctionError(ui, call, message);
+	}
 };
 
 /** HideWindow by name. Hiding a window that is not open does nothing. */
@@ -803,7 +957,7 @@ HmiWindowManager.prototype.hide = function(name)
 	}
 };
 
-HmiWindowManager.prototype.showPage = function(page)
+HmiWindowManager.prototype.showPage = function(page, options)
 {
 	if (!this.running)
 	{
@@ -814,7 +968,13 @@ HmiWindowManager.prototype.showPage = function(page)
 
 	if (existing != null)
 	{
-		// Already open: bring it to the front of its layer.
+		// Already open: bring it to the front of its layer, where asked
+		if (options != null)
+		{
+			existing.props = HmiWindowManager.propsWith(existing.props, options);
+			this.place(existing);
+		}
+
 		this.windows.splice(mxUtils.indexOf(this.windows, existing), 1);
 		this.windows.push(existing);
 		this.restack();
@@ -822,7 +982,7 @@ HmiWindowManager.prototype.showPage = function(page)
 		return existing;
 	}
 
-	var props = this.project.getWindow(page.getId());
+	var props = HmiWindowManager.propsWith(this.project.getWindow(page.getId()), options);
 
 	if (props.type === 'replace')
 	{
@@ -909,7 +1069,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
-		indirect: this.indirect, scripts: [props.onShow, props.whileShowing, props.onHide]});
+		indirect: this.indirect, scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
 
 	runtime.onUserInput = function(cfg, binding)
 	{
@@ -988,8 +1148,8 @@ HmiWindowManager.prototype.place = function(win)
 	// part of the page under it: the window's rectangle, less the title bar.
 	if (win.graph != null)
 	{
-		var tx = -p.x;
-		var ty = -(p.y + ((win.title != null) ? HmiProject.TITLE_BAR_HEIGHT : 0));
+		var tx = -((p.pageX != null) ? p.pageX : p.x);
+		var ty = -(((p.pageY != null) ? p.pageY : p.y) + ((win.title != null) ? HmiProject.TITLE_BAR_HEIGHT : 0));
 		var view = win.graph.view;
 
 		if (view.scale !== s || view.translate.x !== tx || view.translate.y !== ty)
@@ -1032,6 +1192,15 @@ HmiWindowManager.prototype.close = function(win)
 	}
 
 	this.restack();
+
+	// Scripts waiting in ShowWindow(..., wait) carry on
+	var waiting = win.onClosed || [];
+	win.onClosed = null;
+
+	for (var w = 0; w < waiting.length; w++)
+	{
+		waiting[w]();
+	}
 };
 
 /**
@@ -1051,8 +1220,13 @@ HmiWindowManager.prototype.restack = function()
 		if (win.props.type === 'popup')
 		{
 			win.div.style.zIndex = popupZ;
-			topPopup = win;
 			popupZ += 2;
+
+			// A popup shown with modal false blocks nothing
+			if (win.props.modal !== false)
+			{
+				topPopup = win;
+			}
 		}
 		else
 		{

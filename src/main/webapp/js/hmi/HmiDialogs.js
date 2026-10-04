@@ -4287,11 +4287,12 @@ HmiDialogs.queueFunctionError = function(ui, call, message)
 
 HmiDialogs.queueRecipeError = HmiDialogs.queueFunctionError;
 
-/** The window's title: Recipe Error, Indirect Tag Error, or Script Error for a mix. */
+/** The window's title: Recipe Error, Indirect Tag Error, Window Error, or Script Error for a mix. */
 HmiDialogs.functionErrorTitle = function(items)
 {
 	var recipe = 0;
 	var indirect = 0;
+	var windows = 0;
 
 	for (var i = 0; i < items.length; i++)
 	{
@@ -4303,10 +4304,15 @@ HmiDialogs.functionErrorTitle = function(items)
 		{
 			indirect++;
 		}
+		else if (/^ShowWindow/.test(items[i].call || ''))
+		{
+			windows++;
+		}
 	}
 
 	return (recipe === items.length) ? 'Recipe Error' :
-		((indirect === items.length) ? 'Indirect Tag Error' : 'Script Error');
+		((indirect === items.length) ? 'Indirect Tag Error' :
+		((windows === items.length) ? 'Window Error' : 'Script Error'));
 };
 
 /** Shows queued recipe errors now rather than after the running script. */

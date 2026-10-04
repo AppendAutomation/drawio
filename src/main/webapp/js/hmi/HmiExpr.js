@@ -73,7 +73,11 @@ HmiExpr.FUNCTIONS = {
 	'ShowRecipeSelect': {minArity: 1, maxArity: 5, action: true, async: true},
 
 	// Indirect tags (HmiIndirect.js): LinkIndirectTag("Indirect", "Tag")
-	'LinkIndirectTag': {arity: 2, action: true}
+	'LinkIndirectTag': {arity: 2, action: true},
+
+	// ShowWindow(name[, left, top[, modal[, wait]]]) (HmiWindows.js). With
+	// wait, the script pauses until the window closes; otherwise it carries on
+	'ShowWindow': {minArity: 1, maxArity: 5, action: true, async: true}
 };
 
 /** A function's accepted argument counts. */
@@ -951,8 +955,47 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		this.checkLink(args, token);
 	}
+	else if (name === 'ShowWindow' && this.project != null)
+	{
+		this.checkShowWindow(args, token);
+	}
 
 	return {type: 'call', name: name, args: args};
+};
+
+/**
+ * ShowWindow takes the window name as text (a literal or a message tag), and
+ * a position in numbers; "" leaves the window where it is defined. Literal
+ * window names are checked against the pages by Validate (HmiMenus).
+ */
+HmiExpr.Parser.prototype.checkShowWindow = function(args, token)
+{
+	var a = args[0];
+
+	if (a.type === 'ref' && a.field == null)
+	{
+		var tag = this.project.getTag(a.name);
+
+		if (tag != null && !HmiTypes.isMessage(tag.type))
+		{
+			this.error('ShowWindow takes the window name as text: write the name in quotes, or use a message tag', token);
+		}
+	}
+	else if (a.type === 'literal' && (typeof a.value !== 'string' || a.value.trim() === ''))
+	{
+		this.error('ShowWindow: the window name is empty', token);
+	}
+
+	var what = ['left', 'top'];
+
+	for (var i = 1; i <= 2 && i < args.length; i++)
+	{
+		if (args[i].type === 'literal' && typeof args[i].value === 'string' && args[i].value !== '' &&
+			isNaN(parseFloat(args[i].value)))
+		{
+			this.error('ShowWindow: ' + what[i - 1] + ' must be a number of pixels, or "" for the window\'s own', token);
+		}
+	}
 };
 
 /**
