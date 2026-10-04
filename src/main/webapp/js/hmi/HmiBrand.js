@@ -34,6 +34,8 @@ HmiBrand.isUpstreamLink = function(href)
  */
 HmiBrand.install = function()
 {
+	HmiBrand.installAppearance();
+
 	// Window title "<file> - Append HMI Studio"
 	Editor.prototype.appName = HmiBrand.NAME;
 	Editor.logoImage = HmiBrand.LOGO;
@@ -140,6 +142,44 @@ HmiBrand.install = function()
 };
 
 /** Replaces text in the text nodes under node. */
+/**
+ * Light by default. Upstream follows the system theme ('auto'), so a dark
+ * desktop gave a dark Studio. Settings saved with upstream's default move to
+ * light once (hmiLightDefault records it); choosing Dark or Automatic in
+ * Appearance afterwards is kept.
+ */
+HmiBrand.installAppearance = function()
+{
+	if (typeof mxSettings === 'undefined')
+	{
+		return;
+	}
+
+	var getDefaults = mxSettings.getDefaults;
+
+	mxSettings.getDefaults = function()
+	{
+		var defaults = getDefaults.apply(this, arguments);
+		defaults.darkMode = false;
+		defaults.hmiLightDefault = true;
+
+		return defaults;
+	};
+
+	var settings = mxSettings.settings;
+
+	if (settings != null && settings.hmiLightDefault !== true)
+	{
+		if (settings.darkMode === 'auto')
+		{
+			settings.darkMode = false;
+		}
+
+		settings.hmiLightDefault = true;
+		mxSettings.save();
+	}
+};
+
 HmiBrand.replaceText = function(node, from, to)
 {
 	if (node == null)

@@ -1210,6 +1210,8 @@ mxStencilRegistry.allowEval = false;
 			action: 'showOpenDialog',
 			defaultPath: lastDir || (await requestSync('getDocumentsFolder')),
 			filters: [
+				// Append HMI Studio projects first: the dialog's default type
+				{ name: 'Append HMI Studio Projects (.ahmi)', extensions: ['ahmi', 'drawio-hmi'] },
 				{ name: 'Diagrams', extensions: ['drawio', 'xml', 'png', 'svg', 'html', 'pdf'] },
         	    { name: 'VSDX Documents', extensions: ['vsdx'] },
         	    { name: 'Mermaid', extensions: ['mmd', 'mermaid'] },

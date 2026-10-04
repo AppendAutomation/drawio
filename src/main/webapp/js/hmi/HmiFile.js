@@ -123,7 +123,6 @@ HmiFile.install = function()
 	}
 
 	HmiFile.installFilename();
-	HmiFile.installOpenFilter();
 };
 
 /**
@@ -170,60 +169,6 @@ HmiFile.endsWith = function(name, ext)
 {
 	return name.length >= ext.length &&
 		name.toLowerCase().lastIndexOf(ext) === name.length - ext.length;
-};
-
-/**
- * Adds .ahmi (and the legacy .drawio-hmi) to the open dialog.
- *
- * App.pickFile hardcodes its filter list inline, so rather than replacing that
- * whole function (and inheriting every future upstream change to it) we
- * intercept the request on its way to the main process and rewrite the
- * filters. Eight lines instead of fifty, and it keeps working if pickFile is
- * rewritten upstream.
- */
-HmiFile.installOpenFilter = function()
-{
-	if (typeof electron === 'undefined' || electron == null ||
-		electron.request == null)
-	{
-		return;
-	}
-
-	var origRequest = electron.request;
-
-	electron.request = function(msg, callback, error)
-	{
-		HmiLog.guard('openFilter', function()
-		{
-			if (msg != null && msg.action === 'showOpenDialog' &&
-				msg.filters != null)
-			{
-				msg.filters = HmiFile.withHmiFilter(msg.filters);
-			}
-		});
-
-		return origRequest.apply(this, arguments);
-	};
-};
-
-HmiFile.withHmiFilter = function(filters)
-{
-	for (var i = 0; i < filters.length; i++)
-	{
-		var ext = filters[i].extensions;
-
-		if (ext != null && mxUtils.indexOf(ext, 'drawio') >= 0 &&
-			mxUtils.indexOf(ext, 'ahmi') < 0)
-		{
-			// Copy rather than mutate: the array upstream passed may be shared.
-			filters[i] = {
-				name: filters[i].name,
-				extensions: ['ahmi', 'drawio-hmi'].concat(ext)
-			};
-		}
-	}
-
-	return filters;
 };
 
 /**

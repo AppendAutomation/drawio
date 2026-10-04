@@ -2711,14 +2711,16 @@ HmiSelfTest.testFilenames = function(ui)
 		ui.normalizeFilename('Plant.svg', 'svg') === 'Plant.svg',
 		ui.normalizeFilename('Plant.svg', 'svg'));
 
-	// The open dialog offers ours alongside drawio.
-	var filters = HmiFile.withHmiFilter([
-		{name: 'Diagram', extensions: ['drawio', 'xml']}]);
+	// File > Open offers .ahmi first (the default type), and drawio files still
+	var picker = (typeof App !== 'undefined' && App.prototype.chooseFileEntry != null) ?
+		'' + App.prototype.chooseFileEntry : '';
+	HmiSelfTest.check('name.openFilterAhmiFirst', picker === '' ||
+		(picker.indexOf("'ahmi'") > 0 && picker.indexOf("'ahmi'") < picker.indexOf("'drawio'") &&
+		picker.indexOf("'drawio-hmi'") > 0), picker.slice(picker.indexOf('filters'), picker.indexOf('filters') + 200));
 
-	HmiSelfTest.check('name.openFilterIncludesHmi',
-		mxUtils.indexOf(filters[0].extensions, 'ahmi') >= 0 &&
-		mxUtils.indexOf(filters[0].extensions, 'drawio-hmi') >= 0,
-		filters[0].extensions.join(','));
+	// Light unless the user chooses otherwise
+	HmiSelfTest.check('brand.lightByDefault', mxSettings.getDefaults().darkMode === false &&
+		mxSettings.settings.hmiLightDefault === true);
 
 	ui.hmiProject = saved;
 };
