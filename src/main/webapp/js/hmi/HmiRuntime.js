@@ -1843,7 +1843,11 @@ HmiRuntime.prototype.installInput = function()
 				that.handleTouch(cell, 'down');
 			}
 		},
-		mouseMove: function(sender, me) { that.handleDrag(me); },
+		mouseMove: function(sender, me)
+		{
+			that.handleDrag(me);
+			that.updateCursor(me);
+		},
 		mouseUp: function(sender, me)
 		{
 			var cell = that.touchedCell(me);
@@ -1902,6 +1906,47 @@ HmiRuntime.prototype.touchedCell = function(me)
 	{
 		return hidden(state.cell);
 	});
+};
+
+/** The links that act on a touch. */
+HmiRuntime.TOUCH_LINKS = ['pushbutton', 'pushbutton.action', 'userInput', 'showWindow', 'hideWindow',
+	'slider.horizontal', 'slider.vertical'];
+
+/**
+ * Whether touching the cell would do something now: it has a touch link, it
+ * is visible and not disabled, and that link's own Enable when allows it.
+ */
+HmiRuntime.prototype.isTouchable = function(cell)
+{
+	var binding = (cell != null) ? this.bindings[cell.id] : null;
+
+	if (binding == null || binding.visual.visible === false || binding.visual.disabled === true)
+	{
+		return false;
+	}
+
+	for (var i = 0; i < HmiRuntime.TOUCH_LINKS.length; i++)
+	{
+		var cfg = binding.links[HmiRuntime.TOUCH_LINKS[i]];
+
+		if (cfg != null && this.enabled(cfg))
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+/** The pointing hand over what can be touched, the arrow everywhere else. */
+HmiRuntime.prototype.updateCursor = function(me)
+{
+	var cursor = (this.isTouchable(this.touchedCell(me))) ? 'pointer' : 'default';
+
+	if (this.graph.container.style.cursor !== cursor)
+	{
+		this.graph.container.style.cursor = cursor;
+	}
 };
 
 HmiRuntime.prototype.removeInput = function()

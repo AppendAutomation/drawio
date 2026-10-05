@@ -3859,6 +3859,14 @@ HmiSelfTest.testIndirect = function(ui)
 	sim.write({Disc1: 1});
 	trt.flush();
 	check('touch.visibleOnTopWins', trt.touchedCell(fakeMe) === over);
+	check('cursor.touchable', trt.isTouchable(under) && !trt.isTouchable(over));
+	trt.updateCursor({getCell: function() { return under; }, getGraphX: fakeMe.getGraphX, getGraphY: fakeMe.getGraphY});
+	check('cursor.handOverButton', graph.container.style.cursor === 'pointer');
+	trt.updateCursor({getCell: function() { return null; }, getGraphX: function() { return 5; }, getGraphY: function() { return 5; }});
+	check('cursor.arrowElsewhere', graph.container.style.cursor === 'default');
+	trt.bindings[under.id].visual.disabled = true;
+	check('cursor.disabledNotTouchable', !trt.isTouchable(under));
+	trt.bindings[under.id].visual.disabled = false;
 	trt.stop();
 
 	// Automation spec

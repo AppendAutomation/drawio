@@ -807,6 +807,33 @@
 	box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
 }
 
+/* Run: no text selection, and the arrow everywhere except over what can be
+   touched. The runtime sets each window's cursor as the mouse moves
+   (HmiRuntime.updateCursor); the parts of a window take it from there. */
+.hmiScreen,
+.hmiScreen *
+{
+	-webkit-user-select: none;
+	user-select: none;
+}
+
+.hmiScreen .hmiWindowContent
+{
+	cursor: default;
+}
+
+.hmiScreen .hmiWindowContent *
+{
+	cursor: inherit !important;
+}
+
+.hmiScreen .hmiWindowContent button,
+.hmiScreen .hmiWindowContent .hmiRecipeRow,
+.hmiScreen .hmiWindowClose
+{
+	cursor: pointer !important;
+}
+
 .hmiWindow
 {
 	position: absolute;
