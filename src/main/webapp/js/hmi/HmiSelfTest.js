@@ -2719,6 +2719,7 @@ HmiSelfTest.testFilenames = function(ui)
 		picker.indexOf("'drawio-hmi'") > 0), picker.slice(picker.indexOf('filters'), picker.indexOf('filters') + 200));
 
 	// Light unless the user chooses otherwise
+	HmiSelfTest.check('brand.pageViewOffByDefault', Graph.prototype.defaultPageVisible === false);
 	HmiSelfTest.check('brand.lightByDefault', mxSettings.getDefaults().darkMode === false &&
 		mxSettings.settings.hmiLightDefault === true);
 

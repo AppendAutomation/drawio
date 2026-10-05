@@ -36,6 +36,14 @@ HmiBrand.install = function()
 {
 	HmiBrand.installAppearance();
 
+	// New documents start with Page View off: an HMI's frame is the target
+	// screen, not a printed page. ?pv=1, a file's own setting and the View
+	// menu still turn it on.
+	if (typeof Graph !== 'undefined' && urlParams['pv'] != '1')
+	{
+		Graph.prototype.defaultPageVisible = false;
+	}
+
 	// Window title "<file> - Append HMI Studio"
 	Editor.prototype.appName = HmiBrand.NAME;
 	Editor.logoImage = HmiBrand.LOGO;
