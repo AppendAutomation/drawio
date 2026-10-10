@@ -1548,3 +1548,29 @@
 	min-width: 0;
 	margin: 0;
 }
+
+/* Style tab: the Arc section */
+.hmiArcPanel .hmiArcRow
+{
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin: 4px 0;
+}
+
+.hmiArcPanel .hmiArcLabel
+{
+	flex: 1;
+}
+
+.hmiArcPanel .hmiArcNumber
+{
+	width: 64px;
+}
+
+.hmiArcPanel .hmiArcSelect
+{
+	position: static !important;
+	width: 110px;
+	margin: 0;
+}

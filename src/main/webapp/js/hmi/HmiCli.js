@@ -214,7 +214,9 @@ HmiCli.TYPES = {
 	cylinder: 'shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;',
 	alarmList: 'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;',
 	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;',
-	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;'
+	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;',
+	arc: HmiArc.ELLIPSE_STYLE,
+	circleArc: HmiArc.CIRCLE_STYLE
 };
 
 HmiCli.RECIPE_BOOK_FIELDS = ['name', 'uploadDownload', 'items', 'recipes'];

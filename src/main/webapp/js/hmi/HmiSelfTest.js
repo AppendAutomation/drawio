@@ -49,6 +49,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testRecipes(ui);
 		HmiSelfTest.testIndirect(ui);
+		HmiSelfTest.testArcs(ui);
 		HmiSelfTest.testViews(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
@@ -3876,6 +3877,77 @@ HmiSelfTest.testIndirect = function(ui)
 		{name: 'Q', type: 'IndirectDiscrete', address: 'X'}]}, errors);
 	check('ind.cli', built.getTag('P') != null && built.getTag('P').comment === 'pointer' && errors.length === 1 &&
 		errors[0].indexOf('only a comment') > 0, JSON.stringify(errors));
+};
+
+/** Arc objects: geometry, markers, the General palette and the Style tab section. */
+HmiSelfTest.testArcs = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	check('arc.shapeRegistered', mxCellRenderer.defaultShapes[HmiArc.SHAPE] != null);
+	check('arc.sweep', HmiArc.sweep(270, 90) === 180 && HmiArc.sweep(90, 270) === 180 &&
+		HmiArc.sweep(0, 0) === 360 && HmiArc.sweep(300, 60) === 120 && HmiArc.sweep(-90, 90) === 180);
+
+	// 0° is twelve o'clock, clockwise: a quarter from 0 to 90 runs top to right
+	var q = HmiArc.points({arcType: 'circle', arcStart: 0, arcEnd: 90}, 0, 0, 100, 100).points;
+	check('arc.clockwiseFromTop', Math.abs(q[0].x - 50) < 0.01 && Math.abs(q[0].y) < 0.01 &&
+		Math.abs(q[q.length - 1].x - 100) < 0.01 && Math.abs(q[q.length - 1].y - 50) < 0.01,
+		JSON.stringify([q[0], q[q.length - 1]]));
+	var e = HmiArc.points({arcType: 'ellipse', arcStart: 90, arcEnd: 270}, 0, 0, 200, 100).points;
+	check('arc.ellipseFillsBounds', Math.abs(e[0].x - 200) < 0.01 && Math.abs(e[0].y - 50) < 0.01 &&
+		Math.abs(e[e.length - 1].x) < 0.01);
+	var c = HmiArc.points({arcType: 'circle', arcStart: 90, arcEnd: 270}, 0, 0, 200, 100).points;
+	check('arc.circleStaysRound', Math.abs(c[0].x - 150) < 0.01 && Math.abs(c[c.length - 1].x - 50) < 0.01);
+
+	var line = [new mxPoint(0, 0), new mxPoint(10, 0), new mxPoint(20, 0)];
+	HmiArc.trim(line, 5, false);
+	var line2 = [new mxPoint(0, 0), new mxPoint(10, 0), new mxPoint(20, 0)];
+	HmiArc.trim(line2, 12, true);
+	check('arc.trimsForMarkers', line[line.length - 1].x === 15 && line2[0].x === 12 && line2.length === 2);
+
+	// Drawn in a graph, with markers at both ends
+	HmiSelfTest.resetGraph(ui);
+	var graph = ui.editor.graph;
+	var plain = graph.insertVertex(graph.getDefaultParent(), null, '', 20, 20, 100, 100, HmiArc.CIRCLE_STYLE);
+	var arrows = graph.insertVertex(graph.getDefaultParent(), null, '', 150, 20, 160, 100,
+		HmiArc.ELLIPSE_STYLE.replace('startArrow=none', 'startArrow=oval').replace('endArrow=none', 'endArrow=block') + 'strokeWidth=3;');
+	var paths = function(cell) { var st = graph.view.getState(cell); return (st != null && st.shape != null && st.shape.node != null) ? st.shape.node.querySelectorAll('path, ellipse').length : -1; };
+	check('arc.drawsLine', paths(plain) >= 1, '' + paths(plain));
+	check('arc.drawsMarkers', paths(arrows) >= 3, '' + paths(arrows));
+	check('arc.cliTypes', HmiCli.TYPES.arc === HmiArc.ELLIPSE_STYLE && HmiCli.TYPES.circleArc === HmiArc.CIRCLE_STYLE);
+	var errors = [];
+	var built = HmiCli.buildProject({pages: [{name: 'P', objects: [{type: 'circleArc', x: 0, y: 0, width: 50, height: 50,
+		style: 'arcStart=0;arcEnd=180;endArrow=classic;'}]}]}, errors);
+	check('arc.cliBuilds', errors.length === 0, JSON.stringify(errors));
+
+	// The Style tab's Arc section edits the style
+	graph.setSelectionCell(arrows);
+	ui.format.immediateRefresh();
+	var strip = ui.format.container.firstChild;
+	var styleTab = [].slice.call(strip.childNodes).filter(function(n) { return /style/i.test(n.textContent); })[0];
+
+	if (styleTab != null)
+	{
+		styleTab.click();
+	}
+
+	var sec = ui.format.container.querySelector('[data-hmi-arc-section]');
+	check('arc.styleSection', sec != null && sec.querySelector('[data-hmi-arc="startArrow"]').value === 'oval' &&
+		sec.querySelector('[data-hmi-arc="width"]').value === '3');
+
+	if (sec != null)
+	{
+		var end = sec.querySelector('[data-hmi-arc="end"]');
+		end.value = '200';
+		end.dispatchEvent(new Event('change'));
+		check('arc.sectionWritesStyle', mxUtils.getValue(graph.getCellStyle(arrows), 'arcEnd', null) == 200);
+	}
+
+	var fillTitle = mxResources.get('fill');
+	check('arc.noFillSection', [].slice.call(ui.format.container.childNodes).every(function(n) {
+		return n.firstChild == null || ('' + n.firstChild.textContent).trim() !== fillTitle; }));
+	graph.clearSelection();
+	HmiSelfTest.resetGraph(ui);
 };
 
 HmiSelfTest.hasFileType = function(types, ext)
