@@ -4293,6 +4293,7 @@ HmiDialogs.functionErrorTitle = function(items)
 	var recipe = 0;
 	var indirect = 0;
 	var windows = 0;
+	var screen = 0;
 
 	for (var i = 0; i < items.length; i++)
 	{
@@ -4308,11 +4309,16 @@ HmiDialogs.functionErrorTitle = function(items)
 		{
 			windows++;
 		}
+		else if (/^ScreenToPDF/.test(items[i].call || ''))
+		{
+			screen++;
+		}
 	}
 
 	return (recipe === items.length) ? 'Recipe Error' :
 		((indirect === items.length) ? 'Indirect Tag Error' :
-		((windows === items.length) ? 'Window Error' : 'Script Error'));
+		((windows === items.length) ? 'Window Error' :
+		((screen === items.length) ? 'Screen to PDF Error' : 'Script Error')));
 };
 
 /** Shows queued recipe errors now rather than after the running script. */

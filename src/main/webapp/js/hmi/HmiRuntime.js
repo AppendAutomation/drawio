@@ -503,6 +503,11 @@ HmiRuntime.prototype.context = function()
 			// Script actions (Login(), ShowLogin() ...)
 			call: function(name, args)
 			{
+				if (name === HmiScreenPdf.FUNCTION)
+				{
+					return HmiScreenPdf.call(that.windows, args);
+				}
+
 				var owner = HmiRecipes.isFunction(name) ? that.recipes :
 					((name === HmiIndirect.FUNCTION) ? that.indirect : that.security);
 

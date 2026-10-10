@@ -621,6 +621,13 @@ HmiWindowManager.prototype.layout = function()
 		return;
 	}
 
+	if (this.designLayout)
+	{
+		this.layoutDesign();
+
+		return;
+	}
+
 	if (this.fit && this.view !== 'fit')
 	{
 		this.layoutView();
@@ -696,6 +703,44 @@ HmiWindowManager.prototype.layoutView = function()
 		s.left = Math.max(0, Math.round((width - res.width) / 2)) + 'px';
 		s.top = Math.max(0, Math.round((height - res.height) / 2)) + 'px';
 	}
+
+	for (var i = 0; i < this.windows.length; i++)
+	{
+		this.place(this.windows[i]);
+	}
+};
+
+/**
+ * Runs fn with the screen laid out at its design size (scale 1), then lays
+ * it out again. Both happen in the same task, so nothing is painted at that
+ * size: ScreenToPDF copies the screen this way.
+ */
+HmiWindowManager.prototype.atDesignSize = function(fn)
+{
+	this.designLayout = true;
+
+	try
+	{
+		this.layout();
+
+		return fn();
+	}
+	finally
+	{
+		this.designLayout = false;
+		this.layout();
+	}
+};
+
+HmiWindowManager.prototype.layoutDesign = function()
+{
+	var res = this.project.settings;
+	this.clearStretch();
+	this.scale = 1;
+
+	var s = this.screen.style;
+	s.width = res.width + 'px';
+	s.height = res.height + 'px';
 
 	for (var i = 0; i < this.windows.length; i++)
 	{

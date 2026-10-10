@@ -5319,6 +5319,83 @@ HmiSelfTest.testWindows = function(ui)
 		check('showWin.validate', HmiMenus.scriptWindowProblems(ui, 'ShowWindow("Nope");').length === 1 &&
 			HmiMenus.scriptWindowProblems(ui, 'ShowWindow("winc"); ShowWindow(Recipe_Name);').length === 0);
 
+		// --- ScreenToPDF() ---------------------------------------------------
+
+		var pdfs = [];
+		var captured = [];
+		HmiScreenPdf.testIo = {
+			capture: function(screen, options, fn)
+			{
+				captured.push({screen: screen, options: options});
+				var c = document.createElement('canvas');
+				c.width = 64;
+				c.height = 48;
+				var g = c.getContext('2d');
+				g.fillStyle = '#ff0000';
+				g.fillRect(0, 0, 64, 48);
+				fn(null, c);
+			},
+			save: function(name, bytes, fn) { pdfs.push({name: name, bytes: bytes}); fn(null, name + '.pdf'); }
+		};
+		wm2.show('WinC');
+		sim.write({Recipe_Name: 'before pdf'});
+		caller.runScript('ScreenToPDF(); Recipe_Name = "after pdf";');
+		var pdfText = (pdfs.length > 0) ? String.fromCharCode.apply(null, pdfs[0].bytes) : '';
+		check('pdf.pako', typeof pako !== 'undefined');
+		check('pdf.scriptCarriesOn', sim.get('Recipe_Name').value === 'after pdf', JSON.stringify(sim.get('Recipe_Name')));
+		check('pdf.capturesScreen', captured.length === 1 && captured[0].screen === wm2.screen &&
+			typeof captured[0].options.atDesignSize === 'function');
+
+		// Laid out at the design size only while the copy is taken
+		var shownScale = wm2.scale;
+		var duringCopy = wm2.atDesignSize(function() { return [wm2.scale, wm2.screen.style.width]; });
+		check('pdf.designSizeCopy', duringCopy[0] === 1 && duringCopy[1] === project.settings.width + 'px' &&
+			wm2.scale === shownScale, JSON.stringify([duringCopy, shownScale, wm2.scale]));
+		check('pdf.namedAfterScreen', pdfs.length === 1 && pdfs[0].name === HmiScreenPdf.screenName(wm2) &&
+			pdfs[0].name !== 'WinC', pdfs.length && pdfs[0].name);
+		check('pdf.landscapeLetter', pdfText.indexOf('%PDF-1.4') === 0 && pdfText.indexOf('/MediaBox [0 0 792 612]') > 0 &&
+			pdfText.indexOf('/Width 64 /Height 48') > 0 && /%%EOF\n$/.test(pdfText));
+
+		// The cross-reference table points at each object
+		var startxref = parseInt(/startxref\n(\d+)/.exec(pdfText)[1], 10);
+		var xrefRows = pdfText.substring(startxref).split('\n').slice(3, 9);
+		check('pdf.xref', pdfText.substr(startxref, 4) === 'xref' && xrefRows.length === 6 && xrefRows.every(function(row, i)
+			{ return pdfText.substr(parseInt(row, 10), (i + 1 + ' 0 obj').length) === (i + 1) + ' 0 obj'; }), xrefRows.join('|'));
+
+		// Fitted, centered, at least 1/4" (18 pt) from every edge
+		var at = HmiScreenPdf.layout(1024, 768);
+		var tall = HmiScreenPdf.layout(300, 900);
+		check('pdf.fitsCentered', Math.abs(at.width - 756) < 0.01 && Math.abs(at.x - 18) < 0.01 &&
+			Math.abs(at.y - (612 - at.height) / 2) < 0.01 && at.y >= 18 &&
+			Math.abs(tall.height - 576) < 0.01 && Math.abs(tall.x - (792 - tall.width) / 2) < 0.01,
+			JSON.stringify([at, tall]));
+		check('pdf.contentPlacesImage', pdfText.indexOf('q 756 0 0 567 18 22.5 cm /Im0 Do Q') > 0);
+		check('pdf.fileNames', HmiScreenPdf.fileName('Main Screen') === 'Main Screen' &&
+			HmiScreenPdf.fileName('Tank 1/2: Level?') === 'Tank 1_2_ Level_' &&
+			HmiScreenPdf.fileName('Mixer "A" <B>|C*') === 'Mixer _A_ _B__C_' &&
+			HmiScreenPdf.fileName('Overview. ') === 'Overview' && HmiScreenPdf.fileName('CON') === 'CON_' &&
+			HmiScreenPdf.fileName('lpt1.x') === 'lpt1.x_' && HmiScreenPdf.fileName('???') === 'Screen' &&
+			HmiScreenPdf.fileName('') === 'Screen' && HmiScreenPdf.fileName(new Array(200).join('a')).length === 120,
+			HmiScreenPdf.fileName('Tank 1/2: Level?'));
+
+		// Failures go to the function error window
+		HmiDialogs.recipeErrors = null;
+		HmiScreenPdf.testIo = {
+			capture: function(screen, options, fn) { fn(null, document.createElement('canvas')); },
+			save: function(name, bytes, fn) { fn('disk full'); }
+		};
+		check('pdf.returnsOne', HmiScreenPdf.call(wm2, []) === 1);
+		var pdfErrs = HmiDialogs.recipeErrors;
+		check('pdf.errorReported', pdfErrs != null && pdfErrs.items.length === 1 &&
+			pdfErrs.items[0].message === 'The file could not be written: disk full.' &&
+			HmiDialogs.functionErrorTitle(pdfErrs.items) === 'Screen to PDF Error', pdfErrs && JSON.stringify(pdfErrs.items));
+		HmiDialogs.recipeErrors = null;
+		check('pdf.notRunning', HmiScreenPdf.call(null, []) === 0);
+		check('pdf.compile', werrs('ScreenToPDF();').length === 0 && werrs('ScreenToPDF(1);').length === 1 &&
+			werrs('ScreenToPDF()', 'expr').length === 1, werrs('ScreenToPDF(1);').join(' | '));
+		HmiScreenPdf.testIo = null;
+		wm2.hide('WinC');
+
 		sim.write({Recipe_Name: 'before stop'});
 		caller.runScript('ShowWindow("WinC", "", "", 1, 1); Recipe_Name = "after stop";');
 		HmiMenus.stop(ui);

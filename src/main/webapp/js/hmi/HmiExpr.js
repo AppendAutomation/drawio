@@ -77,7 +77,11 @@ HmiExpr.FUNCTIONS = {
 
 	// ShowWindow(name[, left, top[, modal[, wait]]]) (HmiWindows.js). With
 	// wait, the script pauses until the window closes; otherwise it carries on
-	'ShowWindow': {minArity: 1, maxArity: 5, action: true, async: true}
+	'ShowWindow': {minArity: 1, maxArity: 5, action: true, async: true},
+
+	// ScreenToPDF() (HmiScreenPdf.js): like RecipeExport, returns 1 once the
+	// Save dialog is on its way; the script does not wait for it
+	'ScreenToPDF': {arity: 0, action: true}
 };
 
 /** A function's accepted argument counts. */
