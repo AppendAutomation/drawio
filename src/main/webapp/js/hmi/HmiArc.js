@@ -1,10 +1,13 @@
 /**
  * Arcs: an open curve along a circle (arcType=circle, kept round) or along
- * the ellipse filling its bounds (arcType=ellipse), drawn clockwise from
- * arcStart to arcEnd. Angles are degrees, 0 at twelve o'clock, increasing
- * clockwise. Like a line, each end can carry a marker (startArrow, endArrow,
- * with startSize/endSize and startFill/endFill), drawn by mxMarker so arcs
- * and connectors share their arrowheads; strokeWidth is the line width.
+ * the ellipse filling its bounds (arcType=ellipse), drawn counterclockwise
+ * from arcStart to arcEnd. Angles are degrees measured as on a protractor: 0
+ * at the right (three o'clock), increasing counterclockwise, so 90 is the
+ * top; a start greater than the end sweeps through 0. Like a line, each end
+ * can carry a marker (startArrow, endArrow, with startSize/endSize and
+ * startFill/endFill), drawn by mxMarker so arcs and connectors share their
+ * arrowheads. The line width runs from strokeWidth at the start to
+ * arcEndWidth at the end (the same when it is not set).
  *
  * The shape is a vertex, so animation links (colors, blink, visibility,
  * rotation...) work on it as on any object.
@@ -20,12 +23,12 @@ HmiArc.MARKERS = [['none', 'None'], ['classic', 'Classic'], ['classicThin', 'Cla
 	['halfCircle', 'Half circle'], ['dash', 'Dash'], ['cross', 'Cross'], ['circle', 'Circle'],
 	['circlePlus', 'Circle plus']];
 
-HmiArc.DEFAULTS = {arcType: 'ellipse', arcStart: 270, arcEnd: 90};
+HmiArc.DEFAULTS = {arcType: 'ellipse', arcStart: 0, arcEnd: 180};
 
 /** The two palette styles: a circle arc (kept round) and an ellipse arc. */
-HmiArc.CIRCLE_STYLE = 'shape=hmiArc;arcType=circle;aspect=fixed;arcStart=270;arcEnd=90;' +
+HmiArc.CIRCLE_STYLE = 'shape=hmiArc;arcType=circle;aspect=fixed;arcStart=0;arcEnd=180;' +
 	'startArrow=none;endArrow=none;fillColor=none;html=1;';
-HmiArc.ELLIPSE_STYLE = 'shape=hmiArc;arcType=ellipse;arcStart=270;arcEnd=90;' +
+HmiArc.ELLIPSE_STYLE = 'shape=hmiArc;arcType=ellipse;arcStart=0;arcEnd=180;' +
 	'startArrow=none;endArrow=none;fillColor=none;html=1;';
 
 HmiArc.install = function()
@@ -45,7 +48,7 @@ HmiArc.number = function(style, key, def)
 	return isNaN(v) ? def : v;
 };
 
-/** Degrees swept clockwise from start to end: (0, 360]; equal angles are a full circle. */
+/** Degrees swept counterclockwise from start to end: (0, 360]; equal angles are a full circle. */
 HmiArc.sweep = function(start, end)
 {
 	var s = ((end - start) % 360 + 360) % 360;
@@ -54,9 +57,11 @@ HmiArc.sweep = function(start, end)
 };
 
 /**
- * The arc as points (sampled along the curve), in the given bounds. The
- * centre and radii follow the type: an ellipse fills the bounds, a circle
- * takes the smaller side, centred.
+ * The arc as points sampled along the curve, each with f, its fraction of the
+ * way from the start (0) to the end (1). The centre and radii follow the
+ * type: an ellipse fills the bounds, a circle takes the smaller side, centred.
+ * Screen y grows downwards, so a counterclockwise angle a is at
+ * (cx + rx cos a, cy - ry sin a).
  */
 HmiArc.points = function(style, x, y, w, h)
 {
@@ -72,11 +77,24 @@ HmiArc.points = function(style, x, y, w, h)
 
 	for (var i = 0; i <= n; i++)
 	{
-		var t = (start + sweep * i / n) * Math.PI / 180;
-		pts.push(new mxPoint(cx + rx * Math.sin(t), cy - ry * Math.cos(t)));
+		var a = (start + sweep * i / n) * Math.PI / 180;
+		var p = new mxPoint(cx + rx * Math.cos(a), cy - ry * Math.sin(a));
+		p.f = i / n;
+		pts.push(p);
 	}
 
 	return {points: pts, rx: rx, ry: ry, start: start, sweep: sweep};
+};
+
+/** The direction of travel (increasing angle) at angle a, in degrees, as a unit vector. */
+HmiArc.direction = function(arc, a)
+{
+	var t = a * Math.PI / 180;
+	var dx = -arc.rx * Math.sin(t);
+	var dy = -arc.ry * Math.cos(t);
+	var len = Math.sqrt(dx * dx + dy * dy) || 1;
+
+	return {x: dx / len, y: dy / len};
 };
 
 /** Removes length from the start (fromStart) or end of a polyline, in place. */
@@ -95,8 +113,15 @@ HmiArc.trim = function(pts, length, fromStart)
 
 		if (d > length)
 		{
-			var f = length / d;
-			pts[pts.length - 1] = new mxPoint(a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f);
+			var k = length / d;
+			var p = new mxPoint(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k);
+
+			if (a.f != null && b.f != null)
+			{
+				p.f = a.f + (b.f - a.f) * k;
+			}
+
+			pts[pts.length - 1] = p;
 			length = 0;
 		}
 		else
@@ -110,6 +135,33 @@ HmiArc.trim = function(pts, length, fromStart)
 	{
 		pts.reverse();
 	}
+};
+
+/**
+ * A line whose width changes along it, as a closed outline: each point is
+ * offset by half its width either side of the line.
+ */
+HmiArc.taper = function(pts, startWidth, endWidth)
+{
+	var left = [];
+	var right = [];
+
+	for (var i = 0; i < pts.length; i++)
+	{
+		var a = pts[Math.max(0, i - 1)];
+		var b = pts[Math.min(pts.length - 1, i + 1)];
+		var dx = b.x - a.x;
+		var dy = b.y - a.y;
+		var len = Math.sqrt(dx * dx + dy * dy) || 1;
+		var f = (pts[i].f != null) ? pts[i].f : i / Math.max(1, pts.length - 1);
+		var half = (startWidth + (endWidth - startWidth) * f) / 2;
+		var nx = -dy / len * half;
+		var ny = dx / len * half;
+		left.push(new mxPoint(pts[i].x + nx, pts[i].y + ny));
+		right.push(new mxPoint(pts[i].x - nx, pts[i].y - ny));
+	}
+
+	return left.concat(right.reverse());
 };
 
 // ------------------------------------------------------------------ shape
@@ -134,11 +186,13 @@ HmiArc.installShape = function()
 	{
 		var arc = HmiArc.points(this.style, x, y, w, h);
 		var pts = arc.points;
-		var sw = this.strokewidth || 1;
+		var startWidth = this.strokewidth || 1;
+		var endWidth = HmiArc.number(this.style, 'arcEndWidth', startWidth);
 		var paint = [];
 
 		// Each marker is told the end point and the direction leaving the
-		// line there; it moves the point back to where the line must stop
+		// line there; it moves the point back to where the line must stop.
+		// It is sized for the line's width at its own end.
 		var marker = function(fromStart)
 		{
 			var type = mxUtils.getValue(this.style, (fromStart) ? 'startArrow' : 'endArrow', mxConstants.NONE);
@@ -148,14 +202,12 @@ HmiArc.installShape = function()
 				return;
 			}
 
-			var t = (arc.start + ((fromStart) ? 0 : arc.sweep)) * Math.PI / 180;
-			var dx = arc.rx * Math.cos(t);
-			var dy = arc.ry * Math.sin(t);
-			var len = Math.sqrt(dx * dx + dy * dy) || 1;
-			var ux = (fromStart) ? -dx / len : dx / len;
-			var uy = (fromStart) ? -dy / len : dy / len;
+			var dir = HmiArc.direction(arc, arc.start + ((fromStart) ? 0 : arc.sweep));
+			var ux = (fromStart) ? -dir.x : dir.x;
+			var uy = (fromStart) ? -dir.y : dir.y;
 			var end = (fromStart) ? pts[0] : pts[pts.length - 1];
 			var pe = end.clone();
+			var sw = (fromStart) ? startWidth : endWidth;
 			var size = HmiArc.number(this.style, (fromStart) ? 'startSize' : 'endSize', mxConstants.DEFAULT_MARKERSIZE);
 			var filled = mxUtils.getValue(this.style, (fromStart) ? 'startFill' : 'endFill', 1) != 0;
 			var f = mxMarker.createMarker(c, this, type, pe, ux, uy, size, fromStart, sw, filled);
@@ -163,22 +215,42 @@ HmiArc.installShape = function()
 			if (f != null)
 			{
 				HmiArc.trim(pts, Math.sqrt((pe.x - end.x) * (pe.x - end.x) + (pe.y - end.y) * (pe.y - end.y)), fromStart);
-				paint.push(f);
+				paint.push({sw: sw, paint: f});
 			}
 		};
 
 		marker.call(this, true);
 		marker.call(this, false);
 
-		c.begin();
-		c.moveTo(pts[0].x, pts[0].y);
-
-		for (var i = 1; i < pts.length; i++)
+		if (Math.abs(endWidth - startWidth) < 0.01)
 		{
-			c.lineTo(pts[i].x, pts[i].y);
-		}
+			// One width: an ordinary stroke (dashes and line caps apply)
+			c.begin();
+			c.moveTo(pts[0].x, pts[0].y);
 
-		c.stroke();
+			for (var i = 1; i < pts.length; i++)
+			{
+				c.lineTo(pts[i].x, pts[i].y);
+			}
+
+			c.stroke();
+		}
+		else
+		{
+			// Start to end width: the line is filled as an outline
+			var outline = HmiArc.taper(pts, startWidth, endWidth);
+			c.setFillColor(this.stroke);
+			c.begin();
+			c.moveTo(outline[0].x, outline[0].y);
+
+			for (var k = 1; k < outline.length; k++)
+			{
+				c.lineTo(outline[k].x, outline[k].y);
+			}
+
+			c.close();
+			c.fill();
+		}
 
 		// Markers are solid and take the line's color
 		if (paint.length > 0)
@@ -188,7 +260,8 @@ HmiArc.installShape = function()
 
 			for (var j = 0; j < paint.length; j++)
 			{
-				paint[j]();
+				c.setStrokeWidth(paint[j].sw);
+				paint[j].paint();
 			}
 		}
 	};
@@ -383,7 +456,8 @@ HmiArc.createPanel = function(panel, cells)
 
 	row('Start angle (°)', number('arcStart', HmiArc.DEFAULTS.arcStart, -360, 360, 1, 'start'));
 	row('End angle (°)', number('arcEnd', HmiArc.DEFAULTS.arcEnd, -360, 360, 1, 'end'));
-	row('Line width', number(mxConstants.STYLE_STROKEWIDTH, 1, 0, 999, 1, 'width'));
+	row('Start line width', number(mxConstants.STYLE_STROKEWIDTH, 1, 0, 999, 1, 'width'));
+	row('End line width', number('arcEndWidth', HmiArc.number(style, mxConstants.STYLE_STROKEWIDTH, 1), 0, 999, 1, 'endWidth'));
 	row('Start arrow', marker('startArrow', 'startArrow'));
 	row('Start size', number('startSize', mxConstants.DEFAULT_MARKERSIZE, 0, 999, 1, 'startSize'));
 	row('Start filled', filled('startFill', 'startFill'));
@@ -393,7 +467,8 @@ HmiArc.createPanel = function(panel, cells)
 
 	var hint = document.createElement('div');
 	hint.className = 'hmiHint';
-	mxUtils.write(hint, '0° is twelve o\'clock; the arc runs clockwise from the start angle to the end angle.');
+	mxUtils.write(hint, 'Angles are measured as on a protractor: 0° at the right, counterclockwise, so 90° is the top. ' +
+		'The arc runs counterclockwise from the start angle to the end angle. A line whose widths differ is drawn solid.');
 	div.appendChild(hint);
 
 	return div;

@@ -3885,19 +3885,30 @@ HmiSelfTest.testArcs = function(ui)
 	var check = HmiSelfTest.check;
 
 	check('arc.shapeRegistered', mxCellRenderer.defaultShapes[HmiArc.SHAPE] != null);
-	check('arc.sweep', HmiArc.sweep(270, 90) === 180 && HmiArc.sweep(90, 270) === 180 &&
+	check('arc.sweep', HmiArc.sweep(0, 180) === 180 && HmiArc.sweep(180, 0) === 180 &&
 		HmiArc.sweep(0, 0) === 360 && HmiArc.sweep(300, 60) === 120 && HmiArc.sweep(-90, 90) === 180);
 
-	// 0° is twelve o'clock, clockwise: a quarter from 0 to 90 runs top to right
+	// As on a protractor: 0° at the right, counterclockwise, so 0 to 90 runs right to top
 	var q = HmiArc.points({arcType: 'circle', arcStart: 0, arcEnd: 90}, 0, 0, 100, 100).points;
-	check('arc.clockwiseFromTop', Math.abs(q[0].x - 50) < 0.01 && Math.abs(q[0].y) < 0.01 &&
-		Math.abs(q[q.length - 1].x - 100) < 0.01 && Math.abs(q[q.length - 1].y - 50) < 0.01,
+	check('arc.protractorAngles', Math.abs(q[0].x - 100) < 0.01 && Math.abs(q[0].y - 50) < 0.01 &&
+		Math.abs(q[q.length - 1].x - 50) < 0.01 && Math.abs(q[q.length - 1].y) < 0.01,
 		JSON.stringify([q[0], q[q.length - 1]]));
 	var e = HmiArc.points({arcType: 'ellipse', arcStart: 90, arcEnd: 270}, 0, 0, 200, 100).points;
-	check('arc.ellipseFillsBounds', Math.abs(e[0].x - 200) < 0.01 && Math.abs(e[0].y - 50) < 0.01 &&
-		Math.abs(e[e.length - 1].x) < 0.01);
+	var mid = e[Math.floor(e.length / 2)];
+	check('arc.counterclockwise', Math.abs(e[0].x - 100) < 0.01 && Math.abs(e[0].y) < 0.01 &&
+		Math.abs(mid.x) < 0.5 && Math.abs(e[e.length - 1].y - 100) < 0.01, JSON.stringify(mid));
+	var w = HmiArc.points({arcType: 'circle', arcStart: 300, arcEnd: 60}, 0, 0, 100, 100).points;
+	var wmid = w[Math.floor(w.length / 2)];
+	check('arc.sweepsThroughZero', Math.abs(wmid.x - 100) < 0.01 && Math.abs(wmid.y - 50) < 0.5, JSON.stringify(wmid));
 	var c = HmiArc.points({arcType: 'circle', arcStart: 90, arcEnd: 270}, 0, 0, 200, 100).points;
-	check('arc.circleStaysRound', Math.abs(c[0].x - 150) < 0.01 && Math.abs(c[c.length - 1].x - 50) < 0.01);
+	check('arc.circleStaysRound', Math.abs(c[0].x - 100) < 0.01 && Math.abs(c[Math.floor(c.length / 2)].x - 50) < 0.5);
+
+	var two = [new mxPoint(0, 0), new mxPoint(10, 0)];
+	two[0].f = 0;
+	two[1].f = 1;
+	var out = HmiArc.taper(two, 2, 6);
+	check('arc.taperWidths', Math.abs(Math.abs(out[0].y) - 1) < 0.01 && Math.abs(Math.abs(out[1].y) - 3) < 0.01 &&
+		Math.abs(Math.abs(out[2].y) - 3) < 0.01 && Math.abs(Math.abs(out[3].y) - 1) < 0.01, JSON.stringify(out));
 
 	var line = [new mxPoint(0, 0), new mxPoint(10, 0), new mxPoint(20, 0)];
 	HmiArc.trim(line, 5, false);
@@ -3910,7 +3921,7 @@ HmiSelfTest.testArcs = function(ui)
 	var graph = ui.editor.graph;
 	var plain = graph.insertVertex(graph.getDefaultParent(), null, '', 20, 20, 100, 100, HmiArc.CIRCLE_STYLE);
 	var arrows = graph.insertVertex(graph.getDefaultParent(), null, '', 150, 20, 160, 100,
-		HmiArc.ELLIPSE_STYLE.replace('startArrow=none', 'startArrow=oval').replace('endArrow=none', 'endArrow=block') + 'strokeWidth=3;');
+		HmiArc.ELLIPSE_STYLE.replace('startArrow=none', 'startArrow=oval').replace('endArrow=none', 'endArrow=block') + 'strokeWidth=3;arcEndWidth=9;');
 	var paths = function(cell) { var st = graph.view.getState(cell); return (st != null && st.shape != null && st.shape.node != null) ? st.shape.node.querySelectorAll('path, ellipse').length : -1; };
 	check('arc.drawsLine', paths(plain) >= 1, '' + paths(plain));
 	check('arc.drawsMarkers', paths(arrows) >= 3, '' + paths(arrows));
@@ -3933,7 +3944,7 @@ HmiSelfTest.testArcs = function(ui)
 
 	var sec = ui.format.container.querySelector('[data-hmi-arc-section]');
 	check('arc.styleSection', sec != null && sec.querySelector('[data-hmi-arc="startArrow"]').value === 'oval' &&
-		sec.querySelector('[data-hmi-arc="width"]').value === '3');
+		sec.querySelector('[data-hmi-arc="width"]').value === '3' && sec.querySelector('[data-hmi-arc="endWidth"]').value === '9');
 
 	if (sec != null)
 	{
