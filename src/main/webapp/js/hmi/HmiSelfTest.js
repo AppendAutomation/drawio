@@ -50,6 +50,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRecipes(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testArcs(ui);
+		HmiSelfTest.testFlip(ui);
 		HmiSelfTest.testViews(ui);
 		HmiSelfTest.testFormatTab(ui);
 		HmiSelfTest.testPivotPanel(ui);
@@ -3959,6 +3960,94 @@ HmiSelfTest.testArcs = function(ui)
 		return n.firstChild == null || ('' + n.firstChild.textContent).trim() !== fillTitle; }));
 	graph.clearSelection();
 	HmiSelfTest.resetGraph(ui);
+};
+
+/** Flipping a group mirrors everything in it about the group's center. */
+HmiSelfTest.testFlip = function(ui)
+{
+	var check = HmiSelfTest.check;
+	HmiSelfTest.resetGraph(ui);
+	var graph = ui.editor.graph;
+	var model = graph.model;
+	var parent = graph.getDefaultParent();
+	var a, b, c, d, edge, inner, group;
+
+	model.beginUpdate();
+	try
+	{
+		a = graph.insertVertex(parent, null, '', 100, 100, 40, 20, 'rounded=0;rotation=30;');
+		b = graph.insertVertex(parent, null, '', 200, 100, 60, 60, HmiArc.ELLIPSE_STYLE);
+		c = graph.insertVertex(parent, null, '', 100, 200, 20, 20, 'ellipse;');
+		d = graph.insertVertex(parent, null, '', 140, 200, 20, 30, 'triangle;');
+		edge = graph.insertEdge(parent, null, '', a, b);
+		edge.geometry.points = [new mxPoint(170, 90)];
+		inner = graph.groupCells(null, 0, [c, d]);
+		group = graph.groupCells(null, 0, [a, b, edge, inner]);
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	var gw = group.geometry.width, gh = group.geometry.height;
+	var before = function(cell) { return cell.geometry.clone(); };
+	var ga = before(a), gb = before(b), gi = before(inner), gc = before(c), gd = before(d);
+	var pt = edge.geometry.points[0].clone();
+	var style = function(cell, key) { return mxUtils.getValue(graph.getCellStyle(cell), key, null); };
+
+	graph.flipCells([group], true);
+	check('flip.groupMirrorsChildren', a.geometry.x === gw - ga.x - ga.width && b.geometry.x === gw - gb.x - gb.width &&
+		a.geometry.y === ga.y && inner.geometry.x === gw - gi.x - gi.width,
+		JSON.stringify([gw, a.geometry.x, b.geometry.x, inner.geometry.x]));
+	check('flip.nestedGroupMirrors', c.geometry.x === gi.width - gc.x - gc.width && d.geometry.x === gi.width - gd.x - gd.width,
+		JSON.stringify([c.geometry.x, d.geometry.x]));
+	check('flip.childrenFlipped', style(a, 'flipH') == 1 && style(b, 'flipH') == 1 && style(c, 'flipH') == 1 && style(d, 'flipH') == 1);
+	check('flip.rotationReversed', style(a, 'rotation') == 330, '' + style(a, 'rotation'));
+	check('flip.edgePointsMirrored', edge.geometry.points[0].x === gw - pt.x && edge.geometry.points[0].y === pt.y,
+		JSON.stringify(edge.geometry.points[0]));
+
+	graph.flipCells([group], true);
+	check('flip.twiceRestores', a.geometry.x === ga.x && c.geometry.x === gc.x && style(a, 'flipH') == 0 &&
+		style(a, 'rotation') == 30 && edge.geometry.points[0].x === pt.x);
+
+	graph.flipCells([group], false);
+	check('flip.vertical', a.geometry.y === gh - ga.y - ga.height && a.geometry.x === ga.x && style(c, 'flipV') == 1,
+		JSON.stringify([gh, a.geometry.y]));
+	graph.flipCells([group], false);
+
+	// Arrange > Direction > Flip Horizontal does the same
+	var items = [];
+	var stub = {addItem: function(label, image, fn) { items.push({label: label, fn: fn}); return document.createElement('tr'); },
+		addSeparator: function() {}};
+
+	try
+	{
+		ui.menus.get('direction').funct(stub, null);
+	}
+	catch (e)
+	{
+		// Only the flip items are needed
+	}
+
+	var flipH = items.filter(function(it) { return it.label === mxResources.get('flipH'); })[0];
+	graph.setSelectionCell(group);
+
+	if (flipH != null)
+	{
+		flipH.fn();
+	}
+
+	check('flip.directionMenu', flipH != null && a.geometry.x === gw - ga.x - ga.width && style(d, 'flipH') == 1);
+
+	// A single object still flips in place
+	var single = graph.insertVertex(parent, null, '', 400, 50, 40, 20, 'triangle;');
+	graph.flipCells([single], true);
+	check('flip.singleInPlace', single.geometry.x === 400 && style(single, 'flipH') == 1);
+	graph.clearSelection();
+	HmiSelfTest.resetGraph(ui);
+
+	// Later checks count undo steps, which stop growing at the history's limit
+	ui.editor.undoManager.clear();
 };
 
 HmiSelfTest.hasFileType = function(types, ext)
