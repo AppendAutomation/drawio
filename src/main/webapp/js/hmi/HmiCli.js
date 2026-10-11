@@ -433,6 +433,28 @@ HmiCli.buildProject = function(spec, errors)
 		hmi.settings.security.autoLogoutMin = logout;
 	}
 
+	if (s.scripts != null)
+	{
+		var allowed = HmiProject.APP_SCRIPTS.concat(['everyMs']);
+
+		for (var key in s.scripts)
+		{
+			if (mxUtils.indexOf(allowed, key) < 0)
+			{
+				errors.push('settings.scripts: unknown field "' + key + '" (allowed: ' + allowed.join(', ') + ')');
+			}
+			else if (s.scripts[key] != null)
+			{
+				hmi.settings.scripts[key] = '' + s.scripts[key];
+			}
+		}
+
+		if (hmi.settings.scripts.everyMs === '')
+		{
+			hmi.settings.scripts.everyMs = HmiProject.DEFAULT_APP_EVERY_MS;
+		}
+	}
+
 	HmiCli.buildUsers(hmi, spec.users || [], errors);
 	HmiCli.buildRecipeBooks(hmi, spec.recipeBooks || [], errors);
 
@@ -868,6 +890,11 @@ HmiCli.dump = function(ui)
 	if (hmi.settings.security.autoLogoutMin > 0)
 	{
 		spec.settings.security = {autoLogoutMin: hmi.settings.security.autoLogoutMin};
+	}
+
+	if (JSON.stringify(hmi.settings.scripts) !== JSON.stringify(HmiProject.defaultAppScripts()))
+	{
+		spec.settings.scripts = JSON.parse(JSON.stringify(hmi.settings.scripts));
 	}
 
 	if (hmi.users.length > 0)

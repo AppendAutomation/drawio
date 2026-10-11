@@ -39,6 +39,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testExpressions();
 		HmiSelfTest.testSimulation();
 		HmiSelfTest.testConditionals();
+		HmiSelfTest.testLocals();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
@@ -64,6 +65,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testAnimationClipboard(ui);
 		HmiSelfTest.testKeypad(ui);
 		HmiSelfTest.testWindows(ui);
+		HmiSelfTest.testAppScripts(ui);
 		HmiSelfTest.testDevices(ui);
 		HmiSelfTest.testCommsDriver(ui);
 
@@ -5600,6 +5602,347 @@ HmiSelfTest.testWindows = function(ui)
 	}
 };
 
+
+/** Local variables: DIM name[, name] AS Analog | Discrete | Message. */
+HmiSelfTest.testLocals = function()
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryReal'));
+	project.addTag(HmiProject.createTag('Dim', 'MemoryInteger'));
+
+	var values = {};
+	var written = {};
+
+	var ctx = {
+		read: function(name)
+		{
+			var v = values[name.toLowerCase()];
+
+			return (v != null) ? v : {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+		},
+		write: function(name, value)
+		{
+			written[name] = value;
+			values[name.toLowerCase()] = {value: value, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+		},
+		now: function() { return Date.now(); }
+	};
+
+	var compile = function(src)
+	{
+		return HmiExpr.compile(src, {project: project, mode: 'script'});
+	};
+
+	var run = function(src)
+	{
+		written = {};
+		values = {tank_level: {value: 42, quality: HmiTypes.QUALITY_GOOD, timestamp: 1}};
+		var c = compile(src);
+
+		if (c.errors.length > 0)
+		{
+			return {errors: c.errors.map(function(e) { return e.message; })};
+		}
+
+		var res = c.eval(ctx);
+
+		return {written: written, compiled: c, error: res.error};
+	};
+
+	var errorOf = function(src)
+	{
+		var c = compile(src);
+
+		return (c.errors.length > 0) ? c.errors[0].message : '';
+	};
+
+	var r = run('DIM a, b AS Analog;\nDIM m AS Message;\nDIM d AS Discrete;\n' +
+		'a = 2; b = a * 3 + Tank_Level; m = "x" + Text(b, "0"); d = b > 5;\n' +
+		'Result = b; Recipe_Name = m; Pump1_Run = d;');
+	check('local.types', r.written != null && r.written.Result === 48 && r.written.Recipe_Name === 'x48' &&
+		r.written.Pump1_Run === 1, JSON.stringify(r));
+	check('local.notTags', r.compiled != null && r.compiled.deps.join(',') === 'Tank_Level,Result,Recipe_Name,Pump1_Run' &&
+		r.compiled.writes.join(',') === 'Result,Recipe_Name,Pump1_Run',
+		r.compiled && (r.compiled.deps + ' / ' + r.compiled.writes));
+
+	r = run('DIM a AS Analog; DIM m AS Message; DIM d AS Discrete; Result = a + 1; Recipe_Name = m + "!"; Pump1_Run = d;');
+	check('local.defaults', r.written != null && r.written.Result === 1 && r.written.Recipe_Name === '!' &&
+		r.written.Pump1_Run === 0, JSON.stringify(r));
+
+	r = run('DIM a AS Analog; DIM d AS Discrete; DIM m AS Message; a = "12"; d = 5; m = 7; Result = a + 1; Pump1_Run = d; Recipe_Name = m;');
+	check('local.coerced', r.written != null && r.written.Result === 13 && r.written.Pump1_Run === 1 &&
+		r.written.Recipe_Name === '7', JSON.stringify(r));
+
+	r = run('DIM a AS Analog; a = "lots"; Result = 1;');
+	check('local.badNumber', r.written != null && r.written.Result === undefined && /not a number/.test(r.error),
+		JSON.stringify(r));
+
+	r = run('DIM Count AS Analog; COUNT = 4; Result = count;');
+	check('local.ignoresCase', r.written != null && r.written.Result === 4, JSON.stringify(r));
+
+	var fresh = 'DIM n AS Analog; n = n + 1; Result = n;';
+	run(fresh);
+	r = run(fresh);
+	check('local.freshEachRun', r.written != null && r.written.Result === 1, JSON.stringify(r));
+
+	r = run('DIM i AS Analog; IF Tank_Level > 40 THEN i = 5; ELSE i = 6; ENDIF; Result = i;');
+	check('local.inIf', r.written != null && r.written.Result === 5, JSON.stringify(r));
+
+	// A local takes the quality of what it was given: bad data takes no branch
+	r = run('DIM v AS Analog; v = Pump1_Run; IF v == 0 THEN Result = 1; ELSE Result = 2; ENDIF;');
+	check('local.keepsQuality', r.written != null && r.written.Result === undefined, JSON.stringify(r));
+
+	// DIM and AS are words only in the declaration: a tag named Dim is a tag
+	r = run('Dim = 3; DIM x AS Analog; x = Dim + 1; Result = x;');
+	check('local.tagNamedDim', r.written != null && r.written.Dim === 3 && r.written.Result === 4, JSON.stringify(r));
+
+	check('local.strictTagName', /has the name of the tag "Tank_Level"/.test(errorOf('DIM tank_level AS Analog;')),
+		errorOf('DIM tank_level AS Analog;'));
+	check('local.strictSystemTag', /system tag/.test(errorOf('DIM _AlarmsActive AS Analog;')),
+		errorOf('DIM _AlarmsActive AS Analog;'));
+	check('local.duplicate', /already declared/.test(errorOf('DIM a AS Analog; DIM A AS Message;')),
+		errorOf('DIM a AS Analog; DIM A AS Message;'));
+	check('local.notInIf', /cannot be inside IF/.test(errorOf('IF 1 THEN DIM a AS Analog; ENDIF;')),
+		errorOf('IF 1 THEN DIM a AS Analog; ENDIF;'));
+	check('local.needsAs', /expected AS/.test(errorOf('DIM a Analog;')), errorOf('DIM a Analog;'));
+	check('local.badType', /Analog, Discrete or Message/.test(errorOf('DIM a AS Integer;')),
+		errorOf('DIM a AS Integer;'));
+	check('local.noFields', /has no fields/.test(errorOf('DIM a AS Analog; Result = a.Quality;')),
+		errorOf('DIM a AS Analog; Result = a.Quality;'));
+	check('local.declaredFirst', /unknown tag "a"/.test(errorOf('a = 1; DIM a AS Analog;')),
+		errorOf('a = 1; DIM a AS Analog;'));
+	check('local.keywordName', errorOf('DIM As AS Analog;') !== '' && errorOf('DIM x, AS Analog;') !== '',
+		errorOf('DIM As AS Analog;'));
+	check('local.scriptsOnly', HmiExpr.compile('DIM a AS Analog', {project: project}).errors.length > 0);
+
+	// A tag added later with a local's name is a compile error at Validate
+	var later = 'DIM Spare AS Analog; Spare = 1;';
+	check('local.okBeforeTag', errorOf(later) === '', errorOf(later));
+	project.addTag(HmiProject.createTag('Spare', 'MemoryReal'));
+	check('local.tagAddedLater', /has the name of the tag/.test(errorOf(later)), errorOf(later));
+};
+
+/** Application scripts: On start, While running, On shutdown. */
+HmiSelfTest.testAppScripts = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	// --- model ------------------------------------------------------------
+
+	var p = new HmiProject();
+	check('app.defaults', JSON.stringify(p.settings.scripts) ===
+		JSON.stringify({onStart: '', whileRunning: '', onShutdown: '', everyMs: '1000'}));
+	check('app.defaultsNotStored', p.toXml(mxUtils.createXmlDocument()).getElementsByTagName('appScripts').length === 0);
+
+	p.settings.scripts = {onStart: 'A = 1;\n{ two lines }', whileRunning: '', onShutdown: 'B = "<&>";', everyMs: '250'};
+	check('app.makesNonEmpty', !p.isEmpty());
+
+	var back = HmiProject.fromXml(mxUtils.parseXml(mxUtils.getXml(p.toXml(mxUtils.createXmlDocument()))).documentElement);
+	check('app.roundTrip', JSON.stringify(back.settings.scripts) === JSON.stringify(p.settings.scripts),
+		JSON.stringify(back.settings.scripts));
+
+	// A file saved pretty-printed indents the text, which is not the script's
+	var pretty = HmiProject.fromXml(mxUtils.parseXml(mxUtils.getPrettyXml(p.toXml(mxUtils.createXmlDocument())))
+		.documentElement);
+	check('app.prettyRoundTrip', JSON.stringify(pretty.settings.scripts) === JSON.stringify(p.settings.scripts),
+		JSON.stringify(pretty.settings.scripts));
+
+	// --- automation spec ---------------------------------------------------
+
+	var errors = [];
+	var built = HmiCli.buildProject({settings: {scripts: {onStart: 'X = 1;', everyMs: '', colour: 1}}}, errors);
+	check('app.cliBuild', built.settings.scripts.onStart === 'X = 1;' && built.settings.scripts.everyMs === '1000' &&
+		errors.length === 1 && errors[0].indexOf('colour') > 0, JSON.stringify(errors));
+
+	HmiSelfTest.resetGraph(ui);
+
+	var savedProject = ui.hmiProject;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Counter', 'MemoryInteger'));
+	ui.hmiProject = project;
+
+	var home = ui.currentPage;
+	var pa = HmiSelfTest.makePage(ui, 'AppA', null);
+	var pc = HmiSelfTest.makePage(ui, 'AppC', null);
+	var made = [pa, pc];
+	var realSetInterval = window.setInterval;
+
+	ui.selectPage(home);
+
+	try
+	{
+		project.settings.scripts = {onStart: 'Result = 1; Counter = 0; Recipe_Name = "started";',
+			whileRunning: 'DIM step AS Analog; step = 1; Counter = Counter + step;',
+			onShutdown: 'Recipe_Name = "shut";', everyMs: '75'};
+		project.setWindow(pa.getId(), {onShow: 'Pump1_Run = Result;', onHide: 'Recipe_Name = "hidden";'});
+		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200, width: 200, height: 100});
+		project.settings.startup = [pa.getId()];
+
+		ui.editor.setModified(false);
+		HmiDialogs.showAppSettings(ui);
+		var dlg = ui.dialog.container;
+		var area = dlg.querySelector('[data-hmi-prop="onStart"]');
+		var every = dlg.querySelector('[data-hmi-prop="everyMs"]');
+		check('app.dlgShows', area != null && area.value === project.settings.scripts.onStart &&
+			every != null && every.value === '75' &&
+			dlg.querySelector('[data-hmi-prop="whileRunning"]') != null &&
+			dlg.querySelector('[data-hmi-prop="onShutdown"]') != null);
+
+		area.value = 'DIM x AS Analog; Nope = 1;';
+		area.dispatchEvent(new Event('input'));
+		check('app.dlgMarksErrors', area.classList.contains('hmiInvalid'));
+		ui.hideDialog();
+		check('app.dlgCancelDiscards', project.settings.scripts.onStart.indexOf('Nope') < 0 && !ui.editor.modified);
+
+		HmiDialogs.showAppSettings(ui);
+		dlg = ui.dialog.container;
+		area = dlg.querySelector('[data-hmi-prop="onShutdown"]');
+		area.value = 'Recipe_Name = "shut down";';
+		area.dispatchEvent(new Event('input'));
+		every = dlg.querySelector('[data-hmi-prop="everyMs"]');
+		every.value = '50';
+		every.dispatchEvent(new Event('input'));
+		dlg.querySelector('.hmiOk').click();
+		check('app.dlgApplies', project.settings.scripts.onShutdown === 'Recipe_Name = "shut down";' &&
+			project.settings.scripts.everyMs === '50' && ui.editor.modified === true,
+			JSON.stringify(project.settings.scripts));
+
+		var spec = HmiCli.dump(ui);
+		check('app.cliDump', spec.settings.scripts != null && spec.settings.scripts.everyMs === '50' &&
+			spec.settings.scripts.onShutdown === 'Recipe_Name = "shut down";', JSON.stringify(spec.settings.scripts));
+
+		// Validate labels problems by script
+		project.settings.scripts.whileRunning = 'Nope = 1;';
+		var problems = HmiMenus.checkAppScripts(project);
+		check('app.validate', problems.length === 1 && problems[0].indexOf('While running: unknown tag') === 0,
+			JSON.stringify(problems));
+		project.settings.scripts.whileRunning = 'DIM step AS Analog; step = 1; Counter = Counter + step;';
+		check('app.validateClean', HmiMenus.checkAppScripts(project).length === 0,
+			JSON.stringify(HmiMenus.checkAppScripts(project)));
+
+		// --- Run --------------------------------------------------------------
+
+		// The While running timer is caught so the test can tick it
+		var timers = [];
+
+		window.setInterval = function(fn, ms)
+		{
+			var id = realSetInterval.apply(window, arguments);
+			timers.push({fn: fn, ms: ms, id: id});
+
+			return id;
+		};
+
+		HmiMenus.start(ui);
+		window.setInterval = realSetInterval;
+
+		var wm = ui.hmiRuntime;
+		var sim = wm.driver;
+		var tick = null;
+
+		for (var i = 0; i < timers.length; i++)
+		{
+			if (timers[i].id === wm.appTimer)
+			{
+				tick = timers[i];
+			}
+		}
+
+		check('app.runtimeWithoutWindow', wm.app instanceof HmiRuntime && wm.app.graph == null && wm.app.running);
+		check('app.onStartRuns', sim.get('Result').value == 1 && sim.get('Recipe_Name').value === 'started',
+			JSON.stringify(sim.get('Recipe_Name')));
+		check('app.onStartBeforeWindows', sim.get('Pump1_Run').value == 1, JSON.stringify(sim.get('Pump1_Run')));
+		check('app.whileRunningTimer', tick != null && tick.ms === 50, tick && tick.ms);
+
+		if (tick != null)
+		{
+			tick.fn();
+			tick.fn();
+		}
+
+		check('app.whileRunningRuns', sim.get('Counter').value == 2, JSON.stringify(sim.get('Counter')));
+
+		// Scripts read what the windows write, and the reverse
+		wm.windowFor(pa).runtime.runScript('Counter = 10;');
+		wm.app.runScript('Result = Counter + 1;');
+		check('app.sharesTags', sim.get('Result').value == 11, JSON.stringify(sim.get('Result')));
+
+		// A script that pauses keeps its local variables
+		wm.app.runScript('DIM m AS Message; m = "kept"; ShowWindow("AppC", "", "", 1, 1); Recipe_Name = m;');
+		check('app.showWindowWaits', wm.windowFor(pc) != null && sim.get('Recipe_Name').value === 'started');
+		wm.hide('AppC');
+		check('app.localsSurvivePause', sim.get('Recipe_Name').value === 'kept', JSON.stringify(sim.get('Recipe_Name')));
+
+		// On shutdown runs after the windows' On hide
+		var writes = [];
+		var realWrite = sim.write;
+
+		sim.write = function(w)
+		{
+			if (w.Recipe_Name != null)
+			{
+				writes.push(w.Recipe_Name);
+			}
+
+			return realWrite.apply(this, arguments);
+		};
+
+		var timer = wm.appTimer;
+		HmiMenus.stop(ui);
+		sim.write = realWrite;
+
+		check('app.onShutdownAfterOnHide', writes.join(',') === 'hidden,shut down', writes.join(','));
+		check('app.stopCleansUp', wm.app == null && wm.appTimer == null && wm.hub.clients.length === 0,
+			'clients=' + wm.hub.clients.length + ' timer=' + timer);
+
+		// No application scripts: no extra runtime or timer
+		project.settings.scripts = HmiProject.defaultAppScripts();
+		HmiMenus.start(ui);
+		check('app.noneNoRuntime', ui.hmiRuntime.app == null && ui.hmiRuntime.appTimer == null);
+		HmiMenus.stop(ui);
+
+		// A closing runtime stops its Run (HmiRuntimeApp.shutdown, from main)
+		project.settings.scripts = {onStart: '', whileRunning: '', onShutdown: 'Recipe_Name = "closed";', everyMs: '1000'};
+		HmiMenus.start(ui);
+		var sim2 = ui.hmiRuntime.driver;
+		var closed = [];
+		var realWrite2 = sim2.write;
+
+		sim2.write = function(w)
+		{
+			if (w.Recipe_Name != null)
+			{
+				closed.push(w.Recipe_Name);
+			}
+
+			return realWrite2.apply(this, arguments);
+		};
+
+		HmiRuntimeApp.shutdown(ui, function() {});
+		sim2.write = realWrite2;
+		check('app.shutdownStopsRun', ui.hmiRuntime == null && closed.join(',') === 'hidden,closed', closed.join(','));
+		HmiRuntimeApp.stopped = false;
+		HmiMenus.setRunning(ui, false);
+	}
+	finally
+	{
+		window.setInterval = realSetInterval;
+
+		if (HmiMenus.isRunning(ui))
+		{
+			HmiMenus.stop(ui);
+		}
+
+		for (var i = 0; i < made.length; i++)
+		{
+			ui.removePage(made[i]);
+		}
+
+		ui.hmiProject = savedProject;
+	}
+};
 
 /** Devices: the model, the dialog, the tag form's I/O section and validation. */
 HmiSelfTest.testDevices = function(ui)

@@ -37,6 +37,41 @@ HmiExpr.WORD_OPS = {AND: 'AND', OR: 'OR', NOT: 'NOT', MOD: 'MOD',
 HmiExpr.MAX_NAME = 63;
 
 /**
+ * Local variables: DIM name[, name ...] AS Analog | Discrete | Message; in a
+ * script. They live while the script runs, start at 0 or "", and may not share
+ * a name with a tag. DIM and AS are words only in that statement, so a tag
+ * named As is still a tag everywhere else.
+ */
+HmiExpr.LOCAL_TYPES = {analog: 'Analog', discrete: 'Discrete', message: 'Message'};
+
+/** A local variable's starting value. */
+HmiExpr.localDefault = function(type)
+{
+	return (type === 'Message') ? '' : 0;
+};
+
+/** A value as a local variable of this type holds it. */
+HmiExpr.coerceLocal = function(type, value)
+{
+	if (value == null)
+	{
+		return HmiExpr.localDefault(type);
+	}
+
+	if (type === 'Message')
+	{
+		return HmiExpr.text(value);
+	}
+
+	if (type === 'Discrete')
+	{
+		return (HmiExpr.truthy(value)) ? 1 : 0;
+	}
+
+	return HmiExpr.num(value);
+};
+
+/**
  * Built-in functions. Each takes already-evaluated plain values and returns a
  * plain value; quality and timestamp are combined by the caller.
  */
@@ -408,6 +443,10 @@ HmiExpr.Parser = function(tokens, opts)
 	this.errors = [];
 	this.deps = [];
 	this.writes = [];
+	// Local variables declared so far (DIM), by lower-case name
+	this.locals = {};
+	// How many IFs the parser is inside: DIM is allowed only outside them
+	this.depth = 0;
 };
 
 /**
@@ -509,6 +548,11 @@ HmiExpr.Parser.prototype.parseStatement = function()
 		return this.parseIf();
 	}
 
+	if (this.atDim())
+	{
+		return this.parseDim();
+	}
+
 	var start = this.i;
 	var node = this.parseOr();
 
@@ -518,9 +562,13 @@ HmiExpr.Parser.prototype.parseStatement = function()
 
 		var system = (node.type === 'ref') ? HmiTypes.SYSTEM_TAGS[node.name] : null;
 
-		if (node.type !== 'ref')
+		if (node.type === 'local')
 		{
-			this.error('only a tag can be assigned to', this.tokens[start]);
+			// A local variable is assigned in the script, not written to a tag
+		}
+		else if (node.type !== 'ref')
+		{
+			this.error('only a tag or a local variable can be assigned to', this.tokens[start]);
 		}
 		// Writing 1 to .Acked acknowledges the tag's alarm; no other field
 		// can be written
@@ -548,6 +596,119 @@ HmiExpr.Parser.prototype.parseStatement = function()
 	this.checkAsync(statement, this.tokens[start]);
 
 	return statement;
+};
+
+/** DIM, then a name: a declaration (a tag named Dim is assigned or read with = or an operator). */
+HmiExpr.Parser.prototype.atDim = function()
+{
+	var t = this.peek();
+	var n = this.tokens[this.i + 1];
+
+	return this.opts.mode === 'script' && t.type === HmiExpr.T.IDENT && t.value.toUpperCase() === 'DIM' &&
+		n != null && n.type === HmiExpr.T.IDENT;
+};
+
+/**
+ * DIM name[, name ...] AS Analog | Discrete | Message
+ *
+ * A name is a local variable from here to the end of the script. Strict: it
+ * may not be a tag's name (whatever its case), a system tag's, or one already
+ * declared, so a name in a script always means one thing.
+ */
+HmiExpr.Parser.prototype.parseDim = function()
+{
+	var dim = this.next();
+	var names = [];
+
+	if (this.depth > 0)
+	{
+		this.error('DIM cannot be inside IF: declare variables at the top level of the script', dim);
+	}
+
+	do
+	{
+		var t = this.peek();
+
+		if (t.type !== HmiExpr.T.IDENT || t.value.toUpperCase() === 'AS')
+		{
+			this.error('expected a variable name, found ' + this.describe(t));
+
+			break;
+		}
+
+		this.next();
+		names.push(t);
+	}
+	while (this.eatOp(','));
+
+	var as = this.peek();
+	var type = null;
+
+	if (as.type === HmiExpr.T.IDENT && as.value.toUpperCase() === 'AS')
+	{
+		this.next();
+		var tt = this.peek();
+		type = (tt.type === HmiExpr.T.IDENT) ? HmiExpr.LOCAL_TYPES[tt.value.toLowerCase()] : null;
+
+		if (type == null)
+		{
+			this.error('expected Analog, Discrete or Message after AS, found ' + this.describe(tt));
+		}
+		else
+		{
+			this.next();
+		}
+	}
+	else if (names.length > 0)
+	{
+		this.error('expected AS after the variable names');
+	}
+
+	var declared = [];
+
+	for (var i = 0; i < names.length; i++)
+	{
+		var name = names[i].value;
+		var key = name.toLowerCase();
+		var problem = null;
+
+		if (key === 'dim' || key === 'as')
+		{
+			problem = name + ' is a keyword';
+		}
+		else if (name.charAt(0) === '$')
+		{
+			problem = 'variable names cannot start with $';
+		}
+		else if (HmiExpr.LOCAL_TYPES[key] != null)
+		{
+			problem = name + ' is a type name';
+		}
+		else if (this.locals[key] != null)
+		{
+			problem = 'variable "' + name + '" is already declared';
+		}
+		else if (HmiTypes.systemTag(name) != null)
+		{
+			problem = 'variable "' + name + '" has the name of a system tag';
+		}
+		else if (this.project != null && this.project.getTag(name) != null)
+		{
+			problem = 'variable "' + name + '" has the name of the tag "' + this.project.getTag(name).name + '"';
+		}
+
+		if (problem != null)
+		{
+			this.error(problem, names[i]);
+		}
+		else if (type != null)
+		{
+			this.locals[key] = {name: name, vtype: type};
+			declared.push({name: name, key: key});
+		}
+	}
+
+	return {type: 'dim', vtype: type, names: declared};
 };
 
 /**
@@ -598,6 +759,7 @@ HmiExpr.Parser.prototype.asyncError = function(node, token)
 HmiExpr.Parser.prototype.parseIf = function()
 {
 	this.next();
+	this.depth++;
 
 	var condStart = this.i;
 	var condition = this.parseOr();
@@ -624,6 +786,8 @@ HmiExpr.Parser.prototype.parseIf = function()
 	{
 		this.error('expected ENDIF');
 	}
+
+	this.depth--;
 
 	return {type: 'if', condition: condition, then: then, otherwise: otherwise};
 };
@@ -881,6 +1045,19 @@ HmiExpr.Parser.prototype.parseReference = function()
 				this.error('unknown field .' + field, f);
 			}
 		}
+	}
+
+	// A declared local variable (DIM): no fields, not a tag, not subscribed
+	var local = this.locals[name.toLowerCase()];
+
+	if (local != null)
+	{
+		if (field != null)
+		{
+			this.error('the local variable "' + local.name + '" has no fields', t);
+		}
+
+		return {type: 'local', name: local.name, key: name.toLowerCase(), vtype: local.vtype};
 	}
 
 	// System tags are supplied by the runtime, not the dictionary.
@@ -1282,13 +1459,45 @@ HmiExpr.Evaluator.prototype.eval_call = function(node)
 HmiExpr.Evaluator.prototype.eval_assign = function(node)
 {
 	var v = this.run(node.value);
-
-	if (this.ctx.write != null)
-	{
-		this.ctx.write(node.target.name, v.value, node.target.field);
-	}
+	this.assign(node.target, v);
 
 	return v;
+};
+
+/** Stores a value in a local variable, or writes it to a tag. */
+HmiExpr.Evaluator.prototype.assign = function(target, v)
+{
+	if (target.type === 'local')
+	{
+		this.locals[target.key] = {value: HmiExpr.coerceLocal(target.vtype, v.value),
+			quality: v.quality, timestamp: v.timestamp};
+	}
+	else if (this.ctx.write != null)
+	{
+		this.ctx.write(target.name, v.value, target.field);
+	}
+};
+
+/** DIM starts each variable at 0 or "", good quality. */
+HmiExpr.Evaluator.prototype.eval_dim = function(node)
+{
+	this.locals = this.locals || {};
+
+	for (var i = 0; i < node.names.length; i++)
+	{
+		this.locals[node.names[i].key] = {value: HmiExpr.localDefault(node.vtype),
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+	}
+
+	return {value: null, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+};
+
+HmiExpr.Evaluator.prototype.eval_local = function(node)
+{
+	var v = (this.locals != null) ? this.locals[node.key] : null;
+
+	return (v != null) ? {value: v.value, quality: v.quality, timestamp: v.timestamp} :
+		{value: HmiExpr.localDefault(node.vtype), quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
 };
 
 /**
@@ -1335,6 +1544,8 @@ HmiExpr.Evaluator.prototype.eval_expr = function(node)
 HmiExpr.Evaluator.prototype.eval_script = function(node)
 {
 	this.frames = [{body: node.body, i: 0}];
+	// Local variables last as long as this run of the script, through any pause
+	this.locals = {};
 
 	return this.resume({value: null, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
 };
@@ -1414,9 +1625,9 @@ HmiExpr.Evaluator.prototype.suspend = function(statement, call)
 
 		try
 		{
-			if (statement.type === 'assign' && ctx.write != null)
+			if (statement.type === 'assign')
 			{
-				ctx.write(statement.target.name, value, statement.target.field);
+				that.assign(statement.target, {value: value, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
 			}
 
 			that.resume({value: value, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});

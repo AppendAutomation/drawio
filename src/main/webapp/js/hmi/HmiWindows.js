@@ -387,12 +387,18 @@ HmiWindowManager.prototype.start = function()
 	this.security.start();
 	this.recipes.start();
 
+	// On start runs before the first window opens, so it can set up what the
+	// windows show
+	this.startAppScripts();
+
 	var pages = this.startupPages();
 
 	for (var i = 0; i < pages.length; i++)
 	{
 		this.showPage(pages[i]);
 	}
+
+	this.startWhileRunning();
 
 	var that = this;
 	this.resizeListener = function() { that.layout(); };
@@ -412,6 +418,10 @@ HmiWindowManager.prototype.stop = function()
 	{
 		this.close(this.windows[this.windows.length - 1]);
 	}
+
+	// On shutdown runs after the windows' On hide, while tags can still be
+	// written and before retentive values are saved for the last time
+	this.stopAppScripts();
 
 	this.security.stop();
 	this.recipes.stop();
@@ -440,6 +450,85 @@ HmiWindowManager.prototype.stop = function()
 	this.blocker = null;
 
 	this.ui.editor.graph.setEnabled(this.editorWasEnabled);
+};
+
+// ---------------------------------------------------- application scripts
+
+/** Whether the project has any application script. */
+HmiWindowManager.prototype.hasAppScripts = function()
+{
+	var sc = this.project.settings.scripts;
+
+	return sc != null && !!(sc.onStart || sc.whileRunning || sc.onShutdown);
+};
+
+/**
+ * Application scripts run in a runtime of their own, with no window, for the
+ * whole Run: it reads and writes the same tags as the windows through the hub.
+ */
+HmiWindowManager.prototype.startAppScripts = function()
+{
+	if (!this.hasAppScripts())
+	{
+		return;
+	}
+
+	var sc = this.project.settings.scripts;
+
+	this.app = new HmiRuntime({graph: null, project: this.project, driver: this.hub.client(),
+		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect,
+		scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
+	this.app.startScripts();
+
+	var app = this.app;
+
+	HmiLog.guard('app.onStart', function()
+	{
+		app.runScript(sc.onStart);
+	});
+};
+
+HmiWindowManager.prototype.startWhileRunning = function()
+{
+	var sc = this.project.settings.scripts;
+	var app = this.app;
+
+	if (app == null || !sc.whileRunning || !this.running)
+	{
+		return;
+	}
+
+	var rate = Math.max(50, app.number(sc.everyMs, 1000));
+
+	this.appTimer = window.setInterval(function()
+	{
+		HmiLog.guard('app.whileRunning', function()
+		{
+			app.runScript(sc.whileRunning);
+		});
+	}, rate);
+};
+
+HmiWindowManager.prototype.stopAppScripts = function()
+{
+	if (this.appTimer != null)
+	{
+		window.clearInterval(this.appTimer);
+		this.appTimer = null;
+	}
+
+	var app = this.app;
+	this.app = null;
+
+	if (app != null)
+	{
+		HmiLog.guard('app.onShutdown', function()
+		{
+			app.runScript(app.project.settings.scripts.onShutdown);
+		});
+
+		app.stopScripts();
+	}
 };
 
 // ------------------------------------------------------------------ pages

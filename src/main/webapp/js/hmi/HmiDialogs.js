@@ -1608,6 +1608,34 @@ HmiDialogs.showAppSettings = function(ui)
 		function() {});
 	logoutInput.setAttribute('data-hmi-field', 'autoLogoutMin');
 
+	// Application scripts run for the whole application, whichever windows show
+	var scripts = JSON.parse(JSON.stringify(project.settings.scripts));
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Scripts'));
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'On start runs once when the application starts, before its first ' +
+		'window opens. While running repeats at the interval below for as ' +
+		'long as the application runs. On shutdown runs once as it stops, ' +
+		'after its windows close.'));
+
+	var appScript = function(key, label)
+	{
+		HmiDialogs.scriptArea(body, label, scripts[key], project, function(v)
+		{
+			scripts[key] = v;
+		}, 6).setAttribute('data-hmi-prop', key);
+	};
+
+	appScript('onStart', 'On start');
+	appScript('whileRunning', 'While running');
+
+	var every = HmiDialogs.field(body, 'Every (ms)', scripts.everyMs, function() {});
+	every.setAttribute('data-hmi-prop', 'everyMs');
+	every.setAttribute('placeholder', HmiProject.DEFAULT_APP_EVERY_MS);
+	mxEvent.addListener(every, 'input', function() { scripts.everyMs = every.value; });
+
+	appScript('onShutdown', 'On shutdown');
+
 	var error = HmiDialogs.el('div', 'hmiError');
 	body.appendChild(error);
 	div.appendChild(body);
@@ -1652,13 +1680,20 @@ HmiDialogs.showAppSettings = function(ui)
 			}
 		}
 
+		if (('' + scripts.everyMs).trim() === '')
+		{
+			scripts.everyMs = HmiProject.DEFAULT_APP_EVERY_MS;
+		}
+
 		var s = project.settings;
-		var changed = s.width !== w || s.height !== h ||
+		var changed = JSON.stringify(s.scripts) !== JSON.stringify(scripts) ||
+			s.width !== w || s.height !== h ||
 			s.startup.join('\n') !== ids.join('\n') ||
 			rt.windowMode !== windowMode || rt.exit !== exitMode ||
 			(sec.autoLogoutMin || 0) !== logout;
 
 		sec.autoLogoutMin = logout;
+		s.scripts = scripts;
 
 		// Windows left at full-screen size follow the new resolution, since
 		// an unset size means "the screen".
@@ -1700,7 +1735,7 @@ HmiDialogs.showAppSettings = function(ui)
 	};
 
 	HmiDialogs.okCancel(ui, div, apply);
-	ui.showDialog(div, 460, 600, true, true);
+	ui.showDialog(div, 480, Math.max(600, Math.min(700, window.innerHeight - 60)), true, true);
 };
 
 /** "Popup, title bar, 400 \u00D7 300 at 10, 20" */
@@ -2055,14 +2090,14 @@ HmiDialogs.radioCounter = 0;
  * A labelled QuickScript field, checked as it is typed. Reports every change,
  * not only on blur, so OK never loses the last keystrokes.
  */
-HmiDialogs.scriptArea = function(parent, label, value, project, onChange)
+HmiDialogs.scriptArea = function(parent, label, value, project, onChange, rows)
 {
 	var row = HmiDialogs.el('div', 'hmiFormRow hmiFormRowTop');
 	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
 
 	var area = document.createElement('textarea');
 	area.className = 'hmiInput hmiScript';
-	area.setAttribute('rows', '3');
+	area.setAttribute('rows', '' + (rows || 3));
 	area.setAttribute('placeholder', 'QuickScript statements');
 	area.value = (value != null) ? value : '';
 

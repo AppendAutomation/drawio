@@ -45,6 +45,25 @@ HmiRuntimeApp.start = function(ui)
 		HmiRuntimeApp.promptExit(ui);
 	});
 
+	// The window is closing: the Run stops first (RuntimeShutdown.js in main)
+	window.electron.registerMsgListener('hmiRuntimeShutdown', function()
+	{
+		HmiRuntimeApp.shutdown(ui, function()
+		{
+			HmiRuntimeApp.request('hmiRuntime.stopped')['catch'](function() {});
+		});
+	});
+
+	// A browser (Append HMI Web) closes its tab without asking: the Run stops
+	// as the page goes, as far as it can in that moment
+	if (window.electron.hmiWeb)
+	{
+		window.addEventListener('pagehide', function()
+		{
+			HmiRuntimeApp.shutdown(ui, function() {});
+		});
+	}
+
 	HmiRuntimeApp.request('hmiRuntime.info').then(function(info)
 	{
 		HmiRuntimeApp.info = info;
@@ -62,6 +81,53 @@ HmiRuntimeApp.start = function(ui)
 	{
 		HmiRuntimeApp.fail(e.message);
 	});
+};
+
+/** How long a closing runtime waits for its last retentive save. */
+HmiRuntimeApp.SHUTDOWN_WAIT_MS = 3000;
+
+/** And then for writes already on their way to a device. */
+HmiRuntimeApp.SHUTDOWN_SETTLE_MS = 200;
+
+/**
+ * Stops the Run as the application closes: the windows' On hide scripts, the
+ * On shutdown script and the last retentive save, then done().
+ */
+HmiRuntimeApp.shutdown = function(ui, done)
+{
+	if (HmiRuntimeApp.stopped)
+	{
+		done();
+
+		return;
+	}
+
+	HmiRuntimeApp.stopped = true;
+
+	HmiLog.guard('runtime.shutdown', function()
+	{
+		if (ui.hmiRuntime != null)
+		{
+			ui.hmiRuntime.stop();
+			ui.hmiRuntime = null;
+		}
+	});
+
+	var since = Date.now();
+
+	var wait = function()
+	{
+		if (HmiRetentive.pending > 0 && Date.now() - since < HmiRuntimeApp.SHUTDOWN_WAIT_MS)
+		{
+			window.setTimeout(wait, 50);
+		}
+		else
+		{
+			window.setTimeout(done, HmiRuntimeApp.SHUTDOWN_SETTLE_MS);
+		}
+	};
+
+	wait();
 };
 
 HmiRuntimeApp.load = function(ui, project)

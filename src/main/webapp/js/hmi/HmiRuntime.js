@@ -104,6 +104,49 @@ HmiRuntime.prototype.start = function()
 };
 
 /**
+ * A runtime with no window, for the application scripts: it keeps the values
+ * its scripts read and writes through the driver, with nothing to draw.
+ */
+HmiRuntime.prototype.startScripts = function()
+{
+	if (this.running)
+	{
+		return;
+	}
+
+	this.running = true;
+	this.bindScripts();
+
+	var that = this;
+
+	this.onChange = function(batch)
+	{
+		for (var name in batch)
+		{
+			that.values[name.toLowerCase()] = batch[name];
+		}
+	};
+
+	this.driver.on('change', this.onChange);
+	this.driver.subscribe(this.subscriptionPaths(), this.scanRateMs());
+};
+
+HmiRuntime.prototype.stopScripts = function()
+{
+	if (!this.running)
+	{
+		return;
+	}
+
+	this.running = false;
+	this.driver.off('change', this.onChange);
+	this.onChange = null;
+	this.driver.unsubscribe();
+	this.driver.disconnect();
+	this.values = {};
+};
+
+/**
  * Live views over the Alarm List, Alarm History and Recipe List objects.
  * Recipe lists also follow tag values (applyBatch).
  */

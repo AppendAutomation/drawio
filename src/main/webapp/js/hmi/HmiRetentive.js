@@ -11,6 +11,9 @@ HmiRetentive = function() {};
 /** Wait this long after a change before saving, so a burst is one write. */
 HmiRetentive.SAVE_DELAY_MS = 1000;
 
+/** Saves sent and not yet answered: a closing runtime waits for them. */
+HmiRetentive.pending = 0;
+
 HmiRetentive.isRetentive = function(tag)
 {
 	return tag != null && tag.retentive === true && !HmiTypes.isIO(tag.type) && !HmiTypes.isIndirect(tag.type);
@@ -187,9 +190,12 @@ HmiRetentiveKeeper.prototype.flush = function()
 	}
 	else if (this.options.store && HmiRetentive.available())
 	{
+		HmiRetentive.pending++;
+
 		HmiRetentive.request('hmiRetentive.save', {store: this.options.store, values: values},
-			function() {}, function(message)
+			function() { HmiRetentive.pending--; }, function(message)
 		{
+			HmiRetentive.pending--;
 			HmiLog.once('retentive.save', 'retentive values not saved: ' + message);
 		});
 	}

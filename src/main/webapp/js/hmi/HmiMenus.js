@@ -901,6 +901,20 @@ HmiMenus.collectProblems = function(ui, fn)
 		return;
 	}
 
+	var appScripts = HmiMenus.checkAppScripts(project);
+	var sc = project.settings.scripts;
+
+	for (var i = 0; i < HmiProject.APP_SCRIPTS.length; i++)
+	{
+		appScripts = appScripts.concat(HmiMenus.scriptWindowProblems(ui, sc[HmiProject.APP_SCRIPTS[i]]));
+	}
+
+	for (var i = 0; i < appScripts.length; i++)
+	{
+		problems.push({page: mxResources.get('hmiAppSettings'), cell: null,
+			link: 'Application script', message: appScripts[i]});
+	}
+
 	for (var i = 0; i < project.recipeBooks.length; i++)
 	{
 		var bookProblems = HmiRecipes.bookProblems(project, project.recipeBooks[i]);
@@ -1102,6 +1116,37 @@ HmiMenus.checkWindowScripts = function(project, pageId)
 	for (var i = 0; i < every.length; i++)
 	{
 		errors.push(every[i].replace(/^Rate/, 'Every (ms)'));
+	}
+
+	return errors;
+};
+
+HmiMenus.APP_SCRIPT_LABELS = {onStart: 'On start', whileRunning: 'While running', onShutdown: 'On shutdown'};
+
+/** Compile errors in the application scripts, labelled by which script. */
+HmiMenus.checkAppScripts = function(project)
+{
+	var sc = project.settings.scripts;
+	var errors = [];
+
+	for (var key in HmiMenus.APP_SCRIPT_LABELS)
+	{
+		if (sc[key])
+		{
+			var compiled = HmiExpr.compile(sc[key], {project: project, mode: 'script'});
+
+			for (var i = 0; i < compiled.errors.length; i++)
+			{
+				errors.push(HmiMenus.APP_SCRIPT_LABELS[key] + ': ' + compiled.errors[i].message);
+			}
+		}
+	}
+
+	var every = HmiMenus.checkLink(project, {rateMs: sc.everyMs});
+
+	for (var i = 0; i < every.length; i++)
+	{
+		errors.push(every[i].replace(/^Rate/, 'While running every (ms)'));
 	}
 
 	return errors;

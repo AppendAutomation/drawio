@@ -55,6 +55,7 @@ HmiProject.prototype.isEmpty = function()
 		JSON.stringify(this.settings.runtime) === JSON.stringify(d.runtime) &&
 		JSON.stringify(this.settings.publish) === JSON.stringify(d.publish) &&
 		JSON.stringify(this.settings.security) === JSON.stringify(d.security) &&
+		JSON.stringify(this.settings.scripts) === JSON.stringify(d.scripts) &&
 		this.users.length === 0 && this.recipeBooks.length === 0 &&
 		Object.keys(this.windows).length === 0;
 };
@@ -70,7 +71,22 @@ HmiProject.RESOLUTIONS = [
 HmiProject.defaultSettings = function()
 {
 	return {width: 1024, height: 768, startup: [],
-		runtime: HmiProject.defaultRuntime(), publish: {}, security: {autoLogoutMin: 0}};
+		runtime: HmiProject.defaultRuntime(), publish: {}, security: {autoLogoutMin: 0},
+		scripts: HmiProject.defaultAppScripts()};
+};
+
+/**
+ * Application scripts: On start runs once when the application starts, before
+ * its first window opens; While running every everyMs while it runs; On
+ * shutdown once as it stops, after its windows have closed.
+ */
+HmiProject.APP_SCRIPTS = ['onStart', 'whileRunning', 'onShutdown'];
+
+HmiProject.DEFAULT_APP_EVERY_MS = '1000';
+
+HmiProject.defaultAppScripts = function()
+{
+	return {onStart: '', whileRunning: '', onShutdown: '', everyMs: HmiProject.DEFAULT_APP_EVERY_MS};
 };
 
 /**
@@ -131,6 +147,15 @@ HmiProject.TITLE_BAR_HEIGHT = 24;
 HmiProject.WINDOW_SCRIPTS = ['onShow', 'whileShowing', 'onHide'];
 
 HmiProject.DEFAULT_WINDOW_EVERY_MS = '1000';
+
+/**
+ * A script element's text. A file saved pretty-printed puts the text on a
+ * line of its own, indented, which is not part of the script.
+ */
+HmiProject.scriptText = function(node)
+{
+	return mxUtils.getTextContent(node).replace(/^\r?\n[ \t]*/, '').replace(/\r?\n[ \t]*$/, '');
+};
 
 /**
  * The display properties of a window, with defaults filled in. Never null.
@@ -622,6 +647,32 @@ HmiProject.prototype.toXml = function(doc)
 		settings.appendChild(node);
 	}
 
+	var scripts = this.settings.scripts;
+
+	if (JSON.stringify(scripts) !== JSON.stringify(HmiProject.defaultAppScripts()))
+	{
+		var node = doc.createElement('appScripts');
+
+		if (scripts.everyMs !== HmiProject.DEFAULT_APP_EVERY_MS)
+		{
+			node.setAttribute('everyMs', '' + scripts.everyMs);
+		}
+
+		for (var i = 0; i < HmiProject.APP_SCRIPTS.length; i++)
+		{
+			var key = HmiProject.APP_SCRIPTS[i];
+
+			if (scripts[key] !== '')
+			{
+				var script = doc.createElement(key);
+				script.appendChild(doc.createTextNode(scripts[key]));
+				node.appendChild(script);
+			}
+		}
+
+		settings.appendChild(node);
+	}
+
 	root.appendChild(settings);
 
 	if (this.settings.security.autoLogoutMin > 0)
@@ -943,6 +994,29 @@ HmiProject.fromXml = function(node)
 				}
 			}
 		}
+
+		var appScripts = settings[0].getElementsByTagName('appScripts');
+
+		if (appScripts.length > 0)
+		{
+			var scripts = project.settings.scripts;
+			var every = appScripts[0].getAttribute('everyMs');
+
+			if (every)
+			{
+				scripts.everyMs = every;
+			}
+
+			for (var i = 0; i < HmiProject.APP_SCRIPTS.length; i++)
+			{
+				var list = appScripts[0].getElementsByTagName(HmiProject.APP_SCRIPTS[i]);
+
+				if (list.length > 0)
+				{
+					scripts[HmiProject.APP_SCRIPTS[i]] = HmiProject.scriptText(list[0]);
+				}
+			}
+		}
 	}
 
 	var security = node.getElementsByTagName('security');
@@ -1023,9 +1097,9 @@ HmiProject.fromXml = function(node)
 			var key = HmiProject.WINDOW_SCRIPTS[j];
 			var list = n.getElementsByTagName(key);
 
-			if (list.length > 0 && mxUtils.getTextContent(list[0]) !== '')
+			if (list.length > 0 && HmiProject.scriptText(list[0]) !== '')
 			{
-				w[key] = mxUtils.getTextContent(list[0]);
+				w[key] = HmiProject.scriptText(list[0]);
 			}
 		}
 
