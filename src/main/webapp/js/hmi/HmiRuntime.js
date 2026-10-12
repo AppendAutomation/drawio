@@ -41,6 +41,9 @@ HmiRuntime = function(config)
 	// The Run's HmiRecipeManager (RecipeSave() ..., Recipe List objects)
 	this.recipes = config.recipes || null;
 
+	// The Run's HmiTrendManager (TrendSetPen() ..., Trend objects)
+	this.trends = config.trends || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -147,7 +150,7 @@ HmiRuntime.prototype.stopScripts = function()
 };
 
 /**
- * Live views over the Alarm List, Alarm History and Recipe List objects.
+ * Live views over the Alarm List, Alarm History, Recipe List and Trend objects.
  * Recipe lists also follow tag values (applyBatch).
  */
 HmiRuntime.prototype.startAlarmViews = function()
@@ -169,6 +172,10 @@ HmiRuntime.prototype.startAlarmViews = function()
 		else if (HmiRecipes.isListCell(graph, cell))
 		{
 			view = new HmiRecipeListView(this, cell, HmiProject.getCellLinks(graph, cell).recipeList);
+		}
+		else if (HmiTrend.isTrendCell(graph, cell))
+		{
+			view = new HmiTrendView(this, cell, HmiProject.getCellLinks(graph, cell).trend);
 		}
 
 		if (view != null)
@@ -552,7 +559,8 @@ HmiRuntime.prototype.context = function()
 				}
 
 				var owner = HmiRecipes.isFunction(name) ? that.recipes :
-					((name === HmiIndirect.FUNCTION) ? that.indirect : that.security);
+					((name === HmiIndirect.FUNCTION) ? that.indirect :
+					(HmiTrend.isFunction(name) ? that.trends : that.security));
 
 				return (owner != null) ? owner.call(name, args) : null;
 			},

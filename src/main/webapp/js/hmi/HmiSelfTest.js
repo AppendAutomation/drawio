@@ -49,6 +49,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testRecipes(ui);
+		HmiSelfTest.testTrends(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testArcs(ui);
 		HmiSelfTest.testFlip(ui);
@@ -3722,6 +3723,178 @@ HmiSelfTest.testRecipes = function(ui)
 };
 
 /** Indirect tags and LinkIndirectTag. */
+HmiSelfTest.testTrends = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var graph = ui.editor.graph;
+	var p = HmiSelfTest.sampleProject();
+	var add = function(name, type) { return p.addTag(HmiProject.createTag(name, type)); };
+	var level = add('TrLevel', 'MemoryReal');
+	level.minEU = 0;
+	level.maxEU = 200;
+	level.engUnits = 'gal';
+	add('TrRun', 'MemoryDiscrete');
+	add('TrName', 'MemoryMessage');
+	add('TrPen', 'MemoryMessage');
+
+	// Settings
+	check('trend.shapeRegistered', mxCellRenderer.defaultShapes[HmiTrend.SHAPE] != null);
+	check('trend.linkHidden', HmiTypes.LINKS['trend'] != null && mxUtils.indexOf(HmiTypes.availableLinks(), 'trend') < 0);
+	var n = HmiTrend.normalize({name: ' T1 ', spanSec: '5', sampleMs: 10, pens: [{tag: 'TrLevel'}, {tag: ''}, {tag: 'TrRun'}]});
+	check('trend.normalize', n.name === 'T1' && n.spanSec === HmiTrend.MIN_SPAN_SEC && n.sampleMs === HmiTrend.MIN_SAMPLE_MS &&
+		n.pens.length === 2 && n.pens[1].color === HmiTrend.COLORS[2], JSON.stringify(n));
+	var r1 = HmiTrend.penRange(p, {tag: 'TrLevel', min: '', max: ''});
+	var r2 = HmiTrend.penRange(p, {tag: 'TrRun', min: '', max: ''});
+	var r3 = HmiTrend.penRange(p, {tag: 'TrRun', min: '-3', max: '2'});
+	var r4 = HmiTrend.penRange(p, {tag: 'TrLevel', min: '50', max: '10'});
+	check('trend.penRange', r1.min === 0 && r1.max === 200 && r2.min === HmiTrend.DISCRETE_RANGE.min && r2.discrete &&
+		r3.min === -3 && r3.max === 2 && r4.min === 0 && r4.max === 200, JSON.stringify([r1, r2, r3, r4]));
+	var probs = function(cfg) { return HmiTrend.problems(p, cfg).join('|'); };
+	check('trend.problemsOk', probs({name: 'T1', pens: [{tag: 'TrLevel'}, {tag: 'TrRun', min: '0', max: '5'}]}) === '');
+	check('trend.problems', probs({name: '', pens: []}).indexOf('no name') >= 0 && probs({name: 'a', pens: []}).indexOf('no pens') >= 0 &&
+		probs({name: 'a', pens: [{tag: 'Nope'}]}).indexOf('Unknown tag "Nope"') >= 0 &&
+		probs({name: 'a', pens: [{tag: 'TrName'}]}).indexOf('analog or discrete') >= 0 &&
+		probs({name: 'a', pens: [{tag: 'TrLevel', min: '5', max: '1'}]}).indexOf('greater than Min') >= 0 &&
+		probs({name: 'a', pens: [{tag: 'TrLevel'}, {tag: 'trlevel'}]}).indexOf('already a pen') >= 0 &&
+		probs({name: 'a', spanSec: 999999, pens: [{tag: 'TrLevel'}]}).indexOf('Time span') >= 0,
+		probs({name: 'a', pens: [{tag: 'TrName'}]}));
+	check('trend.uniqueName', HmiTrend.uniqueName('', []) === 'Trend1' && HmiTrend.uniqueName('', ['trend1']) === 'Trend2' &&
+		HmiTrend.uniqueName('Trend1', ['Trend1', 'Trend2']) === 'Trend3' && HmiTrend.uniqueName('Level', ['Level']) === 'Level2' &&
+		HmiTrend.uniqueName('Mine', ['Trend1']) === 'Mine');
+
+	// Script functions: names are text
+	var errs = function(src) { return HmiExpr.compile(src, {project: p, mode: 'script'}).errors.map(function(e) { return e.message; }); };
+	check('trend.compile', errs('TrendSetPen("T1", "TrRun"); TrendSetPen(TrName, TrPen); TrendPause("T1"); TrendPlay(TrName); ' +
+		'TrendScrollBack("T1"); TrendScrollForward("T1");').length === 0, errs('TrendSetPen(TrName, TrPen);').join('|'));
+	check('trend.compileBareTag', (errs('TrendSetPen("T1", TrLevel);')[0] || '').indexOf('write "TrLevel" in quotes') >= 0 &&
+		errs('TrendPause(TrRun);').length === 1 && errs('TrendPause("");').length === 1 && errs('TrendPause();').length === 1,
+		errs('TrendSetPen("T1", TrLevel);').join('|'));
+	check('trend.scriptOnly', HmiExpr.compile('TrendPause("T1")', {project: p}).errors.length === 1);
+
+	// Sampling: values on change, the unchanged one before a change, a heartbeat
+	var clock = 1000000;
+	var sim = new HmiSimulator(p);
+	sim.connect();
+	sim.write({TrLevel: 10, TrRun: 0});
+	var reported = [];
+	var tm = new HmiTrendManager(p, sim, {manual: true, now: function() { return clock; },
+		report: function(call, message) { reported.push(call + ': ' + message); },
+		trends: [{name: 'T1', spanSec: 60, pens: [{tag: 'TrLevel', color: '#ff0000'}, {tag: 'TrRun'}]},
+			{name: 'Fast', spanSec: 30, sampleMs: 500, pens: [{tag: 'TrRun'}]}, {name: 'T1', pens: [{tag: 'TrRun'}]}]});
+	tm.start();
+	check('trend.firstNameWins', tm.trend('t1').pens.length === 2 && tm.series.trrun.period === 500 && tm.tick === 500);
+	tm.sample(clock);
+	clock += 1000;
+	tm.sample(clock);
+	clock += 1000;
+	tm.sample(clock);
+	clock += 1000;
+	sim.write({TrLevel: 20});
+	tm.sample(clock);
+	var lv = tm.series.trlevel;
+	check('trend.recordsOnChange', JSON.stringify(lv.t) === JSON.stringify([1000000, 1002000, 1003000]) &&
+		JSON.stringify(lv.v) === '[10,10,20]', JSON.stringify([lv.t, lv.v]));
+	clock += HmiTrend.HEARTBEAT_MS;
+	tm.sample(clock);
+	check('trend.heartbeat', lv.t.length === 4 && lv.v[3] === 20);
+	sim.write({TrRun: 1});
+	clock += 500;
+	tm.sample(clock);
+	var rv = tm.series.trrun;
+	check('trend.discrete', rv.v[rv.v.length - 1] === 1 && rv.v[rv.v.length - 2] === 0, JSON.stringify(rv.v));
+	var pts = tm.points('T1', 'TrLevel', 1001500, 1002500);
+	check('trend.pointsEdges', JSON.stringify(pts.t) === '[1000000,1002000,1003000]', JSON.stringify(pts.t));
+
+	// The functions
+	var state = tm.state('T1');
+	check('trend.setPen', tm.call('TrendSetPen', ['t1', 'trrun']) === 1 && state.pen === 1);
+	check('trend.setPenBad', tm.call('TrendSetPen', ['T1', 'TrName']) === 0 &&
+		reported[0] === 'TrendSetPen("T1", "TrName"): The trend "T1" has no pen for "TrName".', reported[0]);
+	check('trend.unknownTrend', tm.call('TrendPause', ['Nope']) === 0 && tm.call('TrendPlay', ['']) === 0 &&
+		reported[1].indexOf('There is no trend named "Nope".') > 0 && reported[2].indexOf('The trend name is empty.') > 0);
+	check('trend.forwardLive', tm.call('TrendScrollForward', ['T1']) === 1 && !state.paused);
+	check('trend.pause', tm.call('TrendPause', ['T1']) === 1 && state.paused && state.end === clock);
+	clock += 10000;
+	check('trend.scrollBack', tm.call('TrendScrollBack', ['T1']) === 1 && state.end === clock - 10000 - 30000);
+	check('trend.scrollForward', tm.call('TrendScrollForward', ['T1']) === 1 && state.end === clock - 10000);
+	tm.call('TrendScrollForward', ['T1']);
+	check('trend.forwardStopsAtNow', state.end === clock && state.paused);
+	tm.call('TrendPlay', ['T1']);
+	tm.call('TrendScrollBack', ['T1']);
+	check('trend.scrollBackFromLive', state.paused && state.end === clock - 30000);
+	tm.call('TrendPlay', ['T1']);
+	check('trend.play', !state.paused);
+
+	// The Run view: a canvas over the cell, the selected pen a pixel thicker
+	HmiSelfTest.resetGraph(ui);
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 400, 220, HmiTrend.STYLE);
+	var autoName = (HmiProject.getCellLinks(graph, cell).trend || {}).name;
+	check('trend.autoNamed', autoName === 'Trend1', autoName);
+	var copy = graph.importCells([cell], 20, 20, graph.getDefaultParent())[0];
+	check('trend.copyRenamed', (HmiProject.getCellLinks(graph, copy).trend || {}).name === 'Trend2');
+	graph.removeCells([copy]);
+	HmiProject.setCellLinks(graph, cell, {trend: {name: 'T1', title: 'Level', spanSec: 60, sampleMs: 1000, refreshMs: 1000,
+		gridColor: '#dde3e8', pens: [{tag: 'TrLevel', min: '', max: '', color: '#ff0000'}, {tag: 'TrRun', min: '', max: '', color: '#0000ff'}]}});
+	state.pen = 0;
+	var sim2 = new HmiSimulator(p);
+	var rt = new HmiRuntime({graph: graph, project: p, driver: sim2, trends: tm});
+	rt.start();
+	var canvas = document.querySelector('canvas[data-hmi-trend="T1"]');
+	check('trend.viewShown', canvas != null);
+
+	var countColor = function(r, g, b)
+	{
+		var data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+		var count = 0;
+
+		for (var i = 0; i < data.length; i += 4)
+		{
+			if (Math.abs(data[i] - r) < 60 && Math.abs(data[i + 1] - g) < 60 && Math.abs(data[i + 2] - b) < 60 && data[i + 3] > 200)
+			{
+				count++;
+			}
+		}
+
+		return count;
+	};
+
+	if (canvas != null)
+	{
+		var thick = countColor(255, 0, 0);
+		tm.call('TrendSetPen', ['T1', 'TrRun']);
+		var thin = countColor(255, 0, 0);
+		check('trend.selectedThicker', thick > 0 && thin > 0 && thick > thin * 1.4, thick + ' vs ' + thin);
+		check('trend.otherPenDrawn', countColor(0, 0, 255) > 0);
+		graph.zoomIn();
+		var st = graph.view.getState(cell);
+		check('trend.followsZoom', Math.abs(parseFloat(canvas.style.width) - st.width) < 1.5);
+		graph.zoomActual();
+	}
+
+	// Validate: literal names checked against the pages, duplicates reported
+	check('trend.validateScript', HmiMenus.scriptWindowProblems(ui, 'TrendPause("Nope"); TrendSetPen("T1", "TrName"); TrendPlay("t1");')
+		.join('|') === 'TrendPause: no trend named "Nope"|TrendSetPen: the trend "T1" has no pen for "TrName"',
+		HmiMenus.scriptWindowProblems(ui, 'TrendPause("Nope"); TrendSetPen("T1", "TrName"); TrendPlay("t1");').join('|'));
+	var dup = graph.insertVertex(graph.getDefaultParent(), null, '', 500, 40, 200, 100, HmiTrend.STYLE);
+	HmiProject.setCellLinks(graph, dup, {trend: {name: 't1', pens: [{tag: 'TrLevel'}]}});
+	var found = null;
+	var available = HmiComms.available;
+	HmiComms.available = function() { return false; };
+	HmiMenus.collectProblems(ui, function(list) { found = list; });
+	HmiComms.available = available;
+	check('trend.validateDuplicate', found != null && found.some(function(x) { return x.cell === dup && x.message.indexOf('2 trends are named') === 0; }),
+		JSON.stringify((found || []).map(function(x) { return x.message; })));
+
+	rt.stop();
+	check('trend.viewRemoved', document.querySelector('canvas[data-hmi-trend]') == null);
+	tm.stop();
+	check('trend.gapAtStop', isNaN(lv.v[lv.v.length - 1]) && isNaN(rv.v[rv.v.length - 1]));
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
+};
+
 HmiSelfTest.testIndirect = function(ui)
 {
 	var check = HmiSelfTest.check;

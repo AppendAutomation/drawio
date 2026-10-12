@@ -691,7 +691,9 @@ HmiAlarms.installPalette = function()
 				this.createVertexTemplateEntry(base + 'shape=' + HmiAlarms.HISTORY_SHAPE + ';',
 					560, 240, '', 'Alarm History', null, null, 'alarm history events log hmi'),
 				this.createVertexTemplateEntry('html=1;fontSize=14;noLabel=1;shape=' + HmiRecipes.LIST_SHAPE + ';',
-					280, 300, '', 'Recipe List', null, null, 'recipe list book select hmi')
+					280, 300, '', 'Recipe List', null, null, 'recipe list book select hmi'),
+				this.createVertexTemplateEntry(HmiTrend.STYLE, 480, 260, '', 'Trend', null, null,
+					'trend chart plot pens history hmi')
 			]);
 		}));
 	};

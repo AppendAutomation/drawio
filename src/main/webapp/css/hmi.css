@@ -1574,3 +1574,43 @@
 	width: 110px;
 	margin: 0;
 }
+
+/* ------------------------------------------------------------------ trends */
+
+.hmiTrendView
+{
+	position: absolute;
+	z-index: 2;
+	pointer-events: none;
+}
+
+.hmiTrendPens
+{
+	margin-top: 6px;
+}
+
+.hmiTrendPen
+{
+	margin: 4px 0 8px 0;
+	padding-left: 4px;
+	border-left: 2px solid #cfd8dc;
+}
+
+.hmiTrendPen .hmiTrendTag
+{
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.hmiTrendPen .hmiTrendRange
+{
+	width: 56px;
+	flex: 0 1 auto;
+	min-width: 0;
+}
+
+.hmiTrendPenButton
+{
+	cursor: pointer;
+	font-size: 13px;
+}

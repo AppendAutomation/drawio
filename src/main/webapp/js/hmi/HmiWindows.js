@@ -361,6 +361,11 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.retentive = new HmiRetentiveKeeper(project, this.hub.client(), {
 		store: (options != null) ? options.retentiveStore : null,
 		values: (options != null) ? options.retained : null});
+
+	// Every trend in the project is sampled from the start, shown or not;
+	// its history is kept with the alarm history's store
+	this.trends = new HmiTrendManager(project, this.hub.client(), {ui: ui, store: store,
+		trends: HmiTrend.collect(ui).map(function(t) { return t.cfg; })});
 };
 
 HmiWindowManager.prototype.start = function()
@@ -386,6 +391,7 @@ HmiWindowManager.prototype.start = function()
 	this.retentive.start();
 	this.security.start();
 	this.recipes.start();
+	this.trends.start();
 
 	// On start runs before the first window opens, so it can set up what the
 	// windows show
@@ -424,6 +430,8 @@ HmiWindowManager.prototype.stop = function()
 	this.stopAppScripts();
 
 	this.security.stop();
+	this.trends.stop();
+	this.trends.driver.disconnect();
 	this.recipes.stop();
 	this.recipes.driver.disconnect();
 
@@ -476,7 +484,7 @@ HmiWindowManager.prototype.startAppScripts = function()
 	var sc = this.project.settings.scripts;
 
 	this.app = new HmiRuntime({graph: null, project: this.project, driver: this.hub.client(),
-		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect,
+		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect, trends: this.trends,
 		scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
 	this.app.startScripts();
 
@@ -1203,7 +1211,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
-		indirect: this.indirect, scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
+		indirect: this.indirect, trends: this.trends, scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

@@ -116,7 +116,15 @@ HmiExpr.FUNCTIONS = {
 
 	// ScreenToPDF() (HmiScreenPdf.js): like RecipeExport, returns 1 once the
 	// Save dialog is on its way; the script does not wait for it
-	'ScreenToPDF': {arity: 0, action: true}
+	'ScreenToPDF': {arity: 0, action: true},
+
+	// Trends (HmiTrend.js), by the trend's name; TrendSetPen also takes the
+	// pen's tag name. Names are text: literals or message tags
+	'TrendSetPen': {arity: 2, action: true},
+	'TrendPause': {arity: 1, action: true},
+	'TrendPlay': {arity: 1, action: true},
+	'TrendScrollBack': {arity: 1, action: true},
+	'TrendScrollForward': {arity: 1, action: true}
 };
 
 /** A function's accepted argument counts. */
@@ -1140,6 +1148,10 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		this.checkShowWindow(args, token);
 	}
+	else if (name.indexOf('Trend') === 0 && this.project != null)
+	{
+		this.checkTrendCall(name, args, token);
+	}
 
 	return {type: 'call', name: name, args: args};
 };
@@ -1175,6 +1187,40 @@ HmiExpr.Parser.prototype.checkShowWindow = function(args, token)
 			isNaN(parseFloat(args[i].value)))
 		{
 			this.error('ShowWindow: ' + what[i - 1] + ' must be a number of pixels, or "" for the window\'s own', token);
+		}
+	}
+};
+
+/**
+ * The trend functions take the trend's name, and TrendSetPen the pen's tag
+ * name, as text: a bare tag reference is a likely mistake unless it is a
+ * message tag holding the name. Literal trend names and pens are checked
+ * against the pages by Validate (HmiMenus).
+ */
+HmiExpr.Parser.prototype.checkTrendCall = function(name, args, token)
+{
+	var what = ['the trend name', 'the pen\'s tag name'];
+
+	for (var i = 0; i < args.length && i < 2; i++)
+	{
+		var a = args[i];
+
+		if (a.type === 'ref' && a.field == null)
+		{
+			var tag = this.project.getTag(a.name);
+
+			if (tag != null && !HmiTypes.isMessage(tag.type))
+			{
+				this.error(name + ' takes ' + what[i] + ' as text: write "' + tag.name + '" in quotes, or use a message tag', token);
+
+				return;
+			}
+		}
+		else if (a.type === 'literal' && (typeof a.value !== 'string' || a.value.trim() === ''))
+		{
+			this.error(name + ': ' + what[i] + ' is empty', token);
+
+			return;
 		}
 	}
 };

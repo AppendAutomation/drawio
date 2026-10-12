@@ -265,6 +265,14 @@ HmiTypes.defineLink = function(key, def)
 			return {book: '', title: '', selectedTag: '', upTag: '', downTag: '', arrows: false};
 		}});
 
+	// The Trend object's settings (HmiTrend.js): edited in its own section,
+	// never offered as a link
+	def('trend', {code: 9002, family: 'display', label: 'Trend', milestone: 99,
+		defaults: function()
+		{
+			return {name: '', title: '', spanSec: 600, sampleMs: 1000, refreshMs: 1000, gridColor: '#dde3e8', pens: []};
+		}});
+
 	// Superseded by Enable; still applied in existing projects, not offered
 	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 99,
 		defaults: function()

@@ -59,13 +59,25 @@ HmiFormatPanel.prototype.init = function()
 		this.addLinkSection('recipeList', HmiTypes.LINKS['recipeList']);
 	}
 
+	// A Trend's settings are its trend link, likewise
+	if (HmiTrend.isTrendCell(graph, this.cell))
+	{
+		if (this.links.trend == null)
+		{
+			this.links.trend = HmiTypes.LINKS['trend'].defaults();
+		}
+
+		ui.hmiUiState.expanded['trend'] = true;
+		this.addLinkSection('trend', HmiTypes.LINKS['trend']);
+	}
+
 	this.container.appendChild(this.addLauncher(this.createPanel()));
 
 	for (var key in this.links)
 	{
 		var def = HmiTypes.LINKS[key];
 
-		if (def != null && key !== 'recipeList')
+		if (def != null && key !== 'recipeList' && key !== 'trend')
 		{
 			this.addLinkSection(key, def);
 		}

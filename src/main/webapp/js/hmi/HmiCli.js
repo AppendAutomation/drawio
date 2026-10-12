@@ -215,6 +215,7 @@ HmiCli.TYPES = {
 	alarmList: 'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;',
 	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;',
 	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;',
+	trend: HmiTrend.STYLE,
 	arc: HmiArc.ELLIPSE_STYLE,
 	circleArc: HmiArc.CIRCLE_STYLE
 };
@@ -748,6 +749,13 @@ HmiCli.applyLinks = function(graph, cell, links, what, errors)
 			}
 
 			cfg[k] = links[key][k];
+		}
+
+		// A trend given no name keeps the one it got as it was added
+		if (key === 'trend' && links[key].name == null)
+		{
+			var had = HmiProject.getCellLinks(graph, cell).trend;
+			cfg.name = (had != null && had.name) ? had.name : cfg.name;
 		}
 
 		out[key] = cfg;

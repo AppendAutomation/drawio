@@ -163,6 +163,174 @@
 		this.addRow(content, '', this.createCheckField(cfg, 'arrows', 'Up and down arrow buttons'));
 	};
 
+	// The Trend object (HmiTrend.js)
+	B['trend'] = function(content, cfg)
+	{
+		var that = this;
+		var ui = this.editorUi;
+		var project = ui.hmiProject;
+
+		if (!Array.isArray(cfg.pens))
+		{
+			cfg.pens = [];
+		}
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'At Run, plots its pens over the time span, with the first pen\'s range on the y axis. Scripts use ' +
+			'the name: TrendSetPen, TrendPause, TrendPlay, TrendScrollBack and TrendScrollForward. ' +
+			'Background, border, line width and font are in the Style and Text tabs.'));
+
+		var name = this.createTextField(cfg, 'name', 'Trend1');
+		name.setAttribute('data-hmi-field', 'trendName');
+		var cell = this.cell;
+
+		var checkName = function()
+		{
+			var value = name.value.trim();
+			var clash = HmiTrend.collect(ui).some(function(t)
+			{
+				return t.cell !== cell && HmiTrend.normalize(t.cfg).name.toLowerCase() === value.toLowerCase();
+			});
+			var problem = (!HmiTrend.validName(value)) ? 'A trend needs a name of up to 64 characters' :
+				((clash) ? 'Another trend has this name' : null);
+
+			name.classList.toggle('hmiInvalid', problem != null);
+
+			if (problem != null)
+			{
+				name.setAttribute('title', problem);
+			}
+			else
+			{
+				name.removeAttribute('title');
+			}
+		};
+
+		mxEvent.addListener(name, 'input', checkName);
+		checkName();
+
+		this.addRow(content, 'Name', name);
+		this.addRow(content, 'Title', this.createTextField(cfg, 'title', 'none'));
+		this.addRow(content, 'Time span (seconds)', this.createTextField(cfg, 'spanSec', '600'));
+		this.addRow(content, 'Sample period (ms)', this.createTextField(cfg, 'sampleMs', '1000'));
+		this.addRow(content, 'Refresh period (ms)', this.createTextField(cfg, 'refreshMs', '1000'));
+		this.addRow(content, 'Grid color', this.createColorField(cfg, 'gridColor'));
+
+		var list = document.createElement('div');
+		list.className = 'hmiTrendPens';
+		list.appendChild(HmiDialogs.el('div', 'hmiRowLabel', 'Pens'));
+		list.appendChild(HmiDialogs.el('div', 'hmiHint', 'An empty Min or Max uses the tag\'s range. For a discrete ' +
+			'tag, the range places its line: -4 to 2 puts 0 and 1 in the top third.'));
+
+		var small = function(pen, field, placeholder)
+		{
+			var input = that.createTextField(pen, field, placeholder);
+			input.className = 'hmiInput hmiTrendRange';
+
+			return input;
+		};
+
+		var button = function(text, title, fn)
+		{
+			var b = document.createElement('span');
+			b.className = 'hmiChipRemove hmiTrendPenButton';
+			b.setAttribute('title', title);
+			mxUtils.write(b, text);
+			mxEvent.addListener(b, 'click', function(evt)
+			{
+				mxEvent.consume(evt);
+				fn();
+				that.commit();
+			});
+
+			return b;
+		};
+
+		var addPen = function(pen, index)
+		{
+			var box = document.createElement('div');
+			box.className = 'hmiTrendPen';
+			box.setAttribute('data-hmi-pen', String(index));
+
+			var row = document.createElement('div');
+			row.className = 'hmiBandRow';
+
+			if (pen.color == null)
+			{
+				pen.color = HmiTrend.COLORS[index % HmiTrend.COLORS.length];
+			}
+
+			row.appendChild(that.createColorField(pen, 'color'));
+			var tag = that.createTagField(pen, 'tag');
+			tag.classList.add('hmiTrendTag');
+			row.appendChild(tag);
+			row.appendChild(button('\u00d7', 'Remove the pen', function() { cfg.pens.splice(index, 1); }));
+			box.appendChild(row);
+
+			var range = document.createElement('div');
+			range.className = 'hmiBandRow';
+			range.appendChild(HmiDialogs.el('span', 'hmiBandOp', 'Min'));
+			range.appendChild(small(pen, 'min', 'tag'));
+			range.appendChild(HmiDialogs.el('span', 'hmiBandOp', 'Max'));
+			range.appendChild(small(pen, 'max', 'tag'));
+
+			if (index > 0)
+			{
+				range.appendChild(button('\u2191', 'Move up', function()
+				{
+					cfg.pens.splice(index - 1, 0, cfg.pens.splice(index, 1)[0]);
+				}));
+			}
+
+			if (index < cfg.pens.length - 1)
+			{
+				range.appendChild(button('\u2193', 'Move down', function()
+				{
+					cfg.pens.splice(index + 1, 0, cfg.pens.splice(index, 1)[0]);
+				}));
+			}
+
+			box.appendChild(range);
+
+			var problem = (pen.tag) ? HmiTrend.penProblem(project, pen.tag) : null;
+
+			if (problem != null)
+			{
+				tag.classList.add('hmiInvalid');
+				tag.setAttribute('title', problem);
+			}
+
+			list.appendChild(box);
+		};
+
+		for (var i = 0; i < cfg.pens.length; i++)
+		{
+			addPen(cfg.pens[i], i);
+		}
+
+		content.appendChild(list);
+
+		if (cfg.pens.length < HmiTrend.MAX_PENS)
+		{
+			var add = document.createElement('button');
+			add.className = 'hmiButton';
+			add.setAttribute('data-hmi-field', 'addPen');
+			mxUtils.write(add, '+ Pen');
+
+			mxEvent.addListener(add, 'click', function(evt)
+			{
+				mxEvent.consume(evt);
+				var used = cfg.pens.map(function(p) { return p.color; });
+				var color = HmiTrend.COLORS.filter(function(c) { return mxUtils.indexOf(used, c) < 0; })[0] ||
+					HmiTrend.COLORS[cfg.pens.length % HmiTrend.COLORS.length];
+				cfg.pens.push({tag: '', min: '', max: '', color: color});
+				that.commit();
+			});
+
+			content.appendChild(add);
+		}
+	};
+
 	// Enable, in the Visibility style: touch links work only while enabled
 	B['enable'] = function(content, cfg)
 	{

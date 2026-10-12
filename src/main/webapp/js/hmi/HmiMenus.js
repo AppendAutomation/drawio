@@ -823,6 +823,7 @@ HmiMenus.collectProblems = function(ui, fn)
 	var problems = [];
 
 	var model = graph.getModel();
+	var trendDuplicates = HmiTrend.duplicates(HmiTrend.collect(ui));
 
 	var walk = function(parent, pageName)
 	{
@@ -832,6 +833,11 @@ HmiMenus.collectProblems = function(ui, fn)
 		{
 			var cell = model.getChildAt(parent, i);
 			var links = HmiProject.getCellLinks(graph, cell);
+
+			if (links.trend == null && HmiTrend.isTrendCell(graph, cell))
+			{
+				problems.push({page: pageName, cell: cell, link: 'Trend', message: 'The trend has no name or pens'});
+			}
 
 			for (var key in links)
 			{
@@ -843,6 +849,20 @@ HmiMenus.collectProblems = function(ui, fn)
 				{
 					errors.push('No window (page) named "' +
 						links[key].window + '"');
+				}
+
+				if (key === 'trend')
+				{
+					var trendName = HmiTrend.normalize(links[key]).name;
+					errors = errors.concat(HmiTrend.problems(project, links[key]));
+
+					for (var d = 0; d < trendDuplicates.length; d++)
+					{
+						if (trendDuplicates[d].name.toLowerCase() === trendName.toLowerCase())
+						{
+							errors.push(trendDuplicates[d].count + ' trends are named "' + trendName + '"; trend names must be unique');
+						}
+					}
 				}
 
 				if (key === 'pushbutton.action')
@@ -1000,6 +1020,17 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 			out.push('ShowWindow: no window (page) named "' + n.args[0].value + '"');
 		}
 
+		if (n.type === 'call' && HmiTrend.isFunction(n.name) && n.args.length > 0 && n.args[0].type === 'literal' &&
+			typeof n.args[0].value === 'string' && n.args[0].value.trim() !== '')
+		{
+			var problem = HmiMenus.trendCallProblem(ui, n);
+
+			if (problem != null)
+			{
+				out.push(problem);
+			}
+		}
+
 		for (var k in n)
 		{
 			find(n[k]);
@@ -1007,6 +1038,39 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 	})(compiled.ast);
 
 	return out;
+};
+
+/** A trend function's literal trend name (and TrendSetPen's pen) checked against the pages. */
+HmiMenus.trendCallProblem = function(ui, n)
+{
+	var name = n.args[0].value.trim();
+	var found = null;
+	var trends = HmiTrend.collect(ui);
+
+	for (var i = 0; i < trends.length && found == null; i++)
+	{
+		var cfg = HmiTrend.normalize(trends[i].cfg);
+
+		if (cfg.name.toLowerCase() === name.toLowerCase())
+		{
+			found = cfg;
+		}
+	}
+
+	if (found == null)
+	{
+		return n.name + ': no trend named "' + name + '"';
+	}
+
+	var pen = n.args[1];
+
+	if (n.name === 'TrendSetPen' && pen != null && pen.type === 'literal' && typeof pen.value === 'string' &&
+		pen.value.trim() !== '' && !found.pens.some(function(p) { return p.tag.toLowerCase() === pen.value.trim().toLowerCase(); }))
+	{
+		return 'TrendSetPen: the trend "' + found.name + '" has no pen for "' + pen.value.trim() + '"';
+	}
+
+	return null;
 };
 
 HmiMenus.tagProblem = function(tag, message)
