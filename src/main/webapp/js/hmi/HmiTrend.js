@@ -1408,7 +1408,15 @@ HmiTrendView.prototype.render = function()
 		g.moveTo(gx, plot.y);
 		g.lineTo(gx, plot.y + plot.h);
 		g.stroke();
-		g.fillText(HmiTrendView.timeLabel(t, step), gx, plot.y + plot.h + fs * 0.8);
+
+		// A label that would run off either side of the trend is left out
+		var label = HmiTrendView.timeLabel(t, step);
+		var half = g.measureText(label).width / 2;
+
+		if (gx - half >= 0 && gx + half <= W)
+		{
+			g.fillText(label, gx, plot.y + plot.h + fs * 0.8);
+		}
 	}
 
 	g.strokeRect(plot.x + 0.5, plot.y + 0.5, plot.w - 1, plot.h - 1);
