@@ -285,6 +285,12 @@ var ColorPicker = function()
 			quiet = true;
 		}
 		
+		// Short forms (#rgb, #rgba) to #rrggbb[aa], which parseColor needs
+		if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{4})$/.test(color))
+		{
+			color = mxUtils.rgba2hex(mxUtils.color2hex(color));
+		}
+
 		var rgb = mxUtils.parseColor(color);
 		var hsv = rgb2hsv(rgb.r / 255, rgb.g / 255, rgb.b / 255);
 
@@ -538,6 +544,7 @@ var ColorDialog = function(editorUi, color, apply, cancelFn, defaultColor, defau
 		else
 		{
 			darkColorDiv.style.display = 'none';
+			useLightInput();
 		}
 
 		updateCollapseIcon();
@@ -974,6 +981,18 @@ var ColorDialog = function(editorUi, color, apply, cancelFn, defaultColor, defau
 			currentInput.value != '')
 		{
 			picker.fromString('#' + currentInput.value, true);
+		}
+	};
+
+	// The picker edits the focused input, so it goes back to the light color
+	// whenever the dark color is hidden
+	function useLightInput()
+	{
+		if (currentInput == darkInput)
+		{
+			currentInput = input;
+			updatePickerFromCurrentInput();
+			copyBtn.src = Editor.doubleArrowDownImage;
 		}
 	};
 
@@ -1650,6 +1669,11 @@ var ColorDialog = function(editorUi, color, apply, cancelFn, defaultColor, defau
 			else
 			{
 				darkColorDiv.style.display = 'flex';
+			}
+
+			if (darkColorDiv.style.display == 'none')
+			{
+				useLightInput();
 			}
 
 			updateCollapseIcon();

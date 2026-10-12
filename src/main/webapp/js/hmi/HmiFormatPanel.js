@@ -597,12 +597,18 @@ HmiFormatPanel.prototype.createSelectField = function(cfg, field, options)
 };
 
 /**
- * A colour swatch using drawio's own picker, so it behaves exactly like every
- * other colour control in the format panel.
+ * A color swatch using drawio's own picker. HMI colors have no dark mode
+ * variant, so the picker is in single color mode (no Advanced section). A
+ * light-dark() value saved before that keeps its light color.
  */
-HmiFormatPanel.prototype.createColorField = function(cfg, field)
+HmiFormatPanel.prototype.createColorField = function(cfg, field, title)
 {
 	var that = this;
+
+	if (mxUtils.isLightDarkColor(cfg[field]))
+	{
+		cfg[field] = mxUtils.getLightDarkColor(cfg[field]).light;
+	}
 
 	var btn = document.createElement('div');
 	btn.className = 'hmiColor';
@@ -614,10 +620,15 @@ HmiFormatPanel.prototype.createColorField = function(cfg, field)
 
 		that.editorUi.pickColor(cfg[field] || '#ffffff', function(color)
 		{
+			if (mxUtils.isLightDarkColor(color))
+			{
+				color = mxUtils.getLightDarkColor(color).light;
+			}
+
 			cfg[field] = color;
 			btn.style.backgroundColor = color;
 			that.commit();
-		});
+		}, null, null, true, title || mxResources.get('color'));
 	});
 
 	return btn;

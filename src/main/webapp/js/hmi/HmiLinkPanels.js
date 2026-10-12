@@ -17,9 +17,9 @@
 		this.addRow(content, mxResources.get('hmiExpression'),
 			this.createExprField(cfg, 'expr', 'discrete tag or expression'));
 		this.addRow(content, mxResources.get('hmiOnColor'),
-			this.createColorField(cfg, 'on'));
+			this.createColorField(cfg, 'on', mxResources.get('hmiOnColor')));
 		this.addRow(content, mxResources.get('hmiOffColor'),
-			this.createColorField(cfg, 'off'));
+			this.createColorField(cfg, 'off', mxResources.get('hmiOffColor')));
 	}
 
 	B['lineColor.discrete'] = discreteColor;
@@ -83,7 +83,7 @@
 		var row = document.createElement('div');
 		row.className = 'hmiBandRow';
 
-		row.appendChild(this.createColorField(band, 'color'));
+		row.appendChild(this.createColorField(band, 'color', 'Band color'));
 
 		if (last)
 		{
@@ -214,7 +214,7 @@
 		this.addRow(content, 'Time span (seconds)', this.createTextField(cfg, 'spanSec', '600'));
 		this.addRow(content, 'Sample period (ms)', this.createTextField(cfg, 'sampleMs', '1000'));
 		this.addRow(content, 'Refresh period (ms)', this.createTextField(cfg, 'refreshMs', '1000'));
-		this.addRow(content, 'Grid color', this.createColorField(cfg, 'gridColor'));
+		this.addRow(content, 'Grid color', this.createColorField(cfg, 'gridColor', 'Grid color'));
 
 		var list = document.createElement('div');
 		list.className = 'hmiTrendPens';
@@ -260,7 +260,7 @@
 				pen.color = HmiTrend.COLORS[index % HmiTrend.COLORS.length];
 			}
 
-			row.appendChild(that.createColorField(pen, 'color'));
+			row.appendChild(that.createColorField(pen, 'color', 'Pen color'));
 			var tag = that.createTagField(pen, 'tag');
 			tag.classList.add('hmiTrendTag');
 			row.appendChild(tag);
@@ -414,7 +414,7 @@
 		wrap.appendChild(box);
 		mxUtils.write(wrap, attr.label);
 		row.appendChild(wrap);
-		row.appendChild(this.createColorField(cfg, attr.color));
+		row.appendChild(this.createColorField(cfg, attr.color, attr.label + ' color'));
 		content.appendChild(row);
 	}
 
@@ -655,8 +655,8 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 	{
 		this.addRow(content, mxResources.get('hmiTag'),
 			this.createTagField(cfg, 'tag'));
-		this.addRow(content, 'In alarm', this.createColorField(cfg, 'on'));
-		this.addRow(content, 'Normal', this.createColorField(cfg, 'off'));
+		this.addRow(content, 'In alarm', this.createColorField(cfg, 'on', 'In alarm color'));
+		this.addRow(content, 'Normal', this.createColorField(cfg, 'off', 'Normal color'));
 	}
 
 	function analogAlarmColor(content, cfg)
@@ -670,7 +670,7 @@ HmiFormatPanel.prototype.createTagField = function(cfg, field)
 		for (var i = 0; i < limits.length; i++)
 		{
 			this.addRow(content, limits[i][1],
-				this.createColorField(cfg, limits[i][0]));
+				this.createColorField(cfg, limits[i][0], limits[i][1] + ' color'));
 		}
 
 		content.appendChild(HmiDialogs.el('div', 'hmiHint',
