@@ -1543,6 +1543,66 @@
 	gap: 6px;
 }
 
+/* ------------------------------------------- find/replace tag references */
+
+.hmiRefTable
+{
+	table-layout: fixed;
+	width: 100%;
+}
+
+.hmiRefTable td input
+{
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.hmiRefTable th:nth-child(1)
+{
+	width: 32%;
+}
+
+.hmiRefTable th:nth-child(2),
+.hmiRefTable td.hmiRefUses
+{
+	width: 48px;
+	text-align: right;
+	padding-right: 10px;
+}
+
+.hmiRefTable th:nth-child(3)
+{
+	width: 36%;
+}
+
+.hmiRefTable td
+{
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+
+.hmiRefStatus
+{
+	font-size: 11px;
+	color: #707070;
+	white-space: normal;
+}
+
+.hmiRefStatus.hmiError
+{
+	color: #B00020;
+}
+
+[data-theme="dark"] .hmiRefStatus
+{
+	color: #A0A0A0;
+}
+
+[data-theme="dark"] .hmiRefStatus.hmiError
+{
+	color: #FF7A7A;
+}
+
 .hmiRecipeButtons button.geBtn
 {
 	min-width: 0;

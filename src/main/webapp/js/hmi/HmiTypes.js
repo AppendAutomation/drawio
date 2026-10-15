@@ -146,7 +146,13 @@ HmiTypes.FAMILIES = [
 ];
 
 /**
- * key -> {code, family, label, milestone, defaults()}
+ * key -> {code, family, label, milestone, defaults(), refs, refArrays}
+ *
+ * `refs` and `refArrays` say which config fields can name a tag, and how the
+ * name is written: 'tag' is a bare name, 'expr' an expression and 'script' a
+ * script. `refArrays` covers the array-valued holders (a color link's bands, a
+ * trend's pens). HmiTagRefs reads them; a field in neither is never a tag
+ * reference, which its self test checks against defaults().
  *
  * `milestone` marks which types are wired end to end in M1; later types are
  * registered here so the numeric mapping stays in one place, but the panel
@@ -159,6 +165,8 @@ HmiTypes.LINKS = {};
 HmiTypes.defineLink = function(key, def)
 {
 	def.key = key;
+	def.refs = def.refs || {};
+	def.refArrays = def.refArrays || {};
 	HmiTypes.LINKS[key] = def;
 
 	return def;
@@ -174,6 +182,7 @@ HmiTypes.defineLink = function(key, def)
 	function discreteColor(key, code, family, label)
 	{
 		def(key, {code: code, family: family, label: label, milestone: 1,
+			refs: {expr: 'expr'},
 			defaults: function()
 			{
 				return {expr: '', on: '#00CC00', off: '#808080'};
@@ -183,6 +192,7 @@ HmiTypes.defineLink = function(key, def)
 	function analogColor(key, code, family, label)
 	{
 		def(key, {code: code, family: family, label: label, milestone: 1,
+			refs: {expr: 'expr'}, refArrays: {bands: {max: 'expr'}},
 			defaults: function()
 			{
 				return {expr: '', bands: [
@@ -201,33 +211,39 @@ HmiTypes.defineLink = function(key, def)
 
 	// Alarm colour variants are M2; registered for code fidelity only.
 	def('lineColor.discreteAlarm', {code: 203, family: 'lineColor', label: 'Line Color / Discrete Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', on: '#CC0000', off: '#808080'};
 		}});
 	def('lineColor.analogAlarm', {code: 204, family: 'lineColor', label: 'Line Color / Analog Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', loLo: '#CC0000', low: '#CC8800',
 				normal: '#00CC00', high: '#CC8800', hiHi: '#CC0000'};
 		}});
 	def('fillColor.discreteAlarm', {code: 303, family: 'fillColor', label: 'Fill Color / Discrete Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', on: '#CC0000', off: '#808080'};
 		}});
 	def('fillColor.analogAlarm', {code: 304, family: 'fillColor', label: 'Fill Color / Analog Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', loLo: '#CC0000', low: '#CC8800',
 				normal: '#00CC00', high: '#CC8800', hiHi: '#CC0000'};
 		}});
 	def('textColor.discreteAlarm', {code: 803, family: 'textColor', label: 'Text Color / Discrete Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', on: '#CC0000', off: '#808080'};
 		}});
 	def('textColor.analogAlarm', {code: 804, family: 'textColor', label: 'Text Color / Analog Alarm', milestone: 2,
+		refs: {tag: 'tag'},
 		defaults: function()
 		{
 			return {tag: '', loLo: '#CC0000', low: '#CC8800',
@@ -237,12 +253,14 @@ HmiTypes.defineLink = function(key, def)
 	// --- miscellaneous display
 
 	def('visibility', {code: 581, family: 'display', label: 'Visibility', milestone: 1,
+		refs: {expr: 'expr'},
 		defaults: function()
 		{
 			return {expr: '', sense: 'visible'};
 		}});
 
 	def('blink', {code: 583, family: 'display', label: 'Blink', milestone: 1,
+		refs: {expr: 'expr', rateMs: 'expr'},
 		defaults: function()
 		{
 			return {expr: '', rateMs: '500', attrs: ['fill'],
@@ -252,6 +270,7 @@ HmiTypes.defineLink = function(key, def)
 	// Enable gates every touch link on the object, in the Visibility style:
 	// enabled while the expression is true (or false, with sense 'disabled')
 	def('enable', {code: 586, family: 'display', label: 'Enable', milestone: 2,
+		refs: {expr: 'expr'},
 		defaults: function()
 		{
 			return {expr: '', sense: 'enabled'};
@@ -260,6 +279,7 @@ HmiTypes.defineLink = function(key, def)
 	// The Recipe List object's settings (HmiRecipes.js): edited in its own
 	// section, never offered as a link
 	def('recipeList', {code: 9001, family: 'display', label: 'Recipe List', milestone: 99,
+		refs: {selectedTag: 'tag', upTag: 'tag', downTag: 'tag'},
 		defaults: function()
 		{
 			return {book: '', title: '', selectedTag: '', upTag: '', downTag: '', arrows: false};
@@ -268,6 +288,7 @@ HmiTypes.defineLink = function(key, def)
 	// The Trend object's settings (HmiTrend.js): edited in its own section,
 	// never offered as a link
 	def('trend', {code: 9002, family: 'display', label: 'Trend', milestone: 99,
+		refArrays: {pens: {tag: 'tag'}},
 		defaults: function()
 		{
 			return {name: '', title: '', spanSec: 600, sampleMs: 1000, refreshMs: 1000, gridColor: '#dde3e8', pens: []};
@@ -275,6 +296,7 @@ HmiTypes.defineLink = function(key, def)
 
 	// Superseded by Enable; still applied in existing projects, not offered
 	def('disable', {code: 585, family: 'display', label: 'Disable', milestone: 99,
+		refs: {expr: 'expr'},
 		defaults: function()
 		{
 			return {expr: ''};
@@ -283,6 +305,7 @@ HmiTypes.defineLink = function(key, def)
 	// --- value display
 
 	def('valueDisplay', {code: 611, family: 'value', label: 'Value Display', milestone: 1,
+		refs: {expr: 'expr'},
 		defaults: function()
 		{
 			return {kind: 'analog', expr: '', format: '0.0', prefix: '',
@@ -292,6 +315,7 @@ HmiTypes.defineLink = function(key, def)
 	// --- touch links
 
 	def('userInput', {code: 608, family: 'touch', label: 'User Input', milestone: 1,
+		refs: {tag: 'tag', min: 'expr', max: 'expr'},
 		defaults: function()
 		{
 			return {kind: 'analog', tag: '', min: '', max: '',
@@ -299,6 +323,7 @@ HmiTypes.defineLink = function(key, def)
 		}});
 
 	def('pushbutton', {code: 401, family: 'touch', label: 'Pushbutton', milestone: 1,
+		refs: {tag: 'tag', enableExpr: 'expr'},
 		defaults: function()
 		{
 			return {kind: 'discrete', tag: '', action: 'toggle', enableExpr: ''};
@@ -306,6 +331,8 @@ HmiTypes.defineLink = function(key, def)
 
 	def('pushbutton.action', {code: 402, family: 'touch', label: 'Action Script',
 		milestone: 2,
+		refs: {onDown: 'script', whileDown: 'script', onUp: 'script',
+			everyMs: 'expr'},
 		defaults: function()
 		{
 			return {onDown: '', whileDown: '', onUp: '', everyMs: '1000'};
@@ -313,6 +340,7 @@ HmiTypes.defineLink = function(key, def)
 
 	def('showWindow', {code: 403, family: 'touch', label: 'Show Window',
 		milestone: 2,
+		refs: {enableExpr: 'expr'},
 		defaults: function()
 		{
 			return {window: '', enableExpr: ''};
@@ -320,6 +348,7 @@ HmiTypes.defineLink = function(key, def)
 
 	def('hideWindow', {code: 404, family: 'touch', label: 'Hide Window',
 		milestone: 2,
+		refs: {enableExpr: 'expr'},
 		defaults: function()
 		{
 			return {window: '', enableExpr: ''};
@@ -328,6 +357,8 @@ HmiTypes.defineLink = function(key, def)
 	function slider(key, code, label)
 	{
 		def(key, {code: code, family: 'touch', label: label, milestone: 2,
+			refs: {tag: 'tag', atMin: 'expr', atMax: 'expr',
+				travelMin: 'expr', travelMax: 'expr'},
 			defaults: function()
 			{
 				return {tag: '', atMin: '0', atMax: '100',
@@ -344,8 +375,12 @@ HmiTypes.defineLink = function(key, def)
 	// track the dictionary rather than being frozen at design time.
 	function ranged(key, code, family, label, outMin, outMax, a, b, extra)
 	{
+		var refs = {expr: 'expr', atMin: 'expr', atMax: 'expr'};
+		refs[outMin] = 'expr';
+		refs[outMax] = 'expr';
+
 		def(key, {code: code, family: family, label: label, milestone: 2,
-			outMin: outMin, outMax: outMax, extra: extra,
+			outMin: outMin, outMax: outMax, extra: extra, refs: refs,
 			defaults: function()
 			{
 				var cfg = {expr: '', atMin: '0', atMax: '100'};

@@ -12,6 +12,7 @@ HmiResources.install = function()
 		'hmiAnimation=Animation',
 		'hmiFileType=HMI Application',
 		'hmiTagDictionary=Tag Dictionary',
+		'hmiFindReplaceTags=Find/Replace Tag References',
 		'hmiDevices=Devices',
 		'hmiValidate=Validate Expressions',
 		'hmiPublish=Publish',

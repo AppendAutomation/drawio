@@ -339,7 +339,7 @@ HmiRuntime.prototype.bind = function()
 
 		for (var k = 0; k < keys.length; k++)
 		{
-			var deps = this.dependencies(links[keys[k]]);
+			var deps = this.dependencies(links[keys[k]], keys[k]);
 
 			for (var d = 0; d < deps.length; d++)
 			{
@@ -428,26 +428,45 @@ HmiRuntime.prototype.subscriptionPaths = function()
 	return paths;
 };
 
-/** Link config fields holding a tag name (the Recipe List's three). */
-HmiRuntime.TAG_FIELDS = ['tag', 'selectedTag', 'upTag', 'downTag'];
-
-/** Link config fields whose contents are expressions. */
-HmiRuntime.EXPR_FIELDS = ['expr', 'enableExpr', 'min', 'max', 'rateMs'];
+/**
+ * Link fields whose tags this runtime does not subscribe: a trend's pens are
+ * subscribed by HmiTrendManager, on its own client.
+ */
+HmiRuntime.NOT_SUBSCRIBED = {'trend.pens': true};
 
 /**
  * Tag names a link config reads, taken from the compiled expressions rather
  * than pattern-matched out of the text, so a dependency cannot disagree with
- * what evaluation actually reads.
+ * what evaluation actually reads. Which fields hold a name comes from the
+ * link registry (HmiTagRefs), so a range bound such as atMax or pctMin counts
+ * like any other expression.
+ *
+ * Scripts are left out on purpose: bindScripts collects the tags they read,
+ * and a script repaints nothing, so it does not belong in the reverse index.
  */
-HmiRuntime.prototype.dependencies = function(cfg)
+HmiRuntime.prototype.dependencies = function(cfg, key)
 {
 	var deps = [];
 	var that = this;
 
-	function add(src)
+	var add = function(name)
 	{
-		if (src == null || src === '' || typeof src !== 'string')
+		if (name != null && name !== '' && mxUtils.indexOf(deps, name) < 0)
 		{
+			deps.push(name);
+		}
+	};
+
+	HmiTagRefs.eachField(cfg, {key: key, roles: ['expr', 'tag'],
+		exclude: HmiRuntime.NOT_SUBSCRIBED}, function(site)
+	{
+		var src = site.holder[site.field];
+
+		// A tag field holds a bare name, not an expression.
+		if (site.role === 'tag')
+		{
+			add(src);
+
 			return;
 		}
 
@@ -455,37 +474,9 @@ HmiRuntime.prototype.dependencies = function(cfg)
 
 		for (var i = 0; i < found.length; i++)
 		{
-			if (mxUtils.indexOf(deps, found[i]) < 0)
-			{
-				deps.push(found[i]);
-			}
+			add(found[i]);
 		}
-	}
-
-	for (var i = 0; i < HmiRuntime.EXPR_FIELDS.length; i++)
-	{
-		add(cfg[HmiRuntime.EXPR_FIELDS[i]]);
-	}
-
-	// A tag field holds a bare name, not an expression.
-	for (var i = 0; i < HmiRuntime.TAG_FIELDS.length; i++)
-	{
-		var tagName = cfg[HmiRuntime.TAG_FIELDS[i]];
-
-		if (tagName != null && tagName !== '' && typeof tagName === 'string' &&
-			mxUtils.indexOf(deps, tagName) < 0)
-		{
-			deps.push(tagName);
-		}
-	}
-
-	if (cfg.bands != null)
-	{
-		for (var i = 0; i < cfg.bands.length; i++)
-		{
-			add(cfg.bands[i].max);
-		}
-	}
+	});
 
 	return deps;
 };

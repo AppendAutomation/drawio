@@ -138,6 +138,13 @@ HmiTagDialog = function(ui)
 	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
 		mxResources.get('hmiTagDictionary').replace('...', '')));
 
+	// What the last rename changed, which matters because part of it cannot
+	// be undone. Hidden until there is something to say.
+	this.noteDiv = HmiDialogs.el('div', 'hmiHint');
+	this.noteDiv.style.display = 'none';
+	this.noteDiv.setAttribute('data-hmi-field', 'tagNote');
+	div.appendChild(this.noteDiv);
+
 	var body = HmiDialogs.el('div', 'hmiDialogBody');
 
 	// Left: the list plus its toolbar.
@@ -217,6 +224,17 @@ HmiTagDialog.prototype.init = function()
 	this.renderForm();
 };
 
+HmiTagDialog.prototype.setNote = function(text)
+{
+	if (this.noteDiv == null)
+	{
+		return;
+	}
+
+	this.noteDiv.innerText = (text != null) ? text : '';
+	this.noteDiv.style.display = (text != null && text !== '') ? '' : 'none';
+};
+
 HmiTagDialog.prototype.visibleTags = function()
 {
 	var text = this.filter.value.toLowerCase();
@@ -276,15 +294,32 @@ HmiTagDialog.prototype.createRow = function(tag)
 	return row;
 };
 
-HmiTagDialog.prototype.renderForm = function()
+/**
+ * The per-tag property form, shared by the Tag Dictionary and the single tag
+ * editor. The host says which tag is being edited and what a change means to
+ * it, so the two can differ where they must: the dictionary edits the live
+ * tag and renames it in place, the editor edits a draft and keeps the name
+ * read-only.
+ *
+ * host.formDiv                 the container to fill
+ * host.project                 the project the tag belongs to
+ * host.formTag()               the tag, or null for the empty state
+ * host.formChanged()           after any edit
+ * host.formRefresh()           re-render the form (and the list, if any)
+ * host.formRename(tag, value)  what the Name field commits to
+ * host.formNameReadOnly        true to show the name without editing it
+ */
+HmiTagForm = function() {};
+
+HmiTagForm.render = function(host)
 {
-	var that = this;
-	var tag = this.selected;
-	this.formDiv.innerText = '';
+	var that = host;
+	var tag = host.formTag();
+	host.formDiv.innerText = '';
 
 	if (tag == null)
 	{
-		this.formDiv.appendChild(
+		host.formDiv.appendChild(
 			HmiDialogs.el('div', 'hmiEmpty', 'Select a tag, or create one.'));
 
 		return;
@@ -292,13 +327,19 @@ HmiTagDialog.prototype.renderForm = function()
 
 	// Renaming is a first-class operation, not an edit to a text field:
 	// every expression referencing the old name has to move with it.
-	var nameInput = HmiDialogs.field(this.formDiv, 'Name', tag.name,
+	var nameInput = HmiDialogs.field(host.formDiv, 'Name', tag.name,
 		function(value)
 		{
-			that.rename(tag, value);
+			that.formRename(tag, value);
 		});
+	nameInput.setAttribute('data-hmi-prop', 'name');
 
-	HmiDialogs.select(this.formDiv, 'Type', tag.type, HmiTypes.TAG_TYPES,
+	if (host.formNameReadOnly)
+	{
+		nameInput.setAttribute('readonly', 'readonly');
+	}
+
+	HmiDialogs.select(host.formDiv, 'Type', tag.type, HmiTypes.TAG_TYPES,
 		function(value)
 		{
 			tag.type = value;
@@ -327,25 +368,24 @@ HmiTagDialog.prototype.renderForm = function()
 				}
 			}
 
-			that.markModified();
-			that.renderList();
-			that.renderForm();
+			that.formChanged();
+			that.formRefresh();
 		});
 
 	// Also the alarm's description
-	HmiDialogs.field(this.formDiv, 'Comment', tag.comment,
+	HmiDialogs.field(host.formDiv, 'Comment', tag.comment,
 		function(v)
 		{
 			if (tag.comment !== v)
 			{
 				tag.comment = v;
-				that.markModified();
+				that.formChanged();
 			}
 		}).setAttribute('data-hmi-prop', 'comment');
 
 	if (HmiTypes.isIndirect(tag.type))
 	{
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
 			'An indirect tag stands for another tag, chosen while the application runs by a script: ' +
 			'LinkIndirectTag("' + tag.name + '", "TagName"). Reading or writing it reads or writes that tag. ' +
 			'It can be linked to ' + (HmiTypes.isDiscrete(tag.type) ? 'discrete' :
@@ -356,77 +396,77 @@ HmiTagDialog.prototype.renderForm = function()
 
 	if (HmiTypes.isAnalog(tag.type))
 	{
-		HmiDialogs.field(this.formDiv, 'Engineering units', tag.engUnits,
+		HmiDialogs.field(host.formDiv, 'Engineering units', tag.engUnits,
 			function(v) { tag.engUnits = v; });
-		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+		HmiDialogs.field(host.formDiv, 'Initial value', tag.initial,
 			function(v) { tag.initial = parseFloat(v) || 0; });
-		HmiDialogs.field(this.formDiv, 'Minimum EU', tag.minEU,
+		HmiDialogs.field(host.formDiv, 'Minimum EU', tag.minEU,
 			function(v) { tag.minEU = parseFloat(v) || 0; });
-		HmiDialogs.field(this.formDiv, 'Maximum EU', tag.maxEU,
+		HmiDialogs.field(host.formDiv, 'Maximum EU', tag.maxEU,
 			function(v) { tag.maxEU = parseFloat(v) || 0; });
 	}
 	else if (HmiTypes.isDiscrete(tag.type))
 	{
-		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+		HmiDialogs.field(host.formDiv, 'Initial value', tag.initial,
 			function(v) { tag.initial = (v === '1' || v === 'true') ? 1 : 0; });
-		HmiDialogs.field(this.formDiv, 'On message', tag.onMsg,
+		HmiDialogs.field(host.formDiv, 'On message', tag.onMsg,
 			function(v) { tag.onMsg = v; });
-		HmiDialogs.field(this.formDiv, 'Off message', tag.offMsg,
+		HmiDialogs.field(host.formDiv, 'Off message', tag.offMsg,
 			function(v) { tag.offMsg = v; });
 	}
 	else
 	{
-		HmiDialogs.field(this.formDiv, 'Initial value', tag.initial,
+		HmiDialogs.field(host.formDiv, 'Initial value', tag.initial,
 			function(v) { tag.initial = v; });
 	}
 
 	if (HmiTypes.isIO(tag.type))
 	{
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'I/O'));
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'I/O'));
 
 		var names = [{value: '', label: '(none)'}];
 
-		for (var i = 0; i < this.project.devices.length; i++)
+		for (var i = 0; i < host.project.devices.length; i++)
 		{
-			names.push(this.project.devices[i].name);
+			names.push(host.project.devices[i].name);
 		}
 
 		// Keep a device name that no longer exists visible rather than
 		// silently blanking the tag's binding.
-		if (tag.device && this.project.getDevice(tag.device) == null)
+		if (tag.device && host.project.getDevice(tag.device) == null)
 		{
 			names.push({value: tag.device, label: tag.device + ' (missing)'});
 		}
 
-		HmiDialogs.select(this.formDiv, 'Device', tag.device || '', names, function(v)
+		HmiDialogs.select(host.formDiv, 'Device', tag.device || '', names, function(v)
 		{
 			tag.device = v;
-			that.markModified();
-			that.renderForm();
+			that.formChanged();
+			that.formRefresh();
 		});
 
-		var device = this.project.getDevice(tag.device);
+		var device = host.project.getDevice(tag.device);
 
 		if (device != null && device.protocol === 'simulator')
 		{
-			this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+			host.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
 				'Simulated: the value comes from the simulator, not a device.'));
 		}
 		else
 		{
 			var def = (device != null) ? HmiProject.protocol(device.protocol) : null;
 			var note = HmiDialogs.el('div', 'hmiAddressNote');
-			var address = HmiDialogs.field(this.formDiv, 'Address', tag.address, function(v)
+			var address = HmiDialogs.field(host.formDiv, 'Address', tag.address, function(v)
 			{
 				tag.address = ('' + v).trim();
-				that.markModified();
+				that.formChanged();
 				HmiDialogs.checkAddress(device, tag, note);
 			});
 
 			address.setAttribute('placeholder', (def != null && def.placeholder) ?
 				def.placeholder : 'Choose a device first');
 			address.setAttribute('data-hmi-prop', 'address');
-			this.formDiv.appendChild(note);
+			host.formDiv.appendChild(note);
 
 			var timer = null;
 
@@ -446,20 +486,20 @@ HmiTagDialog.prototype.renderForm = function()
 		// unless a raw range is to be mapped onto the engineering range.
 		if (HmiTypes.isAnalog(tag.type) && (device == null || device.protocol !== 'simulator'))
 		{
-			HmiDialogs.field(this.formDiv, 'Scale raw values', tag.scaled === true, function(v)
+			HmiDialogs.field(host.formDiv, 'Scale raw values', tag.scaled === true, function(v)
 			{
 				tag.scaled = !!v;
-				that.markModified();
-				that.renderForm();
+				that.formChanged();
+				that.formRefresh();
 			}, 'checkbox').setAttribute('data-hmi-prop', 'scaled');
 
 			if (tag.scaled === true)
 			{
-				HmiDialogs.field(this.formDiv, 'Minimum raw', tag.minRaw,
+				HmiDialogs.field(host.formDiv, 'Minimum raw', tag.minRaw,
 					function(v) { tag.minRaw = parseFloat(v) || 0; }).setAttribute('data-hmi-prop', 'minRaw');
-				HmiDialogs.field(this.formDiv, 'Maximum raw', tag.maxRaw,
+				HmiDialogs.field(host.formDiv, 'Maximum raw', tag.maxRaw,
 					function(v) { tag.maxRaw = parseFloat(v) || 0; }).setAttribute('data-hmi-prop', 'maxRaw');
-				this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+				host.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
 					'Raw minimum to maximum is shown as the engineering minimum to maximum.'));
 			}
 		}
@@ -468,22 +508,22 @@ HmiTagDialog.prototype.renderForm = function()
 	// Retentive memory tags keep their last value from one Run to the next
 	if (!HmiTypes.isIO(tag.type))
 	{
-		HmiDialogs.field(this.formDiv, 'Retentive', tag.retentive === true, function(v)
+		HmiDialogs.field(host.formDiv, 'Retentive', tag.retentive === true, function(v)
 		{
 			if (v) { tag.retentive = true; }
 			else { delete tag.retentive; }
 
-			that.markModified();
+			that.formChanged();
 		}, 'checkbox').setAttribute('data-hmi-prop', 'retentive');
 
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
 			'Keeps the last value: the next Run starts from it instead of the initial value.'));
 	}
 
 	// The tag's comment is the alarm's description
 	if (HmiTypes.isAnalog(tag.type))
 	{
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarms'));
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarms'));
 
 		if (tag.alarms == null)
 		{
@@ -505,20 +545,20 @@ HmiTagDialog.prototype.renderForm = function()
 						if (v === '' || isNaN(n)) { delete tag.alarms[key]; }
 						else { tag.alarms[key] = n; }
 
-						that.markModified();
+						that.formChanged();
 					}).setAttribute('data-hmi-prop', 'alarm.' + key);
 			})(limits[i][0]);
 		}
 
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiHint',
 			'Leave a limit empty for no alarm there. An alarm clears only once ' +
 			'the value is back inside its limit by the deadband.'));
 	}
 	else if (HmiTypes.isDiscrete(tag.type))
 	{
-		this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarm'));
+		host.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Alarm'));
 
-		HmiDialogs.select(this.formDiv, 'Alarm when',
+		HmiDialogs.select(host.formDiv, 'Alarm when',
 			(tag.alarms != null && tag.alarms.state) || '', [
 				{value: '', label: 'No alarm'},
 				{value: 'on', label: 'On (1)'},
@@ -535,35 +575,64 @@ HmiTagDialog.prototype.renderForm = function()
 					tag.alarms.state = v;
 				}
 
-				that.markModified();
+				that.formChanged();
 			}).setAttribute('data-hmi-prop', 'alarm.state');
 	}
 
-	this.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Simulation'));
+	host.formDiv.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Simulation'));
 
 	if (tag.sim == null)
 	{
 		tag.sim = {};
 	}
 
-	HmiDialogs.select(this.formDiv, 'Mode', tag.sim.mode || '',
+	HmiDialogs.select(host.formDiv, 'Mode', tag.sim.mode || '',
 		['', 'sine', 'ramp', 'random', 'toggle', 'static'],
 		function(v)
 		{
 			if (v === '') { delete tag.sim.mode; }
 			else { tag.sim.mode = v; }
 
-			that.markModified();
+			that.formChanged();
 		});
 
-	HmiDialogs.field(this.formDiv, 'Period (ms)', tag.sim.periodMs,
+	HmiDialogs.field(host.formDiv, 'Period (ms)', tag.sim.periodMs,
 		function(v)
 		{
 			if (v === '') { delete tag.sim.periodMs; }
 			else { tag.sim.periodMs = v; }
 
-			that.markModified();
+			that.formChanged();
 		});
+};
+
+
+// The Tag Dictionary's side of the shared form: it edits the live tag, so a
+// change is a project change, and a rename moves every reference with it.
+HmiTagDialog.prototype.renderForm = function()
+{
+	HmiTagForm.render(this);
+};
+
+HmiTagDialog.prototype.formTag = function()
+{
+	return this.selected;
+};
+
+HmiTagDialog.prototype.formChanged = function()
+{
+	this.markModified();
+};
+
+HmiTagDialog.prototype.formRefresh = function()
+{
+	this.renderList();
+	this.renderForm();
+};
+
+HmiTagDialog.prototype.formRename = function(tag, value)
+{
+	this.rename(tag, value);
 };
 
 HmiTagDialog.prototype.uniqueName = function(base)
@@ -626,9 +695,9 @@ HmiTagDialog.prototype.remove = function()
 
 	if (refs.length > 0)
 	{
-		this.ui.confirm('"' + name + '" is used by ' + refs.length +
-			' animation link' + ((refs.length == 1) ? '' : 's') +
-			'. Delete it anyway?', proceed);
+		this.ui.confirm('"' + name + '" is used in ' + refs.length +
+			' place' + ((refs.length == 1) ? '' : 's') +
+			' in this project. Delete it anyway?', proceed);
 	}
 	else
 	{
@@ -651,7 +720,7 @@ HmiTagDialog.prototype.rename = function(tag, next)
 		return;
 	}
 
-	if (!/^[A-Za-z_$][A-Za-z0-9_$]{0,62}$/.test(next))
+	if (!HmiTagRefs.validName(next))
 	{
 		this.ui.showError(mxResources.get('error'),
 			'Tag names start with a letter, _ or $ and may contain letters, ' +
@@ -682,7 +751,7 @@ HmiTagDialog.prototype.rename = function(tag, next)
 	}
 
 	var previous = tag.name;
-	var count = HmiTagDialog.rewriteReferences(this.ui, previous, next);
+	var done = HmiTagDialog.rewriteReferences(this.ui, previous, next);
 
 	delete this.project.tagIndex[previous.toLowerCase()];
 	tag.name = next;
@@ -691,141 +760,87 @@ HmiTagDialog.prototype.rename = function(tag, next)
 	this.markModified();
 	this.renderList();
 	this.renderForm();
+	this.setNote(HmiTagDialog.renameNote(previous, next, done));
 
-	if (count > 0)
+	if (done.sites > 0)
 	{
 		HmiLog.log('renamed ' + previous + ' to ' + next + ', updated ' +
-			count + ' reference' + ((count == 1) ? '' : 's'));
+			done.sites + ' reference' + ((done.sites == 1) ? '' : 's'));
 	}
 };
 
-/** Every link config field that can name a tag. */
-HmiTagDialog.REFERENCE_FIELDS = ['expr', 'tag', 'enableExpr', 'min', 'max',
-	'rateMs'];
-
-HmiTagDialog.eachReference = function(ui, fn)
+/**
+ * What a rename changed. Only the current page's cells are model state, so
+ * only those come back with one Undo: the rest is the project's own state and
+ * the user has to be told, or an Undo looks as though it half worked.
+ */
+HmiTagDialog.renameNote = function(previous, next, done)
 {
-	var graph = ui.editor.graph;
-	var model = graph.getModel();
-
-	var walk = function(parent)
+	if (done.sites === 0)
 	{
-		var count = model.getChildCount(parent);
+		return 'Renamed ' + previous + ' to ' + next + '. Nothing referenced it.';
+	}
 
-		for (var i = 0; i < count; i++)
-		{
-			var cell = model.getChildAt(parent, i);
-			var links = HmiProject.getCellLinks(graph, cell);
-			var touched = false;
+	var parts = [done.sites + ' reference' + ((done.sites == 1) ? '' : 's') +
+		' updated'];
 
-			for (var key in links)
-			{
-				var cfg = links[key];
+	if (done.pages > 0)
+	{
+		parts.push('on ' + done.pages + ' other page' +
+			((done.pages == 1) ? '' : 's'));
+	}
 
-				for (var f = 0; f < HmiTagDialog.REFERENCE_FIELDS.length; f++)
-				{
-					var field = HmiTagDialog.REFERENCE_FIELDS[f];
+	if (done.project > 0)
+	{
+		parts.push('including ' + done.project + ' in scripts, recipe books ' +
+			'or saved recipes');
+	}
 
-					if (fn(cfg, field, cell, key))
-					{
-						touched = true;
-					}
-				}
+	var note = 'Renamed ' + previous + ' to ' + next + ': ' +
+		parts.join(', ') + '.';
 
-				if (cfg.bands != null)
-				{
-					for (var b = 0; b < cfg.bands.length; b++)
-					{
-						if (fn(cfg.bands[b], 'max', cell, key))
-						{
-							touched = true;
-						}
-					}
-				}
-			}
+	if (done.pages > 0 || done.project > 0)
+	{
+		note += ' Changes outside this page cannot be undone.';
+	}
 
-			if (touched)
-			{
-				HmiProject.setCellLinks(graph, cell, links);
-			}
+	if (done.skipped.length > 0)
+	{
+		note += ' ' + done.skipped.length + ' field' +
+			((done.skipped.length == 1) ? '' : 's') + ' could not be read and ' +
+			'kept the old name; see HMI > Validate Expressions.';
+	}
 
-			walk(cell);
-		}
-	};
-
-	walk(graph.getDefaultParent());
+	return note;
 };
 
+/**
+ * Every site in the project that names a tag. A tag is used from any page,
+ * from the window and application scripts and from a recipe book, so the
+ * count covers all of them; HmiTagRefs holds the map.
+ */
 HmiTagDialog.findReferences = function(ui, name)
 {
-	var found = [];
-	var target = name.toLowerCase();
-
-	HmiTagDialog.eachReference(ui, function(holder, field, cell, key)
-	{
-		var src = holder[field];
-
-		if (src != null && src !== '' &&
-			HmiTagDialog.referencesTag(src, target))
-		{
-			found.push({cell: cell, link: key, field: field});
-		}
-
-		return false;
-	});
-
-	return found;
-};
-
-HmiTagDialog.referencesTag = function(src, lowerName)
-{
-	var re = new RegExp('(^|[^A-Za-z0-9_$.])' +
-		HmiTagDialog.escapeRe(lowerName) + '(?![A-Za-z0-9_$])', 'i');
-
-	return re.test(' ' + src);
+	return HmiTagRefs.findInProject(ui, name);
 };
 
 HmiTagDialog.escapeRe = function(text)
 {
-	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	return HmiTagRefs.escapeRe(text);
 };
 
+/**
+ * Points every reference to one tag at another, throughout the project.
+ *
+ * @returns {Object} HmiTagRefs.rename's report: {sites, cells, pages,
+ * project, skipped}.
+ */
 HmiTagDialog.rewriteReferences = function(ui, from, to)
 {
-	var count = 0;
+	var map = {};
+	map[('' + from).toLowerCase()] = to;
 
-	// Word boundary that also refuses a preceding dot, so Other.Tank_Level
-	// (a dotfield on a different tag) is never rewritten.
-	var re = new RegExp('(^|[^A-Za-z0-9_$.])(' +
-		HmiTagDialog.escapeRe(from) + ')(?![A-Za-z0-9_$])', 'gi');
-
-	HmiTagDialog.eachReference(ui, function(holder, field)
-	{
-		var src = holder[field];
-
-		if (src == null || src === '' || typeof src !== 'string')
-		{
-			return false;
-		}
-
-		var next = src.replace(re, function(match, prefix)
-		{
-			count++;
-
-			return prefix + to;
-		});
-
-		if (next !== src)
-		{
-			holder[field] = next;
-
-			return true;
-		}
-
-		return false;
-	});
-
-	return count;
+	return HmiTagRefs.rename(ui, map);
 };
 
 HmiTagDialog.prototype.markModified = function()
@@ -1035,6 +1050,892 @@ HmiTagDialog.parseCsvLine = function(line)
 	cells.push(cur);
 
 	return cells;
+};
+
+// ----------------------------------------------------- single tag editor
+
+/**
+ * One tag's properties, for creating or editing a tag without the whole
+ * dictionary: Find/Replace opens it on a double-click.
+ *
+ * It edits a copy and applies on Save, because it has a Cancel -- the Tag
+ * Dictionary edits the live tag and so offers only Close.
+ *
+ * @param name the tag to edit, or the name to create
+ * @param onClose called with {saved, name} once it has closed
+ * @param template the tag a new one is replacing, whose properties it starts
+ * from
+ */
+HmiDialogs.showTagEditor = function(ui, name, onClose, template)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var dlg = new HmiTagEditorDialog(ui, name, onClose, template);
+	ui.showDialog(dlg.container, 520, 600, true, false);
+	dlg.init();
+
+	return dlg;
+};
+
+HmiTagEditorDialog = function(ui, name, onClose, template)
+{
+	this.ui = ui;
+	this.project = ui.hmiProject;
+	this.onClose = onClose || function() {};
+	this.existing = this.project.getTag(name);
+	this.creating = this.existing == null;
+
+	// Creating the tag is itself the edit, so Save starts live; an existing
+	// tag starts clean and Save waits for a change.
+	this.dirty = this.creating;
+	this.formNameReadOnly = !this.creating;
+	this.template = (this.creating && template != null &&
+		template.name !== name) ? template : null;
+	this.draft = (this.creating) ?
+		HmiTagRefs.newTagFrom(ui, ('' + name).trim(), this.template) :
+		JSON.parse(JSON.stringify(this.existing));
+
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		(this.creating ? 'New Tag - ' : 'Tag - ') + this.draft.name));
+
+	if (this.creating)
+	{
+		div.appendChild(HmiDialogs.el('div', 'hmiHint', '"' + this.draft.name +
+			'" is not in the tag dictionary. Fill in its properties and save ' +
+			'to create it.' + ((this.template != null) ?
+				' It starts as a copy of "' + this.template.name +
+				'", without its address.' : '')));
+	}
+	else
+	{
+		div.appendChild(HmiDialogs.el('div', 'hmiHint', 'Rename a tag in ' +
+			'HMI > Tag Dictionary, which moves every reference with it.'));
+	}
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody');
+	this.formDiv = HmiDialogs.el('div', 'hmiTagForm');
+	this.formDiv.setAttribute('data-hmi-field', 'tagForm');
+	body.appendChild(this.formDiv);
+	div.appendChild(body);
+
+	this.error = HmiDialogs.el('div', 'hmiError');
+	this.error.setAttribute('data-hmi-field', 'tagError');
+	div.appendChild(this.error);
+
+	var that = this;
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+
+	this.saveButton = HmiDialogs.button('Save', function() { that.save(); }, true);
+	this.saveButton.setAttribute('data-hmi-field', 'saveTag');
+	footer.appendChild(this.saveButton);
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+
+	var discard = HmiDialogs.button('Discard & Close', function()
+	{
+		that.finish(false);
+	});
+	discard.setAttribute('data-hmi-field', 'cancelTag');
+	footer.appendChild(discard);
+
+	var close = HmiDialogs.button('Close', function() { that.close(); });
+	close.setAttribute('data-hmi-field', 'closeTag');
+	footer.appendChild(close);
+
+	div.appendChild(footer);
+
+	this.container = div;
+};
+
+HmiTagEditorDialog.prototype.init = function()
+{
+	this.renderForm();
+	this.updateSave();
+};
+
+HmiTagEditorDialog.prototype.renderForm = function()
+{
+	HmiTagForm.render(this);
+};
+
+HmiTagEditorDialog.prototype.formTag = function()
+{
+	return this.draft;
+};
+
+HmiTagEditorDialog.prototype.formChanged = function()
+{
+	this.dirty = true;
+	this.error.innerText = '';
+	this.updateSave();
+};
+
+HmiTagEditorDialog.prototype.formRefresh = function()
+{
+	this.renderForm();
+};
+
+/** Only a tag being created can be renamed here: see the dialog's hint. */
+HmiTagEditorDialog.prototype.formRename = function(tag, value)
+{
+	value = ('' + value).trim();
+
+	if (!this.creating || value === '' || value === tag.name)
+	{
+		this.renderForm();
+
+		return;
+	}
+
+	var problem = HmiTagRefs.checkName(null, value);
+
+	if (problem != null)
+	{
+		this.error.innerText = problem;
+		this.renderForm();
+
+		return;
+	}
+
+	if (this.project.getTag(value) != null)
+	{
+		this.error.innerText = 'A tag named "' + value + '" already exists.';
+		this.renderForm();
+
+		return;
+	}
+
+	tag.name = value;
+	this.formChanged();
+	this.renderForm();
+};
+
+HmiTagEditorDialog.prototype.updateSave = function()
+{
+	this.saveButton.disabled = !this.dirty;
+};
+
+/** Writes the draft into the project. Returns false when it refused. */
+HmiTagEditorDialog.prototype.save = function()
+{
+	var problem = HmiTagRefs.checkName(null, this.draft.name);
+
+	if (this.draft.name === '' || problem != null)
+	{
+		this.error.innerText = (problem != null) ? problem :
+			'The tag needs a name.';
+
+		return false;
+	}
+
+	if (this.creating)
+	{
+		try
+		{
+			this.project.addTag(this.draft);
+		}
+		catch (e)
+		{
+			this.error.innerText = e.message;
+
+			return false;
+		}
+	}
+	else
+	{
+		// In place, so that anything already holding this tag keeps it.
+		for (var key in this.existing)
+		{
+			if (this.draft[key] === undefined)
+			{
+				delete this.existing[key];
+			}
+		}
+
+		for (var k in this.draft)
+		{
+			this.existing[k] = this.draft[k];
+		}
+	}
+
+	// The compile cache is keyed on the dictionary's revision: without this
+	// every cached expression still says the tag is unknown.
+	this.project.touch();
+	this.ui.editor.setModified(true);
+	this.dirty = false;
+	this.finish(true);
+
+	return true;
+};
+
+HmiTagEditorDialog.prototype.close = function()
+{
+	if (!this.dirty)
+	{
+		this.finish(false);
+
+		return;
+	}
+
+	var that = this;
+
+	HmiDialogs.showSaveConfirm(this.ui, (this.creating) ? 'New Tag' : 'Tag',
+		(this.creating) ? 'Create "' + this.draft.name + '" before closing?' :
+			'Save the changes to "' + this.draft.name + '" before closing?',
+		function(answer)
+		{
+			if (answer === 'cancel')
+			{
+				return;
+			}
+
+			// After the prompt has closed, or hideDialog would close it
+			// instead of this dialog.
+			window.setTimeout(function()
+			{
+				if (answer === 'save')
+				{
+					that.save();
+				}
+				else
+				{
+					that.finish(false);
+				}
+			}, 0);
+		});
+};
+
+HmiTagEditorDialog.prototype.finish = function(saved)
+{
+	this.ui.hideDialog();
+	this.onClose({saved: saved === true, name: this.draft.name});
+};
+
+/**
+ * Save, Discard or Cancel. Dismissing the window means Cancel: a save prompt
+ * that threw the work away when it was waved off would be a trap.
+ */
+HmiDialogs.showSaveConfirm = function(ui, title, question, fn)
+{
+	var answered = false;
+	var answer = function(what)
+	{
+		if (!answered)
+		{
+			answered = true;
+			fn(what);
+		}
+	};
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiRecipeConfirm');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', title));
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+	body.appendChild(HmiDialogs.el('div', null, question));
+	div.appendChild(body);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+
+	var cancel = HmiDialogs.button('Cancel', function()
+	{
+		answer('cancel');
+		ui.hideDialog();
+	});
+	cancel.setAttribute('data-hmi-field', 'confirmCancel');
+	footer.appendChild(cancel);
+
+	var discard = HmiDialogs.button('Discard', function()
+	{
+		answer('discard');
+		ui.hideDialog();
+	});
+	discard.setAttribute('data-hmi-field', 'confirmDiscard');
+	footer.appendChild(discard);
+
+	var save = HmiDialogs.button('Save', function()
+	{
+		answer('save');
+		ui.hideDialog();
+	}, true);
+	save.setAttribute('data-hmi-field', 'confirmSave');
+	footer.appendChild(save);
+
+	div.appendChild(footer);
+
+	ui.showDialog(div, 460, 190, true, true, function() { answer('cancel'); });
+};
+
+// ------------------------------------------------- find/replace tag refs
+
+/**
+ * Edit > Find/Replace Tag References: the tags the current page or the
+ * current selection names, each with a replacement of its own.
+ *
+ * It exists for re-pointing a copied screen at another unit, which otherwise
+ * means opening every object in turn. The scope is fixed when it opens, so
+ * Apply can only touch what the list shows.
+ */
+HmiDialogs.showFindReplaceTags = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var dlg = new HmiFindReplaceDialog(ui);
+	ui.showDialog(dlg.container, 720, 560, true, false);
+	dlg.init();
+
+	return dlg;
+};
+
+HmiFindReplaceDialog = function(ui)
+{
+	this.ui = ui;
+	this.project = ui.hmiProject;
+	this.scope = HmiTagRefs.scope(ui);
+	this.rows = [];
+	this.inputs = {};
+
+	var that = this;
+	var div = HmiDialogs.el('div', 'hmiDialog');
+
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		mxResources.get('hmiFindReplaceTags').replace('...', '')));
+
+	this.scopeHint = HmiDialogs.el('div', 'hmiHint', this.scopeText());
+	this.scopeHint.setAttribute('data-hmi-field', 'scopeHint');
+	div.appendChild(this.scopeHint);
+
+	div.appendChild(HmiDialogs.el('div', 'hmiHint', 'Expressions, scripts, ' +
+		'color bands, trend pens and the tag names given to LinkIndirectTag ' +
+		'and TrendSetPen are all updated. System tags cannot be replaced and ' +
+		'are not listed. Double-click a name to create or edit that tag.'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection',
+		'Replace text in the tag names'));
+
+	this.findText = HmiDialogs.field(body, 'Find', '', function() {});
+	this.findText.setAttribute('data-hmi-field', 'findText');
+	this.replaceText = HmiDialogs.field(body, 'Replace with', '', function()
+	{
+		that.fill();
+	});
+	this.replaceText.setAttribute('data-hmi-field', 'replaceText');
+	this.matchCase = HmiDialogs.field(body, 'Match case', false, function() {},
+		'checkbox');
+	this.matchCase.setAttribute('data-hmi-field', 'matchCase');
+
+	var tools = HmiDialogs.el('div', 'hmiRecipeButtons');
+	var fill = HmiDialogs.button('Fill replacements', function() { that.fill(); });
+	fill.setAttribute('data-hmi-field', 'fillAll');
+	tools.appendChild(fill);
+	var clear = HmiDialogs.button('Clear replacements', function() { that.clear(); });
+	clear.setAttribute('data-hmi-field', 'clearAll');
+	tools.appendChild(clear);
+	body.appendChild(tools);
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection',
+		'Tag references in scope'));
+
+	this.listDiv = HmiDialogs.el('div', 'hmiUserList');
+	body.appendChild(this.listDiv);
+	div.appendChild(body);
+
+	this.message = HmiDialogs.el('div', 'hmiError');
+	this.message.setAttribute('data-hmi-field', 'message');
+	div.appendChild(this.message);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	var validate = HmiDialogs.button('Validate', function() { that.validate(); });
+	validate.setAttribute('data-hmi-field', 'validate');
+	footer.appendChild(validate);
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	var apply = HmiDialogs.button('Apply', function() { that.apply(); }, true);
+	apply.setAttribute('data-hmi-field', 'apply');
+	footer.appendChild(apply);
+	var close = HmiDialogs.button('Close', function() { ui.hideDialog(); });
+	close.setAttribute('data-hmi-field', 'close');
+	footer.appendChild(close);
+	div.appendChild(footer);
+
+	this.container = div;
+};
+
+HmiFindReplaceDialog.prototype.init = function()
+{
+	this.reload();
+};
+
+/** Which objects are in scope, in the words the user needs to hear. */
+HmiFindReplaceDialog.prototype.scopeText = function()
+{
+	if (this.scope.kind === 'selection')
+	{
+		return 'Replacing in the ' + this.scope.selected + ' selected object' +
+			((this.scope.selected == 1) ? '' : 's') +
+			' and the objects inside them, on "' + this.scope.pageName + '".';
+	}
+
+	return 'Nothing is selected: replacing throughout the window "' +
+		this.scope.pageName + '".';
+};
+
+HmiFindReplaceDialog.prototype.reload = function()
+{
+	this.rows = HmiTagRefs.collect(this.project, this.scope,
+		this.ui.editor.graph);
+	this.renderRows();
+};
+
+HmiFindReplaceDialog.prototype.renderRows = function()
+{
+	var that = this;
+	this.listDiv.innerText = '';
+	this.inputs = {};
+
+	if (this.rows.length === 0)
+	{
+		this.listDiv.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+			'Nothing here names a tag.'));
+
+		return;
+	}
+
+	var table = HmiDialogs.el('table', 'hmiUserTable hmiRefTable');
+	var head = HmiDialogs.el('thead');
+	var headRow = HmiDialogs.el('tr');
+	var columns = ['Tag', 'Uses', 'Replace with', 'Status'];
+
+	for (var c = 0; c < columns.length; c++)
+	{
+		headRow.appendChild(HmiDialogs.el('th', null, columns[c]));
+	}
+
+	head.appendChild(headRow);
+	table.appendChild(head);
+
+	var tbody = HmiDialogs.el('tbody');
+
+	for (var i = 0; i < this.rows.length; i++)
+	{
+		tbody.appendChild(this.createRow(this.rows[i]));
+	}
+
+	table.appendChild(tbody);
+	this.listDiv.appendChild(table);
+};
+
+HmiFindReplaceDialog.prototype.createRow = function(row)
+{
+	var that = this;
+	var tr = HmiDialogs.el('tr', 'hmiUserRow');
+	tr.setAttribute('data-hmi-tag', row.name);
+
+	var name = HmiDialogs.el('td', 'hmiUserName', row.name);
+	name.setAttribute('data-hmi-field', 'refName');
+	name.setAttribute('title', 'Double-click to edit this tag.');
+	name.style.cursor = 'pointer';
+	mxEvent.addListener(name, 'dblclick', function()
+	{
+		that.editTag(row.name, row);
+	});
+	tr.appendChild(name);
+
+	var uses = HmiDialogs.el('td', 'hmiRefUses', '' + row.uses);
+	uses.setAttribute('data-hmi-field', 'refUses');
+	tr.appendChild(uses);
+
+	var cell = HmiDialogs.el('td');
+	var input = document.createElement('input');
+	input.className = 'hmiInput';
+	input.setAttribute('type', 'text');
+	input.setAttribute('list', HmiDialogs.tagDatalist(this.project));
+	input.setAttribute('placeholder', 'leave empty to keep ' + row.name);
+	input.setAttribute('data-hmi-field', 'replacement');
+	input.setAttribute('title', 'Double-click to create or edit this tag.');
+	mxEvent.addListener(input, 'input', function()
+	{
+		that.validateRow(row);
+	});
+	mxEvent.addListener(input, 'dblclick', function()
+	{
+		var typed = input.value.trim();
+
+		if (typed !== '')
+		{
+			that.editTag(typed, row);
+		}
+	});
+	cell.appendChild(input);
+	tr.appendChild(cell);
+	this.inputs[row.name.toLowerCase()] = input;
+
+	var status = HmiDialogs.el('td', 'hmiRefStatus');
+	status.setAttribute('data-hmi-field', 'refStatus');
+	tr.appendChild(status);
+	row.statusCell = status;
+
+	this.validateRow(row);
+
+	return tr;
+};
+
+/** The tag editor, after which the row is checked again. */
+HmiFindReplaceDialog.prototype.editTag = function(name, row)
+{
+	var that = this;
+
+	HmiDialogs.showTagEditor(this.ui, name, function(result)
+	{
+		HmiDialogs.tagDatalist(that.project);
+		that.validateRow(row);
+
+		if (result.saved)
+		{
+			that.setMessage('Tag "' + result.name + '" saved.', true);
+		}
+	}, (row != null) ? this.project.getTag(row.name) : null);
+};
+
+HmiFindReplaceDialog.prototype.replacementFor = function(row)
+{
+	var input = this.inputs[row.name.toLowerCase()];
+
+	return (input != null) ? input.value.trim() : '';
+};
+
+/**
+ * Marks one row: an unknown tag is a note rather than a refusal, because
+ * creating it from here is the point of the double-click.
+ */
+HmiFindReplaceDialog.prototype.validateRow = function(row)
+{
+	var input = this.inputs[row.name.toLowerCase()];
+	var status = row.statusCell;
+
+	if (input == null || status == null)
+	{
+		return null;
+	}
+
+	var value = input.value.trim();
+	var problem = HmiTagRefs.checkName(this.project, value);
+	var unknown = problem != null && problem.indexOf('No tag named') === 0;
+
+	input.classList.toggle('hmiInvalid', problem != null && !unknown);
+	input.setAttribute('title', (problem != null) ? problem :
+		'Double-click to create or edit this tag.');
+	status.classList.toggle('hmiError', problem != null && !unknown);
+
+	if (value === '')
+	{
+		status.innerText = (row.known) ? '' :
+			((row.runtime) ? 'runtime name' : 'unknown tag');
+	}
+	else if (unknown)
+	{
+		status.innerText = 'new tag';
+	}
+	else if (problem != null)
+	{
+		status.innerText = problem;
+	}
+	else
+	{
+		status.innerText = 'ready';
+	}
+
+	return problem;
+};
+
+/** The replacements to make: {lower old name: new name}. */
+HmiFindReplaceDialog.prototype.map = function()
+{
+	var map = {};
+
+	for (var i = 0; i < this.rows.length; i++)
+	{
+		var value = this.replacementFor(this.rows[i]);
+
+		if (value !== '' && value.toLowerCase() !== this.rows[i].name.toLowerCase())
+		{
+			map[this.rows[i].name.toLowerCase()] = value;
+		}
+	}
+
+	return map;
+};
+
+/** The rows whose replacement cannot be used at all. */
+HmiFindReplaceDialog.prototype.badRows = function()
+{
+	var bad = [];
+
+	for (var i = 0; i < this.rows.length; i++)
+	{
+		var problem = this.validateRow(this.rows[i]);
+
+		if (problem != null && problem.indexOf('No tag named') !== 0)
+		{
+			bad.push(this.rows[i]);
+		}
+	}
+
+	return bad;
+};
+
+/**
+ * Fills in the replacement of every name containing the find text. A row that
+ * does not contain it is left alone, so a name typed by hand survives.
+ */
+HmiFindReplaceDialog.prototype.fill = function()
+{
+	var find = this.findText.value;
+	var to = this.replaceText.value;
+
+	if (find === '')
+	{
+		this.setMessage('Type the text to find first.', false);
+
+		return 0;
+	}
+
+	var flags = (this.matchCase.checked) ? 'g' : 'gi';
+	var re = new RegExp(HmiTagRefs.escapeRe(find), flags);
+	var filled = 0;
+
+	for (var i = 0; i < this.rows.length; i++)
+	{
+		var row = this.rows[i];
+		var hit = (this.matchCase.checked) ? row.name.indexOf(find) >= 0 :
+			row.name.toLowerCase().indexOf(find.toLowerCase()) >= 0;
+
+		if (!hit)
+		{
+			continue;
+		}
+
+		var input = this.inputs[row.name.toLowerCase()];
+		input.value = row.name.replace(re, to);
+		filled++;
+		this.validateRow(row);
+	}
+
+	this.setMessage((filled === 0) ? 'No tag name contains "' + find + '".' :
+		'Filled ' + filled + ' replacement' + ((filled == 1) ? '' : 's') + '.',
+		filled > 0);
+
+	return filled;
+};
+
+HmiFindReplaceDialog.prototype.clear = function()
+{
+	for (var i = 0; i < this.rows.length; i++)
+	{
+		this.inputs[this.rows[i].name.toLowerCase()].value = '';
+		this.validateRow(this.rows[i]);
+	}
+
+	this.setMessage('', true);
+};
+
+HmiFindReplaceDialog.prototype.setMessage = function(text, ok)
+{
+	this.message.innerText = (text != null) ? text : '';
+	this.message.className = (ok) ? 'hmiError hmiAddressOk' : 'hmiError';
+};
+
+/**
+ * What the replacements would break, without making them: each link is
+ * checked before and after, and only a problem the project does not already
+ * have is worth reporting.
+ */
+HmiFindReplaceDialog.prototype.problems = function(map)
+{
+	var graph = this.ui.editor.graph;
+	var project = this.project;
+	var problems = [];
+	var that = this;
+
+	var label = function(key)
+	{
+		return (HmiTypes.LINKS[key] != null) ? HmiTypes.LINKS[key].label : key;
+	};
+
+	for (var i = 0; i < this.scope.cells.length; i++)
+	{
+		var cell = this.scope.cells[i];
+		// A fresh parse, so rewriting it leaves the model alone.
+		var links = HmiProject.getCellLinks(graph, cell);
+		var before = {};
+		var locals = {};
+
+		for (var key in links)
+		{
+			before[key] = HmiMenus.checkLink(project, links[key], key).join('\n');
+
+			HmiTagRefs.eachField(links[key], {key: key, roles: ['script']},
+				function(site)
+			{
+				var declared = HmiTagRefs.localsIn(site.holder[site.field]);
+
+				for (var name in declared)
+				{
+					locals[name] = site.path;
+				}
+			});
+		}
+
+		var skipped = [];
+		HmiTagRefs.rewriteLinks(links, map, skipped, cell);
+
+		for (var k in links)
+		{
+			var after = HmiMenus.checkLink(project, links[k], k);
+
+			for (var e = 0; e < after.length; e++)
+			{
+				if (before[k].indexOf(after[e]) < 0)
+				{
+					problems.push({page: this.scope.pageName, cell: cell,
+						link: label(k), message: after[e]});
+				}
+			}
+		}
+
+		for (var s = 0; s < skipped.length; s++)
+		{
+			problems.push({page: this.scope.pageName, cell: cell,
+				link: label(skipped[s].link),
+				message: 'Left unchanged (' + skipped[s].reason + '): ' +
+					skipped[s].path});
+		}
+
+		// A replacement that is a local variable in the same script would
+		// read the local, not the tag, and nothing else would say so.
+		for (var old in map)
+		{
+			var lower = map[old].toLowerCase();
+
+			if (locals[lower] != null)
+			{
+				problems.push({page: this.scope.pageName, cell: cell,
+					link: 'Action Script',
+					message: '"' + map[old] + '" is a local variable in ' +
+						locals[lower] + ', so the reference would read the ' +
+						'variable, not the tag'});
+			}
+		}
+	}
+
+	return problems;
+};
+
+HmiFindReplaceDialog.prototype.validate = function()
+{
+	var bad = this.badRows();
+
+	if (bad.length > 0)
+	{
+		this.setMessage(bad.length + ' replacement' +
+			((bad.length == 1) ? ' is' : 's are') + ' not valid.', false);
+
+		return {bad: bad.length, problems: []};
+	}
+
+	var map = this.map();
+	var count = 0;
+
+	for (var key in map)
+	{
+		count++;
+	}
+
+	if (count === 0)
+	{
+		this.setMessage('Nothing to validate: no replacements are filled in.',
+			false);
+
+		return {bad: 0, problems: []};
+	}
+
+	var problems = this.problems(map);
+
+	if (problems.length === 0)
+	{
+		this.setMessage('All ' + count + ' replacement' +
+			((count == 1) ? ' is' : 's are') + ' valid.', true);
+	}
+	else
+	{
+		this.setMessage(problems.length + ' problem' +
+			((problems.length == 1) ? '' : 's') + ' with these replacements.',
+			false);
+		HmiDialogs.showValidation(this.ui, problems);
+	}
+
+	return {bad: 0, problems: problems};
+};
+
+HmiFindReplaceDialog.prototype.apply = function()
+{
+	var bad = this.badRows();
+
+	if (bad.length > 0)
+	{
+		this.setMessage('Fix the ' + bad.length + ' invalid replacement' +
+			((bad.length == 1) ? '' : 's') + ', or clear ' +
+			((bad.length == 1) ? 'it' : 'them') + '.', false);
+
+		return null;
+	}
+
+	var map = this.map();
+	var count = 0;
+
+	for (var key in map)
+	{
+		count++;
+	}
+
+	if (count === 0)
+	{
+		this.setMessage('Nothing to replace: fill in at least one ' +
+			'replacement.', false);
+
+		return null;
+	}
+
+	var res = HmiTagRefs.apply(this.ui, this.scope, map);
+
+	// The Animation panel still shows the old text otherwise.
+	if (this.ui.format != null)
+	{
+		this.ui.format.refresh();
+	}
+
+	var note = 'Replaced ' + res.sites + ' reference' +
+		((res.sites == 1) ? '' : 's') + ' on ' + res.cells + ' object' +
+		((res.cells == 1) ? '' : 's') + '.';
+
+	if (res.skipped.length > 0)
+	{
+		note += ' ' + res.skipped.length + ' field' +
+			((res.skipped.length == 1) ? '' : 's') + ' could not be read and ' +
+			'kept the old name; Validate lists them.';
+	}
+
+	HmiLog.log('find/replace tags: ' + note);
+	this.reload();
+	this.setMessage(note, res.skipped.length === 0);
+
+	return res;
 };
 
 // ------------------------------------------------------- generic dialogs

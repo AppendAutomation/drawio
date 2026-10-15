@@ -228,6 +228,11 @@ HmiMenus.installActions = function()
 				HmiMenus.showTagDictionary(ui);
 			});
 
+			this.addAction('hmiFindReplaceTags...', function()
+			{
+				HmiDialogs.showFindReplaceTags(ui);
+			});
+
 			this.addAction('hmiDevices...', function()
 			{
 				HmiMenus.showDevices(ui);
@@ -325,6 +330,8 @@ HmiMenus.installMenu = function()
 
 				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers', 'hmiClearRuntimeRecipes'], parent);
 			})));
+
+			HmiMenus.extendEditMenu(this);
 		}));
 	};
 
@@ -339,6 +346,30 @@ HmiMenus.installMenu = function()
 		next.splice((at >= 0) ? at : next.length, 0, 'hmi');
 		Menus.prototype.defaultMenuItems = next;
 	}
+};
+
+/**
+ * Find/Replace Tag References joins the upstream Edit menu, beside its own
+ * Find/Replace. The menu's builder is wrapped rather than replaced, so
+ * whatever upstream adds to Edit later still appears.
+ */
+HmiMenus.extendEditMenu = function(menus)
+{
+	var edit = menus.get('edit');
+
+	if (edit == null || edit.funct == null || edit.hmiExtended)
+	{
+		return;
+	}
+
+	var funct = edit.funct;
+	edit.hmiExtended = true;
+
+	edit.funct = function(menu, parent)
+	{
+		funct(menu, parent);
+		menus.addMenuItems(menu, ['-', 'hmiFindReplaceTags'], parent);
+	};
 };
 
 // ------------------------------------------------------------ page menu
@@ -841,7 +872,7 @@ HmiMenus.collectProblems = function(ui, fn)
 
 			for (var key in links)
 			{
-				var errors = HmiMenus.checkLink(project, links[key]);
+				var errors = HmiMenus.checkLink(project, links[key], key);
 
 				if ((key === 'showWindow' || key === 'hideWindow') &&
 					links[key].window && ui.pages != null &&
@@ -1238,24 +1269,65 @@ HmiMenus.checkWindow = function(project, pageId)
 	return null;
 };
 
-HmiMenus.checkLink = function(project, cfg)
+/**
+ * Fields HMI > Validate reports elsewhere, with a better message: a trend's
+ * pens come from HmiTrend.problems, which also knows about their types.
+ */
+HmiMenus.CHECKED_ELSEWHERE = {'trend.pens': true};
+
+/** What a field is called in a problem message. */
+HmiMenus.FIELD_LABELS = {
+	'expr': 'Expression', 'enableExpr': 'Enable expression',
+	'min': 'Minimum', 'max': 'Maximum', 'rateMs': 'Rate',
+	'atMin': 'Input at minimum', 'atMax': 'Input at maximum',
+	'offsetMin': 'Offset at minimum', 'offsetMax': 'Offset at maximum',
+	'pctMin': 'Percent at minimum', 'pctMax': 'Percent at maximum',
+	'angleMin': 'Angle at minimum', 'angleMax': 'Angle at maximum',
+	'travelMin': 'Travel at minimum', 'travelMax': 'Travel at maximum',
+	'everyMs': 'Every (ms)', 'onDown': 'On down', 'whileDown': 'While down',
+	'onUp': 'On up'
+};
+
+/** What an unknown tag in a bare-name field is called. */
+HmiMenus.TAG_LABELS = {
+	'tag': 'Unknown tag', 'selectedTag': 'Selected recipe: unknown tag',
+	'upTag': 'Select up: unknown tag', 'downTag': 'Select down: unknown tag'
+};
+
+/**
+ * Problems with one animation link, as messages. Which of its fields hold a
+ * tag name or an expression comes from the link registry (HmiTagRefs), so a
+ * field added to a link is checked without touching this.
+ *
+ * The link key is optional: a caller that assembles a config of its own (a
+ * window's or the application's everyMs) passes none, and the field names
+ * then stand on their own.
+ */
+HmiMenus.checkLink = function(project, cfg, key)
 {
 	var errors = [];
 
-	function checkExpr(src, label)
+	function label(site)
 	{
-		if (src == null || src === '')
+		var band = site.path.match(/^bands\[(\d+)\]/);
+
+		if (band != null)
 		{
-			return;
+			return 'Band ' + (parseInt(band[1], 10) + 1);
 		}
 
+		return HmiMenus.FIELD_LABELS[site.field] || site.field;
+	}
+
+	function checkExpr(src, name, mode)
+	{
 		if (typeof HmiExpr !== 'undefined')
 		{
-			var compiled = HmiExpr.compile(src, {project: project});
+			var compiled = HmiExpr.compile(src, {project: project, mode: mode});
 
 			for (var i = 0; i < compiled.errors.length; i++)
 			{
-				errors.push(label + ': ' + compiled.errors[i].message);
+				errors.push(name + ': ' + compiled.errors[i].message);
 			}
 
 			return;
@@ -1266,40 +1338,34 @@ HmiMenus.checkLink = function(project, cfg)
 
 		if (base != null && project != null && project.getTag(base) == null)
 		{
-			errors.push(label + ': unknown tag "' + base + '"');
+			errors.push(name + ': unknown tag "' + base + '"');
 		}
 	}
 
-	checkExpr(cfg.expr, 'Expression');
-	checkExpr(cfg.enableExpr, 'Enable expression');
-	checkExpr(cfg.min, 'Minimum');
-	checkExpr(cfg.max, 'Maximum');
-	checkExpr(cfg.rateMs, 'Rate');
-
-	var tagLabels = {tag: 'Unknown tag', selectedTag: 'Selected recipe: unknown tag',
-		upTag: 'Select up: unknown tag', downTag: 'Select down: unknown tag'};
-
-	for (var field in tagLabels)
+	HmiTagRefs.eachField(cfg, {key: key, exclude: HmiMenus.CHECKED_ELSEWHERE},
+		function(site)
 	{
-		if (cfg[field] != null && cfg[field] !== '' && typeof cfg[field] === 'string' && project != null &&
-			project.getTag(cfg[field]) == null)
+		var src = site.holder[site.field];
+
+		if (site.role === 'tag')
 		{
-			errors.push(tagLabels[field] + ' "' + cfg[field] + '"');
+			if (project != null && project.getTag(src) == null &&
+				HmiTypes.systemTag(src) == null)
+			{
+				errors.push((HmiMenus.TAG_LABELS[site.field] || 'Unknown tag') +
+					' "' + src + '"');
+			}
+
+			return;
 		}
-	}
+
+		checkExpr(src, label(site), (site.role === 'script') ? 'script' : null);
+	});
 
 	if (cfg.book != null && cfg.book !== '' && project != null && project.recipeBooks != null &&
 		HmiRecipes.findBook(project.recipeBooks, cfg.book) == null)
 	{
 		errors.push('No recipe book named "' + cfg.book + '"');
-	}
-
-	if (cfg.bands != null)
-	{
-		for (var i = 0; i < cfg.bands.length; i++)
-		{
-			checkExpr(cfg.bands[i].max, 'Band ' + (i + 1));
-		}
 	}
 
 	return errors;

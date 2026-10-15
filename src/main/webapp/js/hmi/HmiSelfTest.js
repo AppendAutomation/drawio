@@ -58,6 +58,11 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testPivotPanel(ui);
 		HmiSelfTest.testRuntime(ui);
 		HmiSelfTest.testMenusAndDialogs(ui);
+		HmiSelfTest.testTagRefs();
+		HmiSelfTest.testTagRefScope(ui);
+		HmiSelfTest.testRangeDeps(ui);
+		HmiSelfTest.testFindReplace(ui);
+		HmiSelfTest.testRenameOtherPages(ui);
 		HmiSelfTest.testPanelLayout(ui);
 		HmiSelfTest.testMovement(ui);
 		HmiSelfTest.testM2Interaction(ui);
@@ -990,6 +995,74 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 	HmiSelfTest.check('tagDialog.renameUpdatesIndex',
 		ui.hmiProject.getTag('DayTank_Level') != null &&
 		ui.hmiProject.getTag('Tank_Level') == null);
+
+	// --- a rename reaches everything that names the tag -------------------
+	// Trend pens, action scripts, window scripts and recipe books all name
+	// tags, and a rename that skipped any of them would break the project
+	// quietly.
+
+	HmiProject.setCellLinks(graph, cell, {
+		'pushbutton.action': {onDown: 'DayTank_Level = 1;', whileDown: '',
+			onUp: '', everyMs: 'DayTank_Level'},
+		'trend': {name: 'T8', title: '', spanSec: 600, sampleMs: 1000,
+			refreshMs: 1000, gridColor: '#dde3e8',
+			pens: [{tag: 'DayTank_Level', min: '', max: '', color: '#000000'}]}
+	});
+
+	var pageId = (ui.currentPage != null) ? ui.currentPage.getId() : 'p1';
+	ui.hmiProject.windows[pageId] = {onShow: 'DayTank_Level = 0;'};
+	ui.hmiProject.settings.scripts = HmiProject.defaultAppScripts();
+	ui.hmiProject.settings.scripts.onStart = 'DayTank_Level = 1;';
+	ui.hmiProject.recipeBooks = [{name: 'Book', uploadDownload: false,
+		items: [{tag: 'DayTank_Level'}],
+		recipes: {'First': {'DayTank_Level': 1}}}];
+
+	var renameUndo = ui.editor.undoManager.history.length;
+	dlg.selected = ui.hmiProject.getTag('DayTank_Level');
+	dlg.rename(dlg.selected, 'NightTank_Level');
+
+	var renamed = HmiProject.getCellLinks(graph, cell);
+
+	HmiSelfTest.check('tagDialog.renameIsOneUndo',
+		ui.editor.undoManager.history.length === renameUndo + 1,
+		'history grew by ' +
+			(ui.editor.undoManager.history.length - renameUndo));
+	HmiSelfTest.check('tagDialog.renameRewritesScript',
+		renamed['pushbutton.action'].onDown === 'NightTank_Level = 1;',
+		renamed['pushbutton.action'].onDown);
+	HmiSelfTest.check('tagDialog.renameRewritesEveryMs',
+		renamed['pushbutton.action'].everyMs === 'NightTank_Level');
+	HmiSelfTest.check('tagDialog.renameRewritesPen',
+		renamed['trend'].pens[0].tag === 'NightTank_Level',
+		renamed['trend'].pens[0].tag);
+	HmiSelfTest.check('tagDialog.renameRewritesWindowScript',
+		ui.hmiProject.windows[pageId].onShow === 'NightTank_Level = 0;',
+		ui.hmiProject.windows[pageId].onShow);
+	HmiSelfTest.check('tagDialog.renameRewritesAppScript',
+		ui.hmiProject.settings.scripts.onStart === 'NightTank_Level = 1;');
+	HmiSelfTest.check('tagDialog.renameRewritesRecipeItem',
+		ui.hmiProject.recipeBooks[0].items[0].tag === 'NightTank_Level');
+	HmiSelfTest.check('tagDialog.renameRekeysRecipeValues',
+		ui.hmiProject.recipeBooks[0].recipes['First']['NightTank_Level'] === 1,
+		Object.keys(ui.hmiProject.recipeBooks[0].recipes['First']).join(','));
+	HmiSelfTest.check('tagDialog.renameNoteMentionsUndo',
+		dlg.noteDiv.innerText.indexOf('cannot be undone') > 0,
+		dlg.noteDiv.innerText);
+	HmiSelfTest.check('tagDialog.deleteCountsAllHolders',
+		HmiTagDialog.findReferences(ui, 'NightTank_Level').length >= 7,
+		'found ' + HmiTagDialog.findReferences(ui, 'NightTank_Level').length);
+
+	// Back to the name the rest of this test expects.
+	dlg.selected = ui.hmiProject.getTag('NightTank_Level');
+	dlg.rename(dlg.selected, 'DayTank_Level');
+	ui.hmiProject.recipeBooks = [];
+	ui.hmiProject.windows = {};
+	HmiProject.setCellLinks(graph, cell, {
+		'fillColor.analog': {expr: 'DayTank_Level', bands: [
+			{max: 'DayTank_Level.MaxEU * 0.9', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]},
+		'visibility': {expr: 'NOT Tank_LevelOther', sense: 'visible'}
+	});
 
 	// --- colour link mutual exclusion ------------------------------------
 	// Discrete and Analog both drive the same visual property, so holding both
@@ -6485,4 +6558,890 @@ HmiSelfTest.testCommsDriver = function(ui)
 	};
 
 	window.setTimeout(poll, 100);
+};
+
+// --------------------------------------------- tag references (HmiTagRefs)
+
+/**
+ * The reference map and the rewriter, which every tag rename and the
+ * Find/Replace dialog stand on. Pure functions: no graph, no DOM.
+ */
+HmiSelfTest.testTagRefs = function()
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Tank_LevelOther', 'MemoryReal'));
+	project.addTag(HmiProject.createTag('Abs', 'MemoryReal'));
+
+	var map = function(pairs)
+	{
+		var m = {};
+
+		for (var k in pairs)
+		{
+			m[k.toLowerCase()] = pairs[k];
+		}
+
+		return m;
+	};
+
+	var rw = function(src, pairs, mode)
+	{
+		return HmiTagRefs.rewriteText(src, map(pairs), mode || 'expr').text;
+	};
+
+	// --- the classification is complete ----------------------------------
+	// A link field nobody classified is a tag reference that no rename, no
+	// Validate and no subscription would ever see, which is the bug this
+	// whole map exists to prevent.
+
+	check('tagRefs.rolesUnambiguous', HmiTagRefs.roles().conflicts.length === 0,
+		HmiTagRefs.roles().conflicts.join(','));
+
+	var unclassified = [];
+
+	for (var key in HmiTypes.LINKS)
+	{
+		var def = HmiTypes.LINKS[key];
+		var defaults = def.defaults();
+		var extra = (typeof HmiCli !== 'undefined' &&
+			HmiCli.EXTRA_LINK_FIELDS != null) ?
+			(HmiCli.EXTRA_LINK_FIELDS[key] || []) : [];
+
+		for (var field in defaults)
+		{
+			if (def.refs[field] == null && def.refArrays[field] == null &&
+				!HmiTagRefs.IGNORED_FIELDS[field] &&
+				mxUtils.indexOf(extra, field) < 0)
+			{
+				unclassified.push(key + '.' + field);
+			}
+		}
+	}
+
+	check('tagRefs.linkFieldsComplete', unclassified.length === 0,
+		unclassified.join(','));
+
+	check('tagRefs.rangeFieldsClassified',
+		HmiTypes.LINKS['location.horizontal'].refs.offsetMin === 'expr' &&
+		HmiTypes.LINKS['size.height'].refs.pctMax === 'expr' &&
+		HmiTypes.LINKS['orientation'].refs.angleMin === 'expr' &&
+		HmiTypes.LINKS['slider.vertical'].refs.travelMax === 'expr' &&
+		HmiTypes.LINKS['pushbutton.action'].refs.everyMs === 'expr');
+	check('tagRefs.scriptFieldsClassified',
+		HmiTypes.LINKS['pushbutton.action'].refs.onDown === 'script' &&
+		HmiTypes.LINKS['trend'].refArrays.pens.tag === 'tag' &&
+		HmiTypes.LINKS['fillColor.analog'].refArrays.bands.max === 'expr');
+
+	// --- the rewriter -----------------------------------------------------
+
+	check('tagRefs.rewriteIdent',
+		rw('Tank_Level + 1', {Tank_Level: 'Vessel_Level'}) === 'Vessel_Level + 1');
+	check('tagRefs.rewriteKeepsDotfield',
+		rw('Tank_Level.MaxEU * 2', {Tank_Level: 'New'}) === 'New.MaxEU * 2');
+	check('tagRefs.rewriteSkipsDottedOther',
+		rw('Other.Tank_Level', {Tank_Level: 'New'}) === 'Other.Tank_Level');
+	check('tagRefs.rewriteRespectsWordBoundary',
+		rw('NOT Tank_LevelOther', {Tank_Level: 'New'}) === 'NOT Tank_LevelOther');
+	check('tagRefs.rewriteQualified',
+		rw('InTouch:Tank_Level', {Tank_Level: 'New'}) === 'InTouch:New');
+	check('tagRefs.rewriteSkipsComment',
+		rw('{ Tank_Level } Pump1_Run', {Tank_Level: 'New'}) ===
+		'{ Tank_Level } Pump1_Run');
+	check('tagRefs.rewriteSkipsString',
+		rw('ShowWindow("Tank_Level")', {Tank_Level: 'New'}, 'script') ===
+		'ShowWindow("Tank_Level")');
+	check('tagRefs.rewriteSkipsFunctionName',
+		rw('Abs(Tank_Level)', {Abs: 'Nope'}) === 'Abs(Tank_Level)');
+	check('tagRefs.rewriteCaseInsensitive',
+		rw('tank_level', {Tank_Level: 'New'}) === 'New');
+	check('tagRefs.rewriteSkipsSystemTag',
+		rw('_AccessLevel >= 500', {_AccessLevel: 'Nope'}) === '_AccessLevel >= 500');
+
+	// Two tags trading places: the map is applied in one pass, so neither
+	// replacement can be rewritten again by the other.
+	check('tagRefs.rewriteSimultaneousSwap',
+		rw('Tank_Level + Pump1_Run', {Tank_Level: 'Pump1_Run', Pump1_Run: 'Tank_Level'}) ===
+		'Pump1_Run + Tank_Level',
+		rw('Tank_Level + Pump1_Run', {Tank_Level: 'Pump1_Run', Pump1_Run: 'Tank_Level'}));
+
+	var script = 'DIM Count AS Analog;\nCount = Tank_Level;';
+	check('tagRefs.rewriteSkipsLocal',
+		rw(script, {Count: 'Nope', Tank_Level: 'New'}, 'script') ===
+		'DIM Count AS Analog;\nCount = New;',
+		rw(script, {Count: 'Nope', Tank_Level: 'New'}, 'script'));
+	check('tagRefs.rewriteSkipsDimKeywords',
+		rw('DIM X AS Analog;', {Dim: 'Nope', As: 'Nope', Analog: 'Nope'}, 'script') ===
+		'DIM X AS Analog;');
+
+	check('tagRefs.rewriteLinkIndirectBothArgs',
+		rw('LinkIndirectTag("FP_Level", "Tank_Level");',
+			{FP_Level: 'FP_Flow', Tank_Level: 'New'}, 'script') ===
+		'LinkIndirectTag("FP_Flow", "New");');
+	check('tagRefs.rewriteTrendSetPenOnlyPen',
+		rw('TrendSetPen("Tank_Level", "Tank_Level");', {Tank_Level: 'New'},
+			'script') === 'TrendSetPen("Tank_Level", "New");',
+		rw('TrendSetPen("Tank_Level", "Tank_Level");', {Tank_Level: 'New'}, 'script'));
+
+	var bad = HmiTagRefs.rewriteText('{ unterminated Tank_Level',
+		map({Tank_Level: 'New'}), 'expr');
+	check('tagRefs.rewriteRefusesBadLex',
+		bad.error != null && bad.text === '{ unterminated Tank_Level' &&
+		bad.count === 0, bad.error);
+
+	// --- bare name fields -------------------------------------------------
+
+	check('tagRefs.rewriteNameField',
+		HmiTagRefs.rewriteName('Tank_Level', map({Tank_Level: 'New'})).text === 'New');
+	check('tagRefs.rewriteNameKeepsField',
+		HmiTagRefs.rewriteName('Tank_Level.Acked', map({Tank_Level: 'New'})).text ===
+		'New.Acked');
+	check('tagRefs.rewriteNameRefusesJunk',
+		HmiTagRefs.rewriteName('1 + 2', map({Tank_Level: 'New'})).error != null);
+
+	// --- the locals prescan agrees with the parser ------------------------
+
+	var dimScript = 'DIM A, B AS Analog;\nDIM C AS Message;\nA = 1;';
+	var locals = HmiTagRefs.localsIn(dimScript);
+	var compiled = HmiExpr.compile(dimScript, {project: project, mode: 'script'});
+	var declared = {};
+	var body = (compiled.ast != null) ? compiled.ast.body : null;
+
+	for (var i = 0; body != null && i < body.length; i++)
+	{
+		var node = body[i];
+
+		for (var n = 0; node.type === 'dim' && node.names != null &&
+			n < node.names.length; n++)
+		{
+			declared[node.names[n].key] = true;
+		}
+	}
+
+	var same = true;
+
+	for (var k in declared)
+	{
+		same = same && locals[k] === true;
+	}
+
+	for (var l in locals)
+	{
+		same = same && declared[l] === true;
+	}
+
+	check('tagRefs.scanDimMatchesParser', same && locals['a'] === true &&
+		locals['c'] === true, Object.keys(locals).join(',') + ' vs ' +
+		Object.keys(declared).join(','));
+
+	// --- names a field uses -----------------------------------------------
+
+	var used = [];
+	HmiTagRefs.namesIn('Tank_Level + Pump1_Run * Tank_Level', 'expr',
+		function(n) { used.push(n); });
+	check('tagRefs.namesIn', used.join(',') === 'Tank_Level,Pump1_Run,Tank_Level',
+		used.join(','));
+
+	var literals = [];
+	HmiTagRefs.namesIn('LinkIndirectTag("FP_Level", "Tank_Level");', 'script',
+		function(n) { literals.push(n); });
+	check('tagRefs.namesInLiterals', literals.join(',') === 'FP_Level,Tank_Level',
+		literals.join(','));
+
+	var systemNames = [];
+	HmiTagRefs.namesIn('_AckAll', 'expr', function(n) { systemNames.push(n); });
+	check('tagRefs.namesInSkipsSystem', systemNames.length === 0);
+
+	// --- the name rules ---------------------------------------------------
+
+	check('tagRefs.checkNameKnown', HmiTagRefs.checkName(project, 'Tank_Level') == null);
+	check('tagRefs.checkNameEmpty', HmiTagRefs.checkName(project, '') == null);
+	check('tagRefs.checkNameGrammar',
+		(HmiTagRefs.checkName(project, '2Bad') || '').indexOf('start with') > 0);
+	check('tagRefs.checkNameLength',
+		(HmiTagRefs.checkName(project, new Array(66).join('a')) || '')
+			.indexOf('at most') > 0);
+	check('tagRefs.checkNameSystem',
+		(HmiTagRefs.checkName(project, '_AckAll') || '').indexOf('system tag') > 0);
+	check('tagRefs.checkNameUnknown',
+		(HmiTagRefs.checkName(project, 'Nope') || '').indexOf('No tag named') === 0);
+	check('tagRefs.checkNameRuntime',
+		HmiTagRefs.checkName(project, '$Pending') == null);
+};
+
+/** The scope rules and the one-undo guarantee, against a real graph. */
+HmiSelfTest.testTagRefScope = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	ui.hmiProject = HmiSelfTest.sampleProject();
+	ui.hmiProject.addTag(HmiProject.createTag('Vessel_Level', 'MemoryReal'));
+	ui.hmiProject.addTag(HmiProject.createTag('Pump2_Run', 'MemoryDiscrete'));
+
+	HmiSelfTest.resetGraph(ui);
+
+	var graph = ui.editor.graph;
+	var model = graph.getModel();
+	var group = null;
+	var child = null;
+	var outside = null;
+
+	model.beginUpdate();
+
+	try
+	{
+		group = graph.insertVertex(graph.getDefaultParent(), null, 'Group',
+			20, 20, 200, 120);
+		child = graph.insertVertex(group, null, 'Child', 10, 10, 60, 40);
+		outside = graph.insertVertex(graph.getDefaultParent(), null, 'Outside',
+			260, 20, 60, 40);
+	}
+	finally
+	{
+		model.endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, child, {
+		'fillColor.analog': {expr: 'Tank_Level', bands: [
+			{max: 'Tank_Level.MaxEU', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]},
+		'pushbutton': {kind: 'discrete', tag: 'Pump1_Run', action: 'toggle',
+			enableExpr: ''},
+		'pushbutton.action': {onDown: 'Pump1_Run = 1;', whileDown: '',
+			onUp: 'LinkIndirectTag("FP_Level", "Tank_Level");',
+			everyMs: 'Tank_Level'}
+	});
+	HmiProject.setCellLinks(graph, outside, {
+		'percentFill.vertical': {expr: 'Pump1_Run', atMin: '0',
+			atMax: 'Tank_Level.MaxEU', pctMin: '0', pctMax: 'Tank_Level'},
+		'trend': {name: 'T1', title: '', spanSec: 600, sampleMs: 1000,
+			refreshMs: 1000, gridColor: '#dde3e8',
+			pens: [{tag: 'Tank_Level', min: '', max: '', color: '#000000'}]}
+	});
+
+	// --- scope -----------------------------------------------------------
+
+	graph.clearSelection();
+	var page = HmiTagRefs.scope(ui);
+	check('tagRefs.scopePage', page.kind === 'page' &&
+		mxUtils.indexOf(page.cells, child) >= 0 &&
+		mxUtils.indexOf(page.cells, outside) >= 0);
+
+	var names = HmiTagRefs.collect(ui.hmiProject, page, graph);
+	var byName = {};
+
+	for (var i = 0; i < names.length; i++)
+	{
+		byName[names[i].name] = names[i];
+	}
+
+	check('tagRefs.collectsNames', byName['Tank_Level'] != null &&
+		byName['Pump1_Run'] != null && byName['FP_Level'] != null,
+		Object.keys(byName).join(','));
+	check('tagRefs.collectsUnknownToo', byName['FP_Level'].known === false);
+	check('tagRefs.collectCounts', byName['Tank_Level'].uses >= 6,
+		'uses ' + byName['Tank_Level'].uses);
+	check('tagRefs.collectSkipsSystem', byName['_AckAll'] == null);
+
+	graph.setSelectionCell(group);
+	var selected = HmiTagRefs.scope(ui);
+	check('tagRefs.scopeSelectionDescends', selected.kind === 'selection' &&
+		mxUtils.indexOf(selected.cells, child) >= 0 &&
+		mxUtils.indexOf(selected.cells, outside) < 0);
+	graph.clearSelection();
+
+	// --- apply ------------------------------------------------------------
+
+	var before = ui.editor.undoManager.history.length;
+	var res = HmiTagRefs.apply(ui, page, {'tank_level': 'Vessel_Level',
+		'pump1_run': 'Pump2_Run'});
+
+	check('tagRefs.applyIsOneUndo',
+		ui.editor.undoManager.history.length === before + 1,
+		'history grew by ' +
+			(ui.editor.undoManager.history.length - before));
+	check('tagRefs.applyCountsCells', res.cells === 2 && res.sites >= 8,
+		res.cells + ' cells, ' + res.sites + ' sites');
+
+	var childLinks = HmiProject.getCellLinks(graph, child);
+	var outsideLinks = HmiProject.getCellLinks(graph, outside);
+
+	check('tagRefs.applyRewritesExpr',
+		childLinks['fillColor.analog'].expr === 'Vessel_Level');
+	check('tagRefs.applyRewritesBand',
+		childLinks['fillColor.analog'].bands[0].max === 'Vessel_Level.MaxEU');
+	check('tagRefs.applyRewritesTagField',
+		childLinks['pushbutton'].tag === 'Pump2_Run');
+	check('tagRefs.applyRewritesScript',
+		childLinks['pushbutton.action'].onDown === 'Pump2_Run = 1;',
+		childLinks['pushbutton.action'].onDown);
+	check('tagRefs.applyRewritesScriptLiteral',
+		childLinks['pushbutton.action'].onUp ===
+		'LinkIndirectTag("FP_Level", "Vessel_Level");',
+		childLinks['pushbutton.action'].onUp);
+	check('tagRefs.applyRewritesEveryMs',
+		childLinks['pushbutton.action'].everyMs === 'Vessel_Level');
+	check('tagRefs.applyRewritesRangeBound',
+		outsideLinks['percentFill.vertical'].pctMax === 'Vessel_Level' &&
+		outsideLinks['percentFill.vertical'].atMax === 'Vessel_Level.MaxEU');
+	check('tagRefs.applyRewritesPen',
+		outsideLinks['trend'].pens[0].tag === 'Vessel_Level');
+
+	ui.actions.get('undo').funct();
+	var undone = HmiProject.getCellLinks(graph, child);
+	check('tagRefs.applyUndoRestores',
+		undone['fillColor.analog'].expr === 'Tank_Level' &&
+		undone['pushbutton'].tag === 'Pump1_Run',
+		undone['fillColor.analog'].expr);
+
+	// --- a swap, and a field that cannot be read --------------------------
+
+	HmiProject.setCellLinks(graph, child, {
+		'visibility': {expr: 'Tank_Level + Pump1_Run', sense: 'visible'},
+		'blink': {expr: '{ broken Tank_Level', rateMs: '500', attrs: ['fill'],
+			fill: '#FF0000', line: '#FFFFFF', text: '#000000', blank: false}
+	});
+
+	var swap = HmiTagRefs.apply(ui, {cells: [child]},
+		{'tank_level': 'Pump1_Run', 'pump1_run': 'Tank_Level'});
+	var swapped = HmiProject.getCellLinks(graph, child);
+
+	check('tagRefs.applySimultaneous',
+		swapped['visibility'].expr === 'Pump1_Run + Tank_Level',
+		swapped['visibility'].expr);
+	check('tagRefs.applySkipsBadLex',
+		swapped['blink'].expr === '{ broken Tank_Level' &&
+		swap.skipped.length === 1,
+		swap.skipped.length + ' skipped');
+
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = saved;
+};
+
+/**
+ * Tags used only as a range bound must still be subscribed: without that the
+ * animation reads whatever the driver happens to hold.
+ */
+HmiSelfTest.testRangeDeps = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Range_Max', 'MemoryReal'));
+	project.addTag(HmiProject.createTag('Pen_Only', 'MemoryReal'));
+	project.addTag(HmiProject.createTag('Script_Only', 'MemoryDiscrete'));
+	ui.hmiProject = project;
+
+	HmiSelfTest.resetGraph(ui);
+
+	var graph = ui.editor.graph;
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Bar',
+			20, 20, 60, 120);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, cell, {
+		'percentFill.vertical': {expr: 'Tank_Level', atMin: '0',
+			atMax: 'Range_Max', pctMin: '0', pctMax: '100'},
+		'pushbutton.action': {onDown: 'Script_Only = 1;', whileDown: '',
+			onUp: '', everyMs: '1000'},
+		'trend': {name: 'T9', title: '', spanSec: 600, sampleMs: 1000,
+			refreshMs: 1000, gridColor: '#dde3e8',
+			pens: [{tag: 'Pen_Only', min: '', max: '', color: '#000000'}]}
+	});
+
+	var runtime = new HmiRuntime({graph: graph, project: project,
+		driver: null, scripts: []});
+	runtime.bind();
+
+	var paths = runtime.subscriptionPaths();
+
+	check('runtime.subscribesRangeBound',
+		mxUtils.indexOf(paths, 'Range_Max') >= 0, paths.join(','));
+	check('runtime.subscribesExpr',
+		mxUtils.indexOf(paths, 'Tank_Level') >= 0);
+	check('runtime.scriptTagSubscribedNotIndexed',
+		mxUtils.indexOf(paths, 'Script_Only') >= 0 &&
+		runtime.reverseIndex['Script_Only'] == null);
+	check('runtime.trendPensNotIndexed',
+		runtime.reverseIndex['Pen_Only'] == null);
+
+	var deps = runtime.dependencies({tag: 'Tank_Level', atMin: '0',
+		atMax: 'Range_Max', travelMin: '0', travelMax: 'Range_Max'},
+		'slider.vertical');
+	check('runtime.sliderBoundsAreDeps',
+		mxUtils.indexOf(deps, 'Range_Max') >= 0 &&
+		mxUtils.indexOf(deps, 'Tank_Level') >= 0, deps.join(','));
+
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = saved;
+};
+
+/**
+ * Edit > Find/Replace Tag References, and the single tag editor.
+ *
+ * Both dialogs are driven detached, the way the Tag Dictionary's tests drive
+ * theirs: showing them for real stacks modal windows, and the focus the last
+ * one takes outlives the test (testPanelFocus then finds the focus somewhere
+ * else entirely). One open-and-close pass below covers the entry point.
+ */
+HmiSelfTest.testFindReplace = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Vessel_Level', 'MemoryReal'));
+	ui.hmiProject = project;
+
+	HmiSelfTest.resetGraph(ui);
+
+	var graph = ui.editor.graph;
+	var cell = null;
+
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		cell = graph.insertVertex(graph.getDefaultParent(), null, 'Find',
+			20, 20, 80, 40);
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	var links = function()
+	{
+		HmiProject.setCellLinks(graph, cell, {
+			'fillColor.analog': {expr: 'Tank_Level', bands: [
+				{max: '50', color: '#00CC00'}, {max: null, color: '#CC0000'}]},
+			'pushbutton': {kind: 'discrete', tag: 'Pump1_Run',
+				action: 'toggle', enableExpr: ''}
+		});
+	};
+
+	links();
+	graph.clearSelection();
+
+	// --- the menu item ----------------------------------------------------
+	// Asserting the action exists is not enough: a key of the wrong form
+	// renders nothing at all.
+
+	var labels = [];
+	var fake = {showDisabled: true, hideShortcuts: true,
+		addItem: function(label)
+		{
+			labels.push(label);
+
+			return document.createElement('div');
+		},
+		addSeparator: function() { labels.push('-'); },
+		addCheckmark: function() {}};
+
+	try
+	{
+		ui.menus.get('edit').funct(fake, null);
+	}
+	catch (e)
+	{
+		// Only our own item matters here.
+	}
+
+	check('findReplace.inEditMenu',
+		mxUtils.indexOf(labels, mxResources.get('hmiFindReplaceTags') + '...') >= 0,
+		labels.join(' | ').substring(0, 100));
+	check('findReplace.actionRegistered',
+		ui.actions.get('hmiFindReplaceTags') != null);
+
+	// --- the dialog -------------------------------------------------------
+	// The dialog host is stubbed for the whole test: these dialogs are driven
+	// detached, and a Save would otherwise hide whichever dialog the editor
+	// really has open -- which takes the focus the deferred focus assertions
+	// at the end of the suite are watching.
+
+	var realShow = ui.showDialog;
+	var realHide = ui.hideDialog;
+	var shown = null;
+	var dismiss = null;
+
+	ui.showDialog = function(div, w, h, modal, closable, onClose)
+	{
+		shown = div;
+		dismiss = onClose;
+	};
+	ui.hideDialog = function() { shown = null; };
+
+	try
+	{
+
+		var dlg = new HmiFindReplaceDialog(ui);
+		dlg.init();
+
+		var box = dlg.container;
+		var field = function(name)
+		{
+			return box.querySelector('[data-hmi-field="' + name + '"]');
+		};
+		var rowFor = function(name)
+		{
+			return box.querySelector('[data-hmi-tag="' + name + '"]');
+		};
+		var inputFor = function(name)
+		{
+			return rowFor(name).querySelector('[data-hmi-field="replacement"]');
+		};
+		var statusFor = function(name)
+		{
+			return rowFor(name).querySelector('[data-hmi-field="refStatus"]').innerText;
+		};
+
+		check('findReplace.listsNames', rowFor('Tank_Level') != null &&
+			rowFor('Pump1_Run') != null);
+		check('findReplace.scopeHintPage',
+			field('scopeHint').innerText.indexOf('Nothing is selected') === 0,
+			field('scopeHint').innerText);
+		check('findReplace.countsUses',
+			rowFor('Tank_Level').querySelector('[data-hmi-field="refUses"]')
+				.innerText === '1');
+
+		graph.setSelectionCell(cell);
+		var selected = new HmiFindReplaceDialog(ui);
+		selected.init();
+		check('findReplace.scopeHintSelection',
+			selected.container.querySelector('[data-hmi-field="scopeHint"]')
+				.innerText.indexOf('1 selected object') > 0,
+			selected.container.querySelector('[data-hmi-field="scopeHint"]').innerText);
+		graph.clearSelection();
+
+		// --- replacing text in the names --------------------------------------
+
+		field('findText').value = 'Tank';
+		field('replaceText').value = 'Vessel';
+		field('fillAll').click();
+
+		check('findReplace.fillFromText',
+			inputFor('Tank_Level').value === 'Vessel_Level',
+			inputFor('Tank_Level').value);
+		check('findReplace.fillLeavesOthers', inputFor('Pump1_Run').value === '');
+		check('findReplace.fillStatusReady', statusFor('Tank_Level') === 'ready',
+			statusFor('Tank_Level'));
+
+		field('clearAll').click();
+		check('findReplace.clearEmptiesFields',
+			inputFor('Tank_Level').value === '' && statusFor('Tank_Level') === '');
+
+		field('matchCase').checked = true;
+		field('findText').value = 'tank';
+		field('fillAll').click();
+		check('findReplace.matchCase', inputFor('Tank_Level').value === '',
+			inputFor('Tank_Level').value);
+		field('matchCase').checked = false;
+
+		// --- what is valid ----------------------------------------------------
+
+		inputFor('Tank_Level').value = 'Brand_New';
+		inputFor('Tank_Level').dispatchEvent(new Event('input'));
+		check('findReplace.marksUnknown',
+			statusFor('Tank_Level').indexOf('new') === 0, statusFor('Tank_Level'));
+
+		inputFor('Pump1_Run').value = '2Bad';
+		inputFor('Pump1_Run').dispatchEvent(new Event('input'));
+		check('findReplace.marksInvalid',
+			inputFor('Pump1_Run').classList.contains('hmiInvalid'));
+
+		check('findReplace.applyRefusesInvalid', dlg.apply() == null &&
+			HmiProject.getCellLinks(graph, cell)['pushbutton'].tag === 'Pump1_Run',
+			field('message').innerText);
+
+		inputFor('Pump1_Run').value = '';
+		inputFor('Pump1_Run').dispatchEvent(new Event('input'));
+
+		// --- the tag editor creates the tag the row wants ---------------------
+
+		var created = null;
+		var editor = new HmiTagEditorDialog(ui, 'Brand_New', function(result)
+		{
+			created = result;
+		});
+		editor.init();
+
+		check('tagEditor.createMode', editor.creating === true &&
+			editor.saveButton.disabled === false &&
+			editor.container.querySelector('[data-hmi-prop="name"]').value ===
+				'Brand_New');
+		check('tagEditor.guessedType',
+			editor.draft.type === 'MemoryReal', editor.draft.type);
+
+		editor.container.querySelector('[data-hmi-prop="comment"]').value = 'Made here';
+		editor.container.querySelector('[data-hmi-prop="comment"]')
+			.dispatchEvent(new Event('blur'));
+		editor.save();
+
+		check('tagEditor.savesNewTag', project.getTag('Brand_New') != null &&
+			project.getTag('Brand_New').comment === 'Made here' &&
+			created != null && created.saved === true);
+
+		var rowObj = function(name)
+		{
+			for (var r = 0; r < dlg.rows.length; r++)
+			{
+				if (dlg.rows[r].name === name)
+				{
+					return dlg.rows[r];
+				}
+			}
+
+			return null;
+		};
+
+		dlg.validateRow(rowObj('Tank_Level'));
+		check('findReplace.rowValidAfterCreate',
+			statusFor('Tank_Level') === 'ready', statusFor('Tank_Level'));
+
+		// --- validate ---------------------------------------------------------
+
+		var clean = dlg.validate();
+		check('findReplace.validateClean', clean.bad === 0 &&
+			clean.problems.length === 0, field('message').innerText);
+
+		// A replacement that is a local variable in a script the reference sits
+		// in would read the variable, not the tag, and nothing else says so.
+		HmiProject.setCellLinks(graph, cell, {
+			'fillColor.analog': {expr: 'Tank_Level', bands: [
+				{max: '50', color: '#00CC00'}, {max: null, color: '#CC0000'}]},
+			'pushbutton.action': {onDown: 'DIM Vessel_Level AS Analog;\n' +
+				'Vessel_Level = Tank_Level;', whileDown: '', onUp: '',
+				everyMs: '1000'}
+		});
+
+		var collide = new HmiFindReplaceDialog(ui);
+		collide.init();
+		var collideInput = collide.container.querySelector(
+			'[data-hmi-tag="Tank_Level"] [data-hmi-field="replacement"]');
+		collideInput.value = 'Vessel_Level';
+		collideInput.dispatchEvent(new Event('input'));
+
+		var problems = collide.problems(collide.map());
+		var sawLocal = false;
+
+		for (var p = 0; p < problems.length; p++)
+		{
+			sawLocal = sawLocal ||
+				problems[p].message.indexOf('local variable') > 0;
+		}
+
+		check('findReplace.validateFlagsLocalCollision', sawLocal,
+			problems.length + ' problems');
+
+		// The dry run must not have touched the cell.
+		check('findReplace.validateDoesNotWrite',
+			HmiProject.getCellLinks(graph, cell)['fillColor.analog'].expr ===
+			'Tank_Level');
+
+		// --- apply ------------------------------------------------------------
+
+		links();
+		dlg.scope = HmiTagRefs.scope(ui);
+		dlg.reload();
+		inputFor('Tank_Level').value = 'Brand_New';
+		inputFor('Tank_Level').dispatchEvent(new Event('input'));
+
+		var before = ui.editor.undoManager.history.length;
+		var res = dlg.apply();
+
+		check('findReplace.applyReplaces', res != null && res.sites === 1 &&
+			HmiProject.getCellLinks(graph, cell)['fillColor.analog'].expr ===
+			'Brand_New');
+		check('findReplace.applyIsOneUndo',
+			ui.editor.undoManager.history.length === before + 1,
+			'history grew by ' +
+				(ui.editor.undoManager.history.length - before));
+		check('findReplace.rowsRebuilt', rowFor('Brand_New') != null &&
+			rowFor('Tank_Level') == null);
+		check('findReplace.fieldsCleared', inputFor('Brand_New').value === '');
+		check('findReplace.reportsWhatItDid',
+			field('message').innerText.indexOf('Replaced 1 reference') === 0,
+			field('message').innerText);
+
+		check('findReplace.applyNeedsSomething', dlg.apply() == null &&
+			field('message').innerText.indexOf('Nothing to replace') === 0,
+			field('message').innerText);
+
+		// --- the editor on an existing tag ------------------------------------
+
+		var closed = null;
+		var edit = new HmiTagEditorDialog(ui, 'Vessel_Level', function(result)
+		{
+			closed = result;
+		});
+		edit.init();
+
+		var prop = function(name)
+		{
+			return edit.container.querySelector('[data-hmi-prop="' + name + '"]');
+		};
+
+		check('tagEditor.prefilled', prop('name').value === 'Vessel_Level' &&
+			prop('name').getAttribute('readonly') != null);
+		check('tagEditor.saveDisabledUntilEdit',
+			edit.saveButton.disabled === true);
+
+		// The shared form commits on blur, never on assignment.
+		prop('comment').value = 'From the editor';
+		prop('comment').dispatchEvent(new Event('blur'));
+
+		check('tagEditor.enablesSaveOnEdit', edit.saveButton.disabled === false);
+		check('tagEditor.editsADraft',
+			project.getTag('Vessel_Level').comment !== 'From the editor');
+		check('tagEditor.nameStaysWhenEditing',
+			(function()
+			{
+				edit.formRename(edit.draft, 'Something_Else');
+
+				return edit.draft.name === 'Vessel_Level';
+			})());
+
+		var revision = project.revision;
+		check('tagEditor.savesEdit', edit.save() === true &&
+			project.getTag('Vessel_Level').comment === 'From the editor' &&
+			project.revision > revision && closed != null &&
+			closed.saved === true);
+
+		// A name that is already taken is refused, with the reason shown.
+		var clash = new HmiTagEditorDialog(ui, 'Clash_Tag', function() {});
+		clash.init();
+		clash.formRename(clash.draft, 'Tank_Level');
+		check('tagEditor.refusesExistingName',
+			clash.draft.name === 'Clash_Tag' &&
+			clash.error.innerText.indexOf('already exists') > 0,
+			clash.error.innerText);
+
+		// --- the save prompt, and the entry point -----------------------------
+
+			var answer = null;
+			HmiDialogs.showSaveConfirm(ui, 'Tag', 'Save?', function(what)
+			{
+				answer = what;
+			});
+
+			check('tagEditor.promptHasThreeAnswers', shown != null &&
+				shown.querySelector('[data-hmi-field="confirmSave"]') != null &&
+				shown.querySelector('[data-hmi-field="confirmDiscard"]') != null &&
+				shown.querySelector('[data-hmi-field="confirmCancel"]') != null);
+
+			shown.querySelector('[data-hmi-field="confirmDiscard"]').click();
+			check('tagEditor.promptAnswers', answer === 'discard');
+
+			// Dismissing the prompt means Cancel, never a silent discard.
+			answer = null;
+			HmiDialogs.showSaveConfirm(ui, 'Tag', 'Save?', function(what)
+			{
+				answer = what;
+			});
+			dismiss();
+			check('tagEditor.promptDismissCancels', answer === 'cancel');
+
+			// Closing a dirty editor asks before it closes.
+			var dirty = new HmiTagEditorDialog(ui, 'Vessel_Level', function() {});
+			dirty.init();
+			dirty.formChanged();
+			dirty.close();
+			check('tagEditor.closePromptsWhenDirty', shown != null &&
+				shown.querySelector('[data-hmi-field="confirmSave"]') != null);
+			shown.querySelector('[data-hmi-field="confirmCancel"]').click();
+
+			// A clean editor closes without asking.
+			shown = null;
+			var clean2 = new HmiTagEditorDialog(ui, 'Vessel_Level', function() {});
+			clean2.init();
+			clean2.close();
+			check('tagEditor.closeIsSilentWhenClean', shown == null);
+
+			// The menu action opens this dialog and no other.
+			shown = null;
+			ui.actions.get('hmiFindReplaceTags').funct();
+			check('findReplace.actionOpensDialog', shown != null &&
+				shown.querySelector('[data-hmi-field="apply"]') != null &&
+				shown.querySelector('[data-hmi-field="validate"]') != null);
+	}
+	finally
+	{
+		ui.showDialog = realShow;
+		ui.hideDialog = realHide;
+	}
+
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = saved;
+};
+
+/**
+ * A rename reaches the pages that are not showing. Those cells are not in the
+ * model, so they are written through the page's own root -- the one part of a
+ * rename that Undo cannot reverse, which is why the dialog says so.
+ */
+HmiSelfTest.testRenameOtherPages = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var savedPage = ui.currentPage;
+	var project = HmiSelfTest.sampleProject();
+	ui.hmiProject = project;
+
+	HmiSelfTest.resetGraph(ui);
+
+	var here = ui.currentPage;
+	var other = HmiSelfTest.makePage(ui, 'Elsewhere', {
+		'fillColor.analog': {expr: 'Tank_Level * 2', bands: [
+			{max: 'Tank_Level.MaxEU', color: '#00CC00'},
+			{max: null, color: '#CC0000'}]}
+	});
+
+	ui.selectPage(here);
+
+	var dlg = new HmiTagDialog(ui);
+	dlg.init();
+	dlg.selected = project.getTag('Tank_Level');
+	dlg.rename(dlg.selected, 'Far_Level');
+
+	// Read it back the way the file is written: from the page's own root.
+	var found = null;
+
+	for (var i = 0; other.root != null && i < other.root.children.length; i++)
+	{
+		var layer = other.root.children[i];
+
+		for (var c = 0; layer.children != null && c < layer.children.length; c++)
+		{
+			var links = HmiTagRefs.rawLinks(layer.children[c]);
+
+			if (links != null && links['fillColor.analog'] != null)
+			{
+				found = links['fillColor.analog'];
+			}
+		}
+	}
+
+	check('tagDialog.renameReachesOtherPages', found != null &&
+		found.expr === 'Far_Level * 2' &&
+		found.bands[0].max === 'Far_Level.MaxEU',
+		(found != null) ? found.expr : 'no cell found');
+	check('tagDialog.renameMarksOtherPages', other.needsUpdate === true);
+	check('tagDialog.renameNoteNamesOtherPages',
+		dlg.noteDiv.innerText.indexOf('other page') > 0,
+		dlg.noteDiv.innerText);
+
+	ui.selectPage(here);
+	ui.removePage(other);
+	ui.selectPage((savedPage != null) ? savedPage : here);
+	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = saved;
 };
