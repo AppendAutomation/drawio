@@ -42,6 +42,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testLocals();
 		HmiSelfTest.testQuickFunctions();
 		HmiSelfTest.testProjectRoundTrip();
+		HmiSelfTest.testSql();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFilenames(ui);
@@ -6656,6 +6657,275 @@ HmiSelfTest.testCommsDriver = function(ui)
 	};
 
 	window.setTimeout(poll, 100);
+};
+
+// ------------------------------------------- SQL database access (HmiSql)
+
+/** A project with one of everything the SQL feature adds. */
+HmiSelfTest.sqlProject = function()
+{
+	var p = HmiSelfTest.sampleProject();
+
+	var plant = HmiSql.newDataSource('Plant');
+	plant.host = 'db.example';
+	plant.port = '1433';
+	plant.database = 'Batches';
+	plant.user = 'hmi';
+	plant.password = 'hmi1:wrapped-looking-text';
+	plant.options.legacyTls = true;
+	plant.options.trustServerCertificate = false;
+	p.dataSources.push(plant);
+
+	var local = HmiSql.newDataSource('Local');
+	local.provider = 'sqlite';
+	local.file = 'batches.db';
+	local.folder = 'documents';
+	p.dataSources.push(local);
+
+	var list = HmiSql.newBindList('BatchRow');
+	list.items.push({tag: 'Tank_Level', field: '', column: 'Level', delim: ''});
+	list.items.push({tag: 'Recipe_Name', field: '', column: 'Recipe', delim: "''"});
+	list.items.push({tag: 'Tank_Level', field: 'InAlarm', column: 'InAlarm', delim: ''});
+	p.bindLists.push(list);
+
+	var template = HmiSql.newTemplate('BatchLog');
+	template.columns.push({name: 'Recipe', type: 'text', length: '80', scale: '',
+		index: 'nonunique', allowNull: false});
+	template.columns.push({name: 'Level', type: 'number', length: '', scale: '',
+		index: 'none', allowNull: true});
+	template.columns.push({name: 'Amount', type: 'decimal', length: '10', scale: '3',
+		index: 'none', allowNull: true});
+	p.tableTemplates.push(template);
+
+	var query = HmiSql.newQuery('Recent');
+	query.sql = 'SELECT Recipe, Level\nFROM BatchLog\nORDER BY Stamp DESC';
+	p.queries.push(query);
+
+	return p;
+};
+
+/**
+ * The project model: the four lists must survive the file, and the rules that
+ * the dialog, the command line and Validate all ask must agree.
+ */
+HmiSelfTest.testSql = function()
+{
+	var doc = mxUtils.createXmlDocument();
+	var p1 = HmiSelfTest.sqlProject();
+	var x1 = mxUtils.getXml(p1.toXml(doc));
+	var p2 = HmiProject.fromXml(mxUtils.parseXml(x1).documentElement);
+	var x2 = mxUtils.getXml(p2.toXml(doc));
+
+	HmiSelfTest.check('sql.roundTrip.stable', x1 === x2, '\n  first=' + x1 + '\n  second=' + x2);
+	HmiSelfTest.check('sql.roundTrip.counts', p2.dataSources.length === 2 &&
+		p2.bindLists.length === 1 && p2.tableTemplates.length === 1 && p2.queries.length === 1,
+		'got ' + p2.dataSources.length + '/' + p2.bindLists.length + '/' +
+		p2.tableTemplates.length + '/' + p2.queries.length);
+
+	var plant = HmiSql.dataSource(p2, 'plant');
+	HmiSelfTest.check('sql.roundTrip.lookupCaseInsensitive', plant != null);
+	HmiSelfTest.check('sql.roundTrip.dataSource', plant != null && plant.host === 'db.example' &&
+		plant.port === '1433' && plant.database === 'Batches' && plant.user === 'hmi');
+	HmiSelfTest.check('sql.roundTrip.password',
+		plant != null && plant.password === 'hmi1:wrapped-looking-text');
+	HmiSelfTest.check('sql.roundTrip.options', plant != null && plant.options.legacyTls === true &&
+		plant.options.trustServerCertificate === false && plant.options.encrypt === false);
+	HmiSelfTest.check('sql.roundTrip.sqlite', HmiSql.dataSource(p2, 'Local') != null &&
+		HmiSql.dataSource(p2, 'Local').file === 'batches.db');
+	HmiSelfTest.check('sql.roundTrip.folder',
+		HmiSql.dataSource(p2, 'Local').folder === 'documents');
+
+	// The default folder writes no attribute, so an older file still loads
+	var appData = HmiSql.newDataSource('App');
+	appData.provider = 'sqlite';
+	appData.file = 'a.db';
+	var one = new HmiProject();
+	one.dataSources.push(appData);
+	var xa = mxUtils.getXml(one.toXml(doc));
+	HmiSelfTest.check('sql.defaultFolder.noAttribute', xa.indexOf('folder=') < 0, xa);
+	HmiSelfTest.check('sql.defaultFolder.loadsAsAppData',
+		HmiProject.fromXml(mxUtils.parseXml(xa).documentElement).dataSources[0].folder === 'appdata');
+
+	// Every list's items would come back if the nodes were asked of the
+	// project rather than of their own list
+	var list = HmiSql.bindList(p2, 'BatchRow');
+	HmiSelfTest.check('sql.roundTrip.bindItems', list != null && list.items.length === 3,
+		'got ' + ((list != null) ? list.items.length : 'none'));
+	HmiSelfTest.check('sql.roundTrip.bindField', list != null && list.items[2].field === 'InAlarm');
+	HmiSelfTest.check('sql.roundTrip.bindDelim', list != null && list.items[1].delim === "''");
+
+	var template = HmiSql.tableTemplate(p2, 'BatchLog');
+	HmiSelfTest.check('sql.roundTrip.columns', template != null && template.columns.length === 3);
+	HmiSelfTest.check('sql.roundTrip.column', template != null && template.columns[0].type === 'text' &&
+		template.columns[0].length === '80' && template.columns[0].index === 'nonunique' &&
+		template.columns[0].allowNull === false);
+	HmiSelfTest.check('sql.roundTrip.scale', template != null && template.columns[2].scale === '3');
+	HmiSelfTest.check('sql.roundTrip.allowNullDefault', template != null &&
+		template.columns[1].allowNull === true);
+
+	var query = HmiSql.query(p2, 'Recent');
+	HmiSelfTest.check('sql.roundTrip.query', query != null &&
+		query.sql === 'SELECT Recipe, Level\nFROM BatchLog\nORDER BY Stamp DESC',
+		'got ' + ((query != null) ? JSON.stringify(query.sql) : 'none'));
+
+	// A pretty printed file puts the statement on its own indented line
+	var pretty = x1.replace('<querySql>', '<querySql>\n          ')
+		.replace('</querySql>', '\n        </querySql>');
+	var p3 = HmiProject.fromXml(mxUtils.parseXml(pretty).documentElement);
+	HmiSelfTest.check('sql.prettyPrinted.query', HmiSql.query(p3, 'Recent') != null &&
+		HmiSql.query(p3, 'Recent').sql === HmiSql.query(p2, 'Recent').sql,
+		'got ' + JSON.stringify(HmiSql.query(p3, 'Recent').sql));
+
+	// An empty statement writes no element, so the file still round trips
+	var noSql = new HmiProject();
+	noSql.queries.push(HmiSql.newQuery('Blank'));
+	var xq = mxUtils.getXml(noSql.toXml(doc));
+	HmiSelfTest.check('sql.emptyQuery.noElement', xq.indexOf('querySql') < 0, xq);
+
+	// A name with a stray space in a hand-edited file would never match what
+	// a script asks for
+	var spaced = x1.replace('name="Plant"', 'name=" Plant "');
+	var p4 = HmiProject.fromXml(mxUtils.parseXml(spaced).documentElement);
+	HmiSelfTest.check('sql.load.trimsNames', HmiSql.dataSource(p4, 'Plant') != null);
+
+	HmiSelfTest.check('sql.isEmpty.countsSql', !HmiSelfTest.sqlProject().isEmpty() &&
+		new HmiProject().isEmpty());
+
+	// --- the rules
+	var sources = p1.dataSources;
+	HmiSelfTest.check('sql.rules.goodDataSource',
+		HmiSql.dataSourceProblem(sources, sources[0]) == null,
+		'' + HmiSql.dataSourceProblem(sources, sources[0]));
+	HmiSelfTest.check('sql.rules.unchangedNameIsNotItsOwnClash',
+		HmiSql.nameProblem(sources, sources[0], 'A data source') == null);
+
+	var clash = HmiSql.newDataSource('PLANT');
+	clash.host = 'h';
+	HmiSelfTest.check('sql.rules.duplicateName',
+		HmiSql.dataSourceProblem(sources, clash) != null);
+
+	var noName = HmiSql.newDataSource('');
+	noName.host = 'h';
+	HmiSelfTest.check('sql.rules.needsName', HmiSql.dataSourceProblem(sources, noName) != null);
+
+	var quoted = HmiSql.newDataSource('He said "no"');
+	quoted.host = 'h';
+	HmiSelfTest.check('sql.rules.noQuotesInName',
+		HmiSql.dataSourceProblem(sources, quoted) != null);
+
+	var badProvider = HmiSql.newDataSource('Other');
+	badProvider.provider = 'oracle';
+	badProvider.host = 'h';
+	HmiSelfTest.check('sql.rules.unknownProvider',
+		HmiSql.dataSourceProblem(sources, badProvider) != null);
+
+	var noHost = HmiSql.newDataSource('NoHost');
+	HmiSelfTest.check('sql.rules.needsHost', HmiSql.dataSourceProblem(sources, noHost) != null);
+
+	var badPort = HmiSql.newDataSource('BadPort');
+	badPort.host = 'h';
+	badPort.port = '70000';
+	HmiSelfTest.check('sql.rules.badPort', HmiSql.dataSourceProblem(sources, badPort) != null);
+
+	// The main process refuses a file outside Documents and the application
+	// data folder; the rules say so before Run does
+	var paths = ['/etc/passwd', 'C:\\Windows\\x.db', '../up.db', 'sub/../../up.db'];
+
+	for (var i = 0; i < paths.length; i++)
+	{
+		var file = HmiSql.newDataSource('F' + i);
+		file.provider = 'sqlite';
+		file.file = paths[i];
+		HmiSelfTest.check('sql.rules.filePath.' + i,
+			HmiSql.dataSourceProblem(sources, file) != null, paths[i]);
+	}
+
+	HmiSelfTest.check('sql.normalizeFolder', HmiSql.normalizeFolder('Documents') === 'documents' &&
+		HmiSql.normalizeFolder('nonsense') === 'appdata' && HmiSql.normalizeFolder(null) === 'appdata');
+
+	var okFile = HmiSql.newDataSource('OkFile');
+	okFile.provider = 'sqlite';
+	okFile.file = 'sub/batches.db';
+	HmiSelfTest.check('sql.rules.relativeFileAllowed',
+		HmiSql.dataSourceProblem(sources, okFile) == null,
+		'' + HmiSql.dataSourceProblem(sources, okFile));
+
+	HmiSelfTest.check('sql.rules.goodBindList',
+		HmiSql.bindListProblem(p1.bindLists, p1.bindLists[0]) == null,
+		'' + HmiSql.bindListProblem(p1.bindLists, p1.bindLists[0]));
+
+	var emptyList = HmiSql.newBindList('Empty');
+	HmiSelfTest.check('sql.rules.bindListNeedsItems',
+		HmiSql.bindListProblem(p1.bindLists, emptyList) != null);
+	// A list the dialog has just created is saveable; the project is still
+	// checked without the allowance
+	HmiSelfTest.check('sql.rules.draftBindListIsSaveable',
+		HmiSql.bindListProblem(p1.bindLists, emptyList, true) == null);
+
+	var twice = HmiSql.newBindList('Twice');
+	twice.items.push({tag: 'A', column: 'X'});
+	twice.items.push({tag: 'B', column: 'x'});
+	HmiSelfTest.check('sql.rules.columnTwice',
+		HmiSql.bindListProblem(p1.bindLists, twice) != null);
+
+	var noTag = HmiSql.newBindList('NoTag');
+	noTag.items.push({tag: '', column: 'X'});
+	HmiSelfTest.check('sql.rules.bindItemNeedsTag',
+		HmiSql.bindListProblem(p1.bindLists, noTag) != null);
+
+	HmiSelfTest.check('sql.rules.goodTemplate',
+		HmiSql.templateProblem(p1.tableTemplates, p1.tableTemplates[0]) == null,
+		'' + HmiSql.templateProblem(p1.tableTemplates, p1.tableTemplates[0]));
+
+	var emptyTemplate = HmiSql.newTemplate('Empty');
+	HmiSelfTest.check('sql.rules.templateNeedsColumns',
+		HmiSql.templateProblem(p1.tableTemplates, emptyTemplate) != null);
+	HmiSelfTest.check('sql.rules.draftTemplateIsSaveable',
+		HmiSql.templateProblem(p1.tableTemplates, emptyTemplate, true) == null);
+
+	var badLength = HmiSql.newTemplate('BadLength');
+	badLength.columns.push({name: 'A', type: 'text', length: 'wide', scale: '',
+		index: 'none', allowNull: true});
+	HmiSelfTest.check('sql.rules.badLength',
+		HmiSql.templateProblem(p1.tableTemplates, badLength) != null);
+
+	HmiSelfTest.check('sql.rules.goodQuery',
+		HmiSql.queryProblem(p1.queries, p1.queries[0]) == null);
+
+	var blank = HmiSql.newQuery('Blank');
+	HmiSelfTest.check('sql.rules.queryNeedsSql',
+		HmiSql.queryProblem(p1.queries, blank) != null);
+	HmiSelfTest.check('sql.rules.draftQueryIsSaveable',
+		HmiSql.queryProblem(p1.queries, blank, true) == null);
+	// A draft still has to have a usable name
+	HmiSelfTest.check('sql.rules.draftStillNeedsAName',
+		HmiSql.queryProblem(p1.queries, HmiSql.newQuery(''), true) != null);
+
+	// --- the helpers
+	HmiSelfTest.check('sql.provider.caseInsensitive', HmiSql.provider('MSSQL') != null &&
+		HmiSql.provider('SQLite') != null && HmiSql.provider('oracle') == null);
+	HmiSelfTest.check('sql.normalizeType.fallsBackToText', HmiSql.normalizeType('nonsense') === 'text' &&
+		HmiSql.normalizeType('DATETIME') === 'datetime');
+	HmiSelfTest.check('sql.normalizeIndex.fallsBackToNone', HmiSql.normalizeIndex('nonsense') === 'none' &&
+		HmiSql.normalizeIndex('UNIQUE') === 'unique');
+	HmiSelfTest.check('sql.reserved.catchesDateAndTime', HmiSql.isReservedColumn('date') &&
+		HmiSql.isReservedColumn('TIME') && HmiSql.isReservedColumn('select') &&
+		!HmiSql.isReservedColumn('BatchName'));
+	HmiSelfTest.check('sql.needsBrackets', HmiSql.needsBrackets('Valve ID') &&
+		HmiSql.needsBrackets('2Bad') && !HmiSql.needsBrackets('Valve_ID'));
+
+	// What goes to the main process: no empty strings standing in for
+	// defaults, and numbers as numbers
+	var spec = HmiSql.toSpec(plant);
+	HmiSelfTest.check('sql.toSpec.numbers', spec.port === 1433, '' + spec.port);
+	HmiSelfTest.check('sql.toSpec.options', spec.options.legacyTls === true &&
+		spec.options.trustServerCertificate === false);
+	HmiSelfTest.check('sql.toSpec.noTimeout', spec.timeoutMs === undefined, '' + spec.timeoutMs);
+
+	var fileSpec = HmiSql.toSpec(HmiSql.dataSource(p2, 'Local'));
+	HmiSelfTest.check('sql.toSpec.sqliteCarriesNoServer', fileSpec.file === 'batches.db' &&
+		fileSpec.host === undefined && fileSpec.password === undefined);
+	HmiSelfTest.check('sql.toSpec.folder', fileSpec.folder === 'documents');
 };
 
 // --------------------------------------------- tag references (HmiTagRefs)

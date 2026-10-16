@@ -28,6 +28,14 @@ HmiProject = function()
 	// user-defined functions callable from scripts and expressions
 	this.quickFunctions = [];
 
+	// SQL database access (see HmiSql). Data sources are the databases the
+	// application can open, bind lists pair a tag with a column, table
+	// templates shape a table it creates, and queries are named statements.
+	this.dataSources = [];
+	this.bindLists = [];
+	this.tableTemplates = [];
+	this.queries = [];
+
 	// Compilation resolves tag names against this dictionary, so the expression
 	// cache is keyed on both of these. The uid is needed as well as the
 	// revision because two different projects can easily sit at the same
@@ -62,6 +70,8 @@ HmiProject.prototype.isEmpty = function()
 		JSON.stringify(this.settings.scripts) === JSON.stringify(d.scripts) &&
 		this.users.length === 0 && this.recipeBooks.length === 0 &&
 		this.quickFunctions.length === 0 &&
+		this.dataSources.length === 0 && this.bindLists.length === 0 &&
+		this.tableTemplates.length === 0 && this.queries.length === 0 &&
 		Object.keys(this.windows).length === 0;
 };
 
@@ -797,6 +807,190 @@ HmiProject.prototype.toXml = function(doc)
 		root.appendChild(fns);
 	}
 
+	// SQL database access (HmiSql.js). Element names unlike any other
+	// project element, as the recipe books and QuickFunctions are.
+	if (this.dataSources.length > 0)
+	{
+		var sources = doc.createElement('dataSources');
+
+		for (var i = 0; i < this.dataSources.length; i++)
+		{
+			var s = this.dataSources[i];
+			var sn = doc.createElement('dataSource');
+			sn.setAttribute('name', s.name);
+			sn.setAttribute('provider', s.provider || 'mssql');
+
+			if (s.provider === 'sqlite')
+			{
+				sn.setAttribute('file', s.file || '');
+
+				if (HmiSql.normalizeFolder(s.folder) === 'documents')
+				{
+					sn.setAttribute('folder', 'documents');
+				}
+			}
+			else
+			{
+				sn.setAttribute('host', s.host || '');
+
+				var plain = ['port', 'database', 'user'];
+
+				for (var p = 0; p < plain.length; p++)
+				{
+					if (s[plain[p]] !== '' && s[plain[p]] != null)
+					{
+						sn.setAttribute(plain[p], '' + s[plain[p]]);
+					}
+				}
+
+				// Wrapped, which keeps it out of plain sight and no more;
+				// src/main/sql/Secret.js says as much
+				if (s.password)
+				{
+					sn.setAttribute('password', s.password);
+				}
+
+				var o = s.options || {};
+
+				if (o.encrypt === true)
+				{
+					sn.setAttribute('encrypt', '1');
+				}
+
+				if (o.trustServerCertificate === false)
+				{
+					sn.setAttribute('trustServerCertificate', '0');
+				}
+
+				if (o.legacyTls === true)
+				{
+					sn.setAttribute('legacyTls', '1');
+				}
+
+				if (o.instanceName)
+				{
+					sn.setAttribute('instanceName', o.instanceName);
+				}
+			}
+
+			if (s.timeoutMs !== '' && s.timeoutMs != null)
+			{
+				sn.setAttribute('timeoutMs', '' + s.timeoutMs);
+			}
+
+			sources.appendChild(sn);
+		}
+
+		root.appendChild(sources);
+	}
+
+	if (this.bindLists.length > 0)
+	{
+		var lists = doc.createElement('bindLists');
+
+		for (var i = 0; i < this.bindLists.length; i++)
+		{
+			var bl = this.bindLists[i];
+			var bln = doc.createElement('bindList');
+			bln.setAttribute('name', bl.name);
+
+			for (var j = 0; bl.items != null && j < bl.items.length; j++)
+			{
+				var it = bl.items[j];
+				var itn = doc.createElement('bindItem');
+				itn.setAttribute('tag', it.tag || '');
+				itn.setAttribute('column', it.column || '');
+
+				if (it.field)
+				{
+					itn.setAttribute('field', it.field);
+				}
+
+				if (it.delim)
+				{
+					itn.setAttribute('delim', it.delim);
+				}
+
+				bln.appendChild(itn);
+			}
+
+			lists.appendChild(bln);
+		}
+
+		root.appendChild(lists);
+	}
+
+	if (this.tableTemplates.length > 0)
+	{
+		var templates = doc.createElement('tableTemplates');
+
+		for (var i = 0; i < this.tableTemplates.length; i++)
+		{
+			var t = this.tableTemplates[i];
+			var tn = doc.createElement('tableTemplate');
+			tn.setAttribute('name', t.name);
+
+			for (var j = 0; t.columns != null && j < t.columns.length; j++)
+			{
+				var c = t.columns[j];
+				var cn = doc.createElement('templateColumn');
+				cn.setAttribute('name', c.name || '');
+				cn.setAttribute('type', c.type || 'text');
+
+				if (c.length !== '' && c.length != null)
+				{
+					cn.setAttribute('length', '' + c.length);
+				}
+
+				if (c.scale !== '' && c.scale != null)
+				{
+					cn.setAttribute('scale', '' + c.scale);
+				}
+
+				if (c.index && c.index !== 'none')
+				{
+					cn.setAttribute('index', c.index);
+				}
+
+				if (c.allowNull === false)
+				{
+					cn.setAttribute('allowNull', '0');
+				}
+
+				tn.appendChild(cn);
+			}
+
+			templates.appendChild(tn);
+		}
+
+		root.appendChild(templates);
+	}
+
+	if (this.queries.length > 0)
+	{
+		var queries = doc.createElement('queries');
+
+		for (var i = 0; i < this.queries.length; i++)
+		{
+			var q = this.queries[i];
+			var qn = doc.createElement('query');
+			qn.setAttribute('name', q.name);
+
+			// As a QuickFunction body: no element at all when there is no
+			// statement, so a pretty printed file still round trips
+			if (q.sql)
+			{
+				var sqlNode = doc.createElement('querySql');
+				sqlNode.appendChild(doc.createTextNode(q.sql));
+				qn.appendChild(sqlNode);
+			}
+
+			queries.appendChild(qn);
+		}
+
+		root.appendChild(queries);
+	}
+
 	var windows = doc.createElement('windows');
 	var ids = Object.keys(this.windows).sort();
 
@@ -1135,6 +1329,100 @@ HmiProject.fromXml = function(node)
 		}
 
 		project.quickFunctions.push(fn);
+	}
+
+	// SQL database access (HmiSql.js). Names are trimmed on the way in: a
+	// script names one of these as text, so a stray space in a hand-edited
+	// file would leave a name nothing could match.
+	var sourceNodes = node.getElementsByTagName('dataSource');
+
+	for (var i = 0; i < sourceNodes.length; i++)
+	{
+		var sn = sourceNodes[i];
+		var source = HmiSql.newDataSource((sn.getAttribute('name') || '').trim());
+		var found = HmiSql.provider(sn.getAttribute('provider'));
+		source.provider = (found != null) ? found.value : 'mssql';
+
+		if (source.provider === 'sqlite')
+		{
+			source.file = sn.getAttribute('file') || '';
+			source.folder = HmiSql.normalizeFolder(sn.getAttribute('folder'));
+		}
+		else
+		{
+			source.host = sn.getAttribute('host') || '';
+			source.port = sn.getAttribute('port') || '';
+			source.database = sn.getAttribute('database') || '';
+			source.user = sn.getAttribute('user') || '';
+			source.password = sn.getAttribute('password') || '';
+			source.options = {encrypt: sn.getAttribute('encrypt') === '1',
+				trustServerCertificate: sn.getAttribute('trustServerCertificate') !== '0',
+				legacyTls: sn.getAttribute('legacyTls') === '1',
+				instanceName: sn.getAttribute('instanceName') || ''};
+		}
+
+		source.timeoutMs = sn.getAttribute('timeoutMs') || '';
+		project.dataSources.push(source);
+	}
+
+	var listNodes = node.getElementsByTagName('bindList');
+
+	for (var i = 0; i < listNodes.length; i++)
+	{
+		var bln = listNodes[i];
+		var bindList = HmiSql.newBindList((bln.getAttribute('name') || '').trim());
+		// Asked of this list's node, not the project's: every list's items
+		// would come back otherwise
+		var itemNodes = bln.getElementsByTagName('bindItem');
+
+		for (var j = 0; j < itemNodes.length; j++)
+		{
+			var itn = itemNodes[j];
+			bindList.items.push({tag: itn.getAttribute('tag') || '',
+				field: itn.getAttribute('field') || '',
+				column: itn.getAttribute('column') || '',
+				delim: itn.getAttribute('delim') || ''});
+		}
+
+		project.bindLists.push(bindList);
+	}
+
+	var templateNodes = node.getElementsByTagName('tableTemplate');
+
+	for (var i = 0; i < templateNodes.length; i++)
+	{
+		var tn = templateNodes[i];
+		var template = HmiSql.newTemplate((tn.getAttribute('name') || '').trim());
+		var columnNodes = tn.getElementsByTagName('templateColumn');
+
+		for (var j = 0; j < columnNodes.length; j++)
+		{
+			var cn = columnNodes[j];
+			template.columns.push({name: cn.getAttribute('name') || '',
+				type: HmiSql.normalizeType(cn.getAttribute('type')),
+				length: cn.getAttribute('length') || '',
+				scale: cn.getAttribute('scale') || '',
+				index: HmiSql.normalizeIndex(cn.getAttribute('index')),
+				allowNull: cn.getAttribute('allowNull') !== '0'});
+		}
+
+		project.tableTemplates.push(template);
+	}
+
+	var queryNodes = node.getElementsByTagName('query');
+
+	for (var i = 0; i < queryNodes.length; i++)
+	{
+		var qn = queryNodes[i];
+		var query = HmiSql.newQuery((qn.getAttribute('name') || '').trim());
+		var sqlNodes = qn.getElementsByTagName('querySql');
+
+		if (sqlNodes.length > 0)
+		{
+			query.sql = HmiProject.scriptText(sqlNodes[0]);
+		}
+
+		project.queries.push(query);
 	}
 
 	var windows = node.getElementsByTagName('window');

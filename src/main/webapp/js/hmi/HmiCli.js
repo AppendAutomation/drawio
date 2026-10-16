@@ -225,6 +225,19 @@ HmiCli.RECIPE_BOOK_FIELDS = ['name', 'uploadDownload', 'items', 'recipes'];
 HmiCli.QUICK_FUNCTION_FIELDS = ['name', 'args', 'body'];
 HmiCli.QUICK_ARG_FIELDS = ['name', 'type'];
 
+// SQL database access. A data source's "password" may be given in plain text;
+// it is wrapped before the project is written, so no spec password is ever
+// stored as it was typed. A dump gives the wrapped form back, so a dump and a
+// rebuild come out the same.
+HmiCli.DATA_SOURCE_FIELDS = ['name', 'provider', 'host', 'port', 'database', 'file', 'folder',
+	'user', 'password', 'timeoutMs', 'options'];
+HmiCli.DATA_SOURCE_OPTION_FIELDS = ['encrypt', 'trustServerCertificate', 'legacyTls', 'instanceName'];
+HmiCli.BIND_LIST_FIELDS = ['name', 'items'];
+HmiCli.BIND_ITEM_FIELDS = ['tag', 'field', 'column', 'delim'];
+HmiCli.TABLE_TEMPLATE_FIELDS = ['name', 'columns'];
+HmiCli.TEMPLATE_COLUMN_FIELDS = ['name', 'type', 'length', 'scale', 'index', 'allowNull'];
+HmiCli.QUERY_FIELDS = ['name', 'sql'];
+
 HmiCli.TAG_FIELDS = ['comment', 'engUnits', 'initial', 'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw',
 	'device', 'address', 'onMsg', 'offMsg', 'scanMs', 'alarms', 'sim', 'retentive'];
 
@@ -284,6 +297,9 @@ HmiCli.build = function(ui, project)
 	}
 
 	return HmiCli.applyPassword(hmi, spec).then(function()
+	{
+		return HmiCli.wrapDataSourcePasswords(hmi);
+	}).then(function()
 	{
 		var xml = ui.getFileData(true, null, null, null, true, false, null, null, null, true);
 
@@ -463,8 +479,195 @@ HmiCli.buildProject = function(spec, errors)
 	HmiCli.buildRecipeBooks(hmi, spec.recipeBooks || [], errors);
 	// After the tags, because a function may not take a tag's name
 	HmiCli.buildQuickFunctions(hmi, spec.quickFunctions || [], errors);
+	HmiCli.buildDataSources(hmi, spec.dataSources || [], errors);
+	HmiCli.buildBindLists(hmi, spec.bindLists || [], errors);
+	HmiCli.buildTableTemplates(hmi, spec.tableTemplates || [], errors);
+	HmiCli.buildQueries(hmi, spec.queries || [], errors);
 
 	return hmi;
+};
+
+/** Databases the application can open: {name, provider, host, database, ...}. */
+HmiCli.buildDataSources = function(hmi, sources, errors)
+{
+	if (!Array.isArray(sources))
+	{
+		errors.push('dataSources: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < sources.length; i++)
+	{
+		var s = sources[i] || {};
+		var what = 'data source ' + (s.name || (i + 1));
+		HmiCli.unknownFields(s, HmiCli.DATA_SOURCE_FIELDS, what, errors);
+
+		var source = HmiSql.newDataSource(('' + (s.name || '')).trim());
+		source.provider = ('' + (s.provider || 'mssql')).toLowerCase();
+
+		var fields = ['host', 'port', 'database', 'file', 'user', 'password', 'timeoutMs'];
+
+		source.folder = HmiSql.normalizeFolder(s.folder);
+
+		for (var f = 0; f < fields.length; f++)
+		{
+			if (s[fields[f]] != null)
+			{
+				source[fields[f]] = '' + s[fields[f]];
+			}
+		}
+
+		if (s.options != null)
+		{
+			HmiCli.unknownFields(s.options, HmiCli.DATA_SOURCE_OPTION_FIELDS, what + ' options', errors);
+
+			source.options = {encrypt: s.options.encrypt === true,
+				trustServerCertificate: s.options.trustServerCertificate !== false,
+				legacyTls: s.options.legacyTls === true,
+				instanceName: ('' + (s.options.instanceName || ''))};
+		}
+
+		var problem = HmiSql.dataSourceProblem(hmi.dataSources, source);
+
+		if (problem != null)
+		{
+			errors.push(what + ': ' + problem);
+
+			continue;
+		}
+
+		hmi.dataSources.push(source);
+	}
+};
+
+/** Bind lists: {name, items: [{tag, field, column, delim}]}. */
+HmiCli.buildBindLists = function(hmi, lists, errors)
+{
+	if (!Array.isArray(lists))
+	{
+		errors.push('bindLists: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < lists.length; i++)
+	{
+		var l = lists[i] || {};
+		var what = 'bind list ' + (l.name || (i + 1));
+		HmiCli.unknownFields(l, HmiCli.BIND_LIST_FIELDS, what, errors);
+
+		var bindList = HmiSql.newBindList(('' + (l.name || '')).trim());
+		var items = Array.isArray(l.items) ? l.items : [];
+
+		for (var j = 0; j < items.length; j++)
+		{
+			// A bare string is "this tag into the column of the same name",
+			// as a recipe item may be a bare tag name
+			var raw = (typeof items[j] === 'string') ? {tag: items[j], column: items[j]} : (items[j] || {});
+			HmiCli.unknownFields(raw, HmiCli.BIND_ITEM_FIELDS, what + ' item ' + (j + 1), errors);
+
+			var item = HmiSql.newBindItem();
+			item.tag = ('' + (raw.tag || '')).trim();
+			item.field = ('' + (raw.field || '')).trim();
+			// The tag's name stands in for the column only when no column was
+			// given at all: an empty one is a mistake, and saying so beats
+			// quietly writing to a column of the tag's name
+			item.column = ('' + ((raw.column != null) ? raw.column : (raw.tag || ''))).trim();
+			item.delim = '' + (raw.delim || '');
+			bindList.items.push(item);
+		}
+
+		var problem = HmiSql.bindListProblem(hmi.bindLists, bindList);
+
+		if (problem != null)
+		{
+			errors.push(what + ': ' + problem);
+
+			continue;
+		}
+
+		hmi.bindLists.push(bindList);
+	}
+};
+
+/** Table templates: {name, columns: [{name, type, length, scale, index, allowNull}]}. */
+HmiCli.buildTableTemplates = function(hmi, templates, errors)
+{
+	if (!Array.isArray(templates))
+	{
+		errors.push('tableTemplates: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < templates.length; i++)
+	{
+		var t = templates[i] || {};
+		var what = 'table template ' + (t.name || (i + 1));
+		HmiCli.unknownFields(t, HmiCli.TABLE_TEMPLATE_FIELDS, what, errors);
+
+		var template = HmiSql.newTemplate(('' + (t.name || '')).trim());
+		var columns = Array.isArray(t.columns) ? t.columns : [];
+
+		for (var j = 0; j < columns.length; j++)
+		{
+			var raw = (typeof columns[j] === 'string') ? {name: columns[j]} : (columns[j] || {});
+			HmiCli.unknownFields(raw, HmiCli.TEMPLATE_COLUMN_FIELDS, what + ' column ' + (j + 1), errors);
+
+			var column = HmiSql.newColumn();
+			column.name = ('' + (raw.name || '')).trim();
+			column.type = HmiSql.normalizeType(raw.type);
+			column.length = (raw.length != null) ? '' + raw.length : '';
+			column.scale = (raw.scale != null) ? '' + raw.scale : '';
+			column.index = HmiSql.normalizeIndex(raw.index);
+			column.allowNull = raw.allowNull !== false;
+			template.columns.push(column);
+		}
+
+		var problem = HmiSql.templateProblem(hmi.tableTemplates, template);
+
+		if (problem != null)
+		{
+			errors.push(what + ': ' + problem);
+
+			continue;
+		}
+
+		hmi.tableTemplates.push(template);
+	}
+};
+
+/** Named statements: {name, sql}. */
+HmiCli.buildQueries = function(hmi, queries, errors)
+{
+	if (!Array.isArray(queries))
+	{
+		errors.push('queries: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < queries.length; i++)
+	{
+		var q = queries[i] || {};
+		var what = 'query ' + (q.name || (i + 1));
+		HmiCli.unknownFields(q, HmiCli.QUERY_FIELDS, what, errors);
+
+		var query = HmiSql.newQuery(('' + (q.name || '')).trim());
+		query.sql = (q.sql != null) ? '' + q.sql : '';
+
+		var problem = HmiSql.queryProblem(hmi.queries, query);
+
+		if (problem != null)
+		{
+			errors.push(what + ': ' + problem);
+
+			continue;
+		}
+
+		hmi.queries.push(query);
+	}
 };
 
 /**
@@ -548,6 +751,40 @@ HmiCli.applyPassword = function(hmi, spec)
 		hmi.settings.runtime.salt = salt;
 		hmi.settings.runtime.hash = hash;
 	});
+};
+
+/**
+ * Wraps any data source password the spec gave in plain text, so what lands
+ * in the project is wrapped like the dialog's. A password that arrived already
+ * wrapped -- from a dump -- is left as it is.
+ */
+HmiCli.wrapDataSourcePasswords = function(hmi)
+{
+	var pending = [];
+
+	for (var i = 0; i < hmi.dataSources.length; i++)
+	{
+		var source = hmi.dataSources[i];
+
+		if (!source.password || source.password.indexOf('hmi1:') === 0)
+		{
+			continue;
+		}
+
+		pending.push(function(s)
+		{
+			return new Promise(function(resolve, reject)
+			{
+				HmiSql.wrapPassword(s.password, function(wrapped)
+				{
+					s.password = wrapped;
+					resolve();
+				}, reject);
+			});
+		}(source));
+	}
+
+	return Promise.all(pending);
 };
 
 HmiCli.buildPages = function(ui, spec, hmi, errors)
@@ -1014,6 +1251,90 @@ HmiCli.dump = function(ui)
 			{
 				return {name: a.name, type: a.type};
 			}), body: f.body};
+		});
+	}
+
+	if (hmi.dataSources.length > 0)
+	{
+		spec.dataSources = hmi.dataSources.map(function(s)
+		{
+			var out = {name: s.name, provider: s.provider};
+			var fields = (s.provider === 'sqlite') ? ['file', 'timeoutMs'] :
+				['host', 'port', 'database', 'user', 'password', 'timeoutMs'];
+
+			if (s.provider === 'sqlite' && HmiSql.normalizeFolder(s.folder) === 'documents')
+			{
+				out.folder = 'documents';
+			}
+
+			for (var f = 0; f < fields.length; f++)
+			{
+				if (s[fields[f]] !== '' && s[fields[f]] != null)
+				{
+					out[fields[f]] = s[fields[f]];
+				}
+			}
+
+			if (s.provider !== 'sqlite')
+			{
+				var o = s.options || {};
+				var options = {};
+
+				// Only what differs from the default, so a dump stays short
+				if (o.encrypt === true) { options.encrypt = true; }
+				if (o.trustServerCertificate === false) { options.trustServerCertificate = false; }
+				if (o.legacyTls === true) { options.legacyTls = true; }
+				if (o.instanceName) { options.instanceName = o.instanceName; }
+
+				if (Object.keys(options).length > 0)
+				{
+					out.options = options;
+				}
+			}
+
+			return out;
+		});
+	}
+
+	if (hmi.bindLists.length > 0)
+	{
+		spec.bindLists = hmi.bindLists.map(function(l)
+		{
+			return {name: l.name, items: l.items.map(function(it)
+			{
+				var out = {tag: it.tag, column: it.column};
+
+				if (it.field) { out.field = it.field; }
+				if (it.delim) { out.delim = it.delim; }
+
+				return out;
+			})};
+		});
+	}
+
+	if (hmi.tableTemplates.length > 0)
+	{
+		spec.tableTemplates = hmi.tableTemplates.map(function(t)
+		{
+			return {name: t.name, columns: t.columns.map(function(c)
+			{
+				var out = {name: c.name, type: c.type};
+
+				if (c.length !== '' && c.length != null) { out.length = c.length; }
+				if (c.scale !== '' && c.scale != null) { out.scale = c.scale; }
+				if (c.index && c.index !== 'none') { out.index = c.index; }
+				if (c.allowNull === false) { out.allowNull = false; }
+
+				return out;
+			})};
+		});
+	}
+
+	if (hmi.queries.length > 0)
+	{
+		spec.queries = hmi.queries.map(function(q)
+		{
+			return {name: q.name, sql: q.sql};
 		});
 	}
 
