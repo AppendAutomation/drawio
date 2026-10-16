@@ -37,6 +37,19 @@ HmiExpr.WORD_OPS = {AND: 'AND', OR: 'OR', NOT: 'NOT', MOD: 'MOD',
 HmiExpr.MAX_NAME = 63;
 
 /**
+ * Modes whose source is statements rather than one expression: a script, and
+ * a QuickFunction's body (HmiQuickFn), which is a script with arguments and
+ * Return. Everything a script may do and an animation link may not -- assign
+ * a tag, declare a local, call an action function -- is gated on this.
+ */
+HmiExpr.STATEMENT_MODES = {'script': true, 'quick': true};
+
+HmiExpr.isStatements = function(mode)
+{
+	return HmiExpr.STATEMENT_MODES[mode] === true;
+};
+
+/**
  * Local variables: DIM name[, name ...] AS Analog | Discrete | Message; in a
  * script. They live while the script runs, start at 0 or "", and may not share
  * a name with a tag. DIM and AS are words only in that statement, so a tag
@@ -141,7 +154,8 @@ HmiExpr.hasAsync = function(node)
 		return false;
 	}
 
-	if (node.type === 'call' && HmiExpr.FUNCTIONS[node.name] != null && HmiExpr.FUNCTIONS[node.name].async)
+	if (node.type === 'call' && !node.sync &&
+		HmiExpr.FUNCTIONS[node.name] != null && HmiExpr.FUNCTIONS[node.name].async)
 	{
 		return true;
 	}
@@ -164,7 +178,8 @@ HmiExpr.asyncCallOf = function(statement)
 {
 	var call = (statement.type === 'expr' || statement.type === 'assign') ? statement.value : null;
 
-	return (call != null && call.type === 'call' && HmiExpr.FUNCTIONS[call.name] != null &&
+	return (call != null && call.type === 'call' && !call.sync &&
+		HmiExpr.FUNCTIONS[call.name] != null &&
 		HmiExpr.FUNCTIONS[call.name].async) ? call : null;
 };
 
@@ -215,6 +230,26 @@ HmiExpr.RuntimeError = function(message)
 {
 	this.message = message;
 	this.name = 'HmiExprRuntimeError';
+};
+
+/**
+ * Thrown by Return and caught where the QuickFunction was called.
+ *
+ * Unwinding this way costs nothing in the statement executors: a flag would
+ * have to be honoured in resume's loop, in its inline IF handling and in
+ * eval_if, and a branch that forgot it would keep running statements after a
+ * Return with nothing to show that it had.
+ */
+HmiExpr.ReturnSignal = function(result)
+{
+	this.result = result;
+	this.name = 'HmiExprReturn';
+};
+
+/** What a QuickFunction gives back when no Return ran. */
+HmiExpr.quickDefault = function()
+{
+	return {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
 };
 
 // ------------------------------------------------------------------ lexer
@@ -455,6 +490,25 @@ HmiExpr.Parser = function(tokens, opts)
 	this.locals = {};
 	// How many IFs the parser is inside: DIM is allowed only outside them
 	this.depth = 0;
+	// Whether this source writes a tag or calls a function that acts: a
+	// QuickFunction built from those can only be called from a script
+	this.callsAction = false;
+	this.callsImpure = false;
+
+	// A QuickFunction's arguments behave exactly like local variables, so
+	// they are declared before the body is parsed: resolution, assignment,
+	// coercion and staying out of the dependencies all work unchanged.
+	var fn = this.opts.fn;
+
+	for (var i = 0; fn != null && fn.args != null && i < fn.args.length; i++)
+	{
+		if (fn.args[i].name)
+		{
+			this.locals[('' + fn.args[i].name).toLowerCase()] =
+				{name: fn.args[i].name,
+					vtype: HmiQuickFn.normalizeType(fn.args[i].type)};
+		}
+	}
 };
 
 /**
@@ -551,6 +605,11 @@ HmiExpr.Parser.prototype.parseScript = function()
 
 HmiExpr.Parser.prototype.parseStatement = function()
 {
+	if (this.atReturn())
+	{
+		return this.parseReturn();
+	}
+
 	if (this.atOp('IF'))
 	{
 		return this.parseIf();
@@ -612,8 +671,70 @@ HmiExpr.Parser.prototype.atDim = function()
 	var t = this.peek();
 	var n = this.tokens[this.i + 1];
 
-	return this.opts.mode === 'script' && t.type === HmiExpr.T.IDENT && t.value.toUpperCase() === 'DIM' &&
-		n != null && n.type === HmiExpr.T.IDENT;
+	return HmiExpr.isStatements(this.opts.mode) && t.type === HmiExpr.T.IDENT &&
+		t.value.toUpperCase() === 'DIM' && n != null && n.type === HmiExpr.T.IDENT;
+};
+
+/**
+ * Whether a token can begin a value, which is how Return is told from a tag
+ * of that name: Return = 1, Return.Value and Return(x) are the tag, and
+ * anything else at the start of a statement is the keyword.
+ */
+HmiExpr.startsValue = function(t)
+{
+	if (t == null)
+	{
+		return false;
+	}
+
+	if (t.type === HmiExpr.T.NUMBER || t.type === HmiExpr.T.STRING ||
+		t.type === HmiExpr.T.END)
+	{
+		return true;
+	}
+
+	if (t.type === HmiExpr.T.IDENT)
+	{
+		return true;
+	}
+
+	return t.type === HmiExpr.T.OP && (t.value === '(' || t.value === '-' ||
+		t.value === '+' || t.value === 'NOT' || t.value === ';');
+};
+
+/**
+ * Return is a word only where a statement begins and a value follows, the way
+ * DIM is. A project with a tag named Return keeps working everywhere else.
+ */
+HmiExpr.Parser.prototype.atReturn = function()
+{
+	var t = this.peek();
+
+	return t.type === HmiExpr.T.IDENT && t.value.toUpperCase() === 'RETURN' &&
+		HmiExpr.startsValue(this.tokens[this.i + 1]);
+};
+
+/**
+ * Return [value]
+ *
+ * Gives a value back from a QuickFunction and stops it there. Without a value
+ * it gives the same 0 a function that never returns does.
+ */
+HmiExpr.Parser.prototype.parseReturn = function()
+{
+	var word = this.next();
+
+	if (this.opts.mode !== 'quick')
+	{
+		this.error('Return can only be used in a QuickFunction', word);
+	}
+
+	if (this.atOp(';') || this.peek().type === HmiExpr.T.END)
+	{
+		return {type: 'return', value: null};
+	}
+
+	return {type: 'return', value: this.parseOr()};
 };
 
 /**
@@ -725,6 +846,11 @@ HmiExpr.Parser.prototype.parseDim = function()
  */
 HmiExpr.Parser.prototype.checkAsync = function(statement, token)
 {
+	if (this.opts.mode === 'quick')
+	{
+		return;
+	}
+
 	var call = HmiExpr.asyncCallOf(statement);
 	var rest = (call != null) ? call.args : statement.value;
 
@@ -896,7 +1022,7 @@ HmiExpr.Parser.prototype.parseComparison = function()
 
 	// A single = where a comparison was meant is the classic slip, and it
 	// would otherwise parse as a statement and silently write to a tag.
-	if (this.atOp('=') && this.opts.mode !== 'script')
+	if (this.atOp('=') && !HmiExpr.isStatements(this.opts.mode))
 	{
 		this.error('use == to compare, = assigns');
 	}
@@ -1125,6 +1251,20 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 		}
 	}
 
+	// A QuickFunction the project defines, which the built-ins outrank: a
+	// function may not be stored under a built-in's name, so the two sets
+	// cannot overlap by the time a call gets here.
+	if (def == null && this.project != null &&
+		typeof HmiQuickFn !== 'undefined')
+	{
+		var quick = HmiQuickFn.find(HmiQuickFn.listOf(this.project), name);
+
+		if (quick != null)
+		{
+			return this.parseQuickCall(quick, args, token);
+		}
+	}
+
 	if (def == null)
 	{
 		this.error('unknown function "' + name + '"', token);
@@ -1136,7 +1276,12 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 		this.error(name + ' takes ' + count + ' argument' +
 			((arity.max === 1) ? '' : 's') + ', got ' + args.length, token);
 	}
-	else if (def.action && this.opts.mode !== 'script')
+	else if (def.async && this.opts.mode === 'quick' &&
+		!HmiExpr.cannotPause(name, args))
+	{
+		this.error(name + '() cannot be used in a QuickFunction', token);
+	}
+	else if (def.action && !HmiExpr.isStatements(this.opts.mode))
 	{
 		this.error(name + '() can only be used in a script', token);
 	}
@@ -1153,7 +1298,122 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 		this.checkTrendCall(name, args, token);
 	}
 
-	return {type: 'call', name: name, args: args};
+	if (def != null && def.action)
+	{
+		// What makes a QuickFunction script-only, as it does a built-in
+		this.callsAction = true;
+	}
+
+	var node = {type: 'call', name: name, args: args};
+
+	if (def != null && def.async && this.opts.mode === 'quick' &&
+		HmiExpr.cannotPause(name, args))
+	{
+		// In a QuickFunction it runs like any other action: there is nothing
+		// to wait for, so nothing has to suspend. A script keeps the path it
+		// has always taken.
+		node.sync = true;
+	}
+
+	return node;
+};
+
+/**
+ * Whether this call of an asynchronous function cannot pause.
+ *
+ * ShowWindow is asynchronous whenever it is asked to wait, which is its fifth
+ * argument; without one it opens the window and carries straight on. Nothing
+ * else that pauses has a form that does not.
+ */
+HmiExpr.cannotPause = function(name, args)
+{
+	if (name !== 'ShowWindow')
+	{
+		return false;
+	}
+
+	if (args.length < 5)
+	{
+		return true;
+	}
+
+	var wait = args[4];
+
+	return wait != null && wait.type === 'literal' &&
+		!HmiExpr.truthy(wait.value);
+};
+
+/**
+ * A call of a QuickFunction: {type: 'quickcall'}, which keeps it out of
+ * everything that looks for a built-in by name (hasAsync, asyncCallOf, the
+ * window and trend literal checks).
+ *
+ * The node carries the name and nothing else. Hanging the compiled body on it
+ * would send hasAsync's deep walk through the whole function set, and through
+ * it again at every call.
+ */
+HmiExpr.Parser.prototype.parseQuickCall = function(fn, args, token)
+{
+	var node = {type: 'quickcall', name: fn.name, args: args};
+
+	if (HmiQuickFn.inCycle(this.project, fn.name))
+	{
+		this.error('QuickFunction "' + fn.name + '" calls itself, directly ' +
+			'or through another function', token);
+
+		return node;
+	}
+
+	var wanted = (fn.args != null) ? fn.args.length : 0;
+
+	if (args.length !== wanted)
+	{
+		this.error(fn.name + ' takes ' + wanted + ' argument' +
+			((wanted === 1) ? '' : 's') + ', got ' + args.length, token);
+
+		return node;
+	}
+
+	var compiled = HmiQuickFn.compile(this.project, fn);
+
+	if (compiled.impure && !HmiExpr.isStatements(this.opts.mode))
+	{
+		this.error(fn.name + '() writes a tag or calls an action function, ' +
+			'so it can only be used in a script', token);
+
+		return node;
+	}
+
+	if (compiled.errors.length > 0)
+	{
+		this.error('QuickFunction "' + fn.name + '" has an error: ' +
+			compiled.errors[0].message, token);
+
+		return node;
+	}
+
+	// What the body reads and writes, the caller reads and writes: this is
+	// what subscribes a tag an animation link only reaches through a
+	// function, and it is transitive because the callee was compiled first.
+	for (var i = 0; i < compiled.deps.length; i++)
+	{
+		if (mxUtils.indexOf(this.deps, compiled.deps[i]) < 0)
+		{
+			this.deps.push(compiled.deps[i]);
+		}
+	}
+
+	for (var w = 0; w < compiled.writes.length; w++)
+	{
+		if (mxUtils.indexOf(this.writes, compiled.writes[w]) < 0)
+		{
+			this.writes.push(compiled.writes[w]);
+		}
+	}
+
+	this.callsImpure = this.callsImpure || compiled.impure;
+
+	return node;
 };
 
 /**
@@ -1313,9 +1573,15 @@ HmiExpr.truthy = function(value)
 	return !!value;
 };
 
-HmiExpr.Evaluator = function(ctx)
+/**
+ * @param ctx the host: read, write, call, callAsync, scriptError
+ * @param scope {project}, which a QuickFunction call needs to find the
+ * function it names. Nothing else uses it.
+ */
+HmiExpr.Evaluator = function(ctx, scope)
 {
 	this.ctx = ctx;
+	this.scope = scope || null;
 };
 
 HmiExpr.Evaluator.prototype.run = function(node)
@@ -1502,6 +1768,111 @@ HmiExpr.Evaluator.prototype.eval_call = function(node)
 		timestamp: meta.timestamp};
 };
 
+/**
+ * Calls a QuickFunction: its arguments become its local variables, its body
+ * runs, and Return hands a value back.
+ *
+ * The function is looked up by name rather than carried on the node, so the
+ * project stays the one place that holds it and an edit cannot leave a stale
+ * copy behind in a compiled expression.
+ */
+HmiExpr.Evaluator.prototype.eval_quickcall = function(node)
+{
+	var parts = [];
+
+	for (var i = 0; i < node.args.length; i++)
+	{
+		parts.push(this.run(node.args[i]));
+	}
+
+	var project = (this.scope != null) ? this.scope.project : null;
+	var compiled = (project != null && typeof HmiQuickFn !== 'undefined') ?
+		HmiQuickFn.compileByName(project, node.name) : null;
+
+	if (compiled == null || compiled.ast == null || compiled.errors.length > 0)
+	{
+		throw new HmiExpr.RuntimeError('QuickFunction ' + node.name +
+			' is not available');
+	}
+
+	try
+	{
+		return this.callQuick(compiled, parts);
+	}
+	catch (e)
+	{
+		// Named, because the log keys a failure on the outermost expression:
+		// without this, a fault three functions deep is a mystery.
+		throw new HmiExpr.RuntimeError('in QuickFunction "' + node.name +
+			'": ' + ((e != null && e.message != null) ? e.message :
+				'evaluation failed'));
+	}
+};
+
+/**
+ * Runs a compiled body with its arguments bound, and gives back what Return
+ * handed over -- or 0 when nothing did.
+ *
+ * The caller's statement cursors and local variables are put back afterwards,
+ * because Return leaves the body by throwing.
+ */
+HmiExpr.Evaluator.prototype.callQuick = function(compiled, parts)
+{
+	this.quickDepth = (this.quickDepth || 0) + 1;
+	this.quickCalls = (this.quickCalls || 0) + 1;
+
+	var savedFrames = this.frames;
+	var savedLocals = this.locals;
+
+	try
+	{
+		if (this.quickDepth > HmiQuickFn.MAX_DEPTH)
+		{
+			throw new HmiExpr.RuntimeError('QuickFunctions nested more than ' +
+				HmiQuickFn.MAX_DEPTH + ' deep');
+		}
+
+		if (this.quickCalls > HmiQuickFn.MAX_CALLS)
+		{
+			throw new HmiExpr.RuntimeError('more than ' + HmiQuickFn.MAX_CALLS +
+				' QuickFunction calls in one evaluation');
+		}
+
+		var locals = {};
+
+		for (var i = 0; i < compiled.args.length; i++)
+		{
+			var v = parts[i];
+			var type = HmiQuickFn.normalizeType(compiled.args[i].type);
+
+			// Coerced to the declared type, keeping the quality and the time
+			// it was read, exactly as an assignment to a local does
+			locals[('' + compiled.args[i].name).toLowerCase()] = {
+				value: HmiExpr.coerceLocal(type, v.value),
+				quality: v.quality, timestamp: v.timestamp};
+		}
+
+		this.runBody(compiled.ast.body, locals);
+
+		return HmiExpr.quickDefault();
+	}
+	catch (e)
+	{
+		if (e instanceof HmiExpr.ReturnSignal)
+		{
+			return e.result;
+		}
+
+		throw e;
+	}
+	finally
+	{
+		this.frames = savedFrames;
+		this.locals = savedLocals;
+		this.quickDepth--;
+	}
+};
+
 HmiExpr.Evaluator.prototype.eval_assign = function(node)
 {
 	var v = this.run(node.value);
@@ -1589,11 +1960,26 @@ HmiExpr.Evaluator.prototype.eval_expr = function(node)
  */
 HmiExpr.Evaluator.prototype.eval_script = function(node)
 {
-	this.frames = [{body: node.body, i: 0}];
-	// Local variables last as long as this run of the script, through any pause
-	this.locals = {};
+	return this.runBody(node.body, {});
+};
+
+/**
+ * Runs a list of statements with its own local variables: a script's, or a
+ * QuickFunction body's, which starts with the arguments in it.
+ */
+HmiExpr.Evaluator.prototype.runBody = function(body, locals)
+{
+	this.frames = [{body: body, i: 0}];
+	// Local variables last as long as this run, through any pause
+	this.locals = locals;
 
 	return this.resume({value: null, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
+};
+
+HmiExpr.Evaluator.prototype.eval_return = function(node)
+{
+	throw new HmiExpr.ReturnSignal((node.value != null) ? this.run(node.value) :
+		HmiExpr.quickDefault());
 };
 
 HmiExpr.Evaluator.prototype.resume = function(last)
@@ -1704,8 +2090,14 @@ HmiExpr.cacheKey = function(src, opts)
 	var stamp = (project != null) ?
 		(project.uid + '#' + project.revision) : 'none';
 
-	return ((opts != null && opts.mode === 'script') ? 's:' : 'e:') +
-		stamp + ':' + src;
+	var mode = (opts != null) ? opts.mode : null;
+	var prefix = (mode === 'script') ? 's:' : ((mode === 'quick') ? 'q:' : 'e:');
+	// A QuickFunction's arguments are not in its body's text, and renaming
+	// one changes what the same text means.
+	var args = (opts != null && opts.fn != null) ?
+		HmiQuickFn.argsKey(opts.fn) + '\u0000' : '';
+
+	return prefix + stamp + ':' + args + src;
 };
 
 HmiExpr.clearCache = function()
@@ -1737,7 +2129,7 @@ HmiExpr.compile = function(src, opts)
 	var parser = new HmiExpr.Parser(lexer.tokens, opts);
 	var ast;
 
-	if (opts.mode === 'script')
+	if (HmiExpr.isStatements(opts.mode))
 	{
 		ast = parser.parseScript();
 	}
@@ -1755,6 +2147,12 @@ HmiExpr.compile = function(src, opts)
 		writes: parser.writes,
 		errors: errors,
 
+		// Statements that write a tag or act: a QuickFunction made of them
+		// belongs in a script, never in an animation link
+		impure: HmiExpr.isStatements(opts.mode) && (parser.writes.length > 0 ||
+			parser.callsAction || parser.callsImpure),
+		args: (opts.fn != null && opts.fn.args != null) ? opts.fn.args : [],
+
 		/**
 		 * Evaluation never throws. A failure returns bad quality so the link
 		 * applies its bad-quality treatment rather than taking down the
@@ -1770,7 +2168,8 @@ HmiExpr.compile = function(src, opts)
 
 			try
 			{
-				return new HmiExpr.Evaluator(ctx).run(ast);
+				return new HmiExpr.Evaluator(ctx,
+					{project: opts.project}).run(ast);
 			}
 			catch (e)
 			{

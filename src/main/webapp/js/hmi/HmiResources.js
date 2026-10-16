@@ -26,6 +26,7 @@ HmiResources.install = function()
 		'hmiUsers=Users',
 		'hmiClearRuntimeUsers=Clear Runtime User Changes',
 		'hmiRecipes=Recipes',
+		'hmiQuickFunctions=QuickFunctions',
 		'hmiClearRuntimeRecipes=Clear Runtime Recipes',
 		'hmiAppSettings=Application Settings',
 		'hmiWindowProps=Window Properties',

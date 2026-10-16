@@ -549,6 +549,24 @@ HmiRuntime.prototype.context = function()
 					return HmiScreenPdf.call(that.windows, args);
 				}
 
+				// A ShowWindow with nothing to wait for comes through here
+				// rather than callAsync: it is the form a QuickFunction may
+				// use, and callShowWindow answers it straight away.
+				if (name === 'ShowWindow')
+				{
+					var shown = 0;
+
+					if (that.windows != null)
+					{
+						that.windows.callShowWindow(args, function(value)
+						{
+							shown = value;
+						});
+					}
+
+					return shown;
+				}
+
 				var owner = HmiRecipes.isFunction(name) ? that.recipes :
 					((name === HmiIndirect.FUNCTION) ? that.indirect :
 					(HmiTrend.isFunction(name) ? that.trends : that.security));

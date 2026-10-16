@@ -288,6 +288,11 @@ HmiMenus.installActions = function()
 				HmiDialogs.showRecipes(ui);
 			});
 
+			this.addAction('hmiQuickFunctions...', function()
+			{
+				HmiDialogs.showQuickFunctions(ui);
+			});
+
 			this.addAction('hmiClearRuntimeRecipes...', function()
 			{
 				HmiMenus.clearRuntimeRecipes(ui);
@@ -322,7 +327,7 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary',
-					'hmiDevices', 'hmiUsers', 'hmiRecipes', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'hmiDevices', 'hmiUsers', 'hmiRecipes', 'hmiQuickFunctions', '-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
 				this.addMenuItems(menu,
@@ -977,6 +982,15 @@ HmiMenus.collectProblems = function(ui, fn)
 		}
 	}
 
+	var quickProblems = HmiMenus.checkQuickFunctions(project);
+
+	for (var i = 0; i < quickProblems.length; i++)
+	{
+		problems.push({page: mxResources.get('hmiQuickFunctions'), cell: null,
+			link: 'QuickFunction ' + quickProblems[i].name,
+			message: quickProblems[i].message});
+	}
+
 	var pending = HmiMenus.checkTags(project, problems);
 
 	if (pending.length === 0 || !HmiComms.available())
@@ -1214,6 +1228,36 @@ HmiMenus.checkWindowScripts = function(project, pageId)
 	}
 
 	return errors;
+};
+
+/**
+ * Problems with the project's QuickFunctions: [{name, message}].
+ *
+ * The rules live in HmiQuickFn, so the dialog, the command line and this
+ * report cannot drift apart.
+ */
+HmiMenus.checkQuickFunctions = function(project)
+{
+	var found = [];
+
+	if (project == null)
+	{
+		return found;
+	}
+
+	var list = HmiQuickFn.listOf(project);
+
+	for (var i = 0; i < list.length; i++)
+	{
+		var messages = HmiQuickFn.problems(project, list, list[i]);
+
+		for (var m = 0; m < messages.length; m++)
+		{
+			found.push({name: list[i].name, message: messages[m]});
+		}
+	}
+
+	return found;
 };
 
 HmiMenus.APP_SCRIPT_LABELS = {onStart: 'On start', whileRunning: 'While running', onShutdown: 'On shutdown'};

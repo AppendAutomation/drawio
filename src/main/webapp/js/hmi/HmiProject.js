@@ -24,6 +24,10 @@ HmiProject = function()
 	// ioTag}], recipes: {name: {tag: value}}}; recipes are the starting ones
 	this.recipeBooks = [];
 
+	// QuickFunctions (see HmiQuickFn): {name, args: [{name, type}], body},
+	// user-defined functions callable from scripts and expressions
+	this.quickFunctions = [];
+
 	// Compilation resolves tag names against this dictionary, so the expression
 	// cache is keyed on both of these. The uid is needed as well as the
 	// revision because two different projects can easily sit at the same
@@ -57,6 +61,7 @@ HmiProject.prototype.isEmpty = function()
 		JSON.stringify(this.settings.security) === JSON.stringify(d.security) &&
 		JSON.stringify(this.settings.scripts) === JSON.stringify(d.scripts) &&
 		this.users.length === 0 && this.recipeBooks.length === 0 &&
+		this.quickFunctions.length === 0 &&
 		Object.keys(this.windows).length === 0;
 };
 
@@ -758,6 +763,40 @@ HmiProject.prototype.toXml = function(doc)
 		root.appendChild(books);
 	}
 
+	// Element names unlike any other project element, as the recipe books are
+	if (this.quickFunctions.length > 0)
+	{
+		var fns = doc.createElement('quickFunctions');
+
+		for (var i = 0; i < this.quickFunctions.length; i++)
+		{
+			var fn = this.quickFunctions[i];
+			var fnNode = doc.createElement('quickFunction');
+			fnNode.setAttribute('name', fn.name);
+
+			for (var a = 0; fn.args != null && a < fn.args.length; a++)
+			{
+				var arg = doc.createElement('quickArg');
+				arg.setAttribute('name', fn.args[a].name);
+				arg.setAttribute('type', fn.args[a].type);
+				fnNode.appendChild(arg);
+			}
+
+			// An empty body writes no element at all, so that a pretty
+			// printed file still round trips byte for byte.
+			if (fn.body)
+			{
+				var body = doc.createElement('quickBody');
+				body.appendChild(doc.createTextNode(fn.body));
+				fnNode.appendChild(body);
+			}
+
+			fns.appendChild(fnNode);
+		}
+
+		root.appendChild(fns);
+	}
+
 	var windows = doc.createElement('windows');
 	var ids = Object.keys(this.windows).sort();
 
@@ -1072,6 +1111,30 @@ HmiProject.fromXml = function(node)
 		}
 
 		project.recipeBooks.push(book);
+	}
+
+	var fnNodes = node.getElementsByTagName('quickFunction');
+
+	for (var i = 0; i < fnNodes.length; i++)
+	{
+		var fnNode = fnNodes[i];
+		var fn = {name: fnNode.getAttribute('name') || '', args: [], body: ''};
+		var argNodes = fnNode.getElementsByTagName('quickArg');
+
+		for (var j = 0; j < argNodes.length; j++)
+		{
+			fn.args.push({name: argNodes[j].getAttribute('name') || '',
+				type: HmiQuickFn.normalizeType(argNodes[j].getAttribute('type'))});
+		}
+
+		var bodyNodes = fnNode.getElementsByTagName('quickBody');
+
+		if (bodyNodes.length > 0)
+		{
+			fn.body = HmiProject.scriptText(bodyNodes[0]);
+		}
+
+		project.quickFunctions.push(fn);
 	}
 
 	var windows = node.getElementsByTagName('window');

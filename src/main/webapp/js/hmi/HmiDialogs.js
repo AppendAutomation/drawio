@@ -2991,7 +2991,17 @@ HmiDialogs.radioCounter = 0;
  * A labelled QuickScript field, checked as it is typed. Reports every change,
  * not only on blur, so OK never loses the last keystrokes.
  */
-HmiDialogs.scriptArea = function(parent, label, value, project, onChange, rows)
+/**
+ * A multi-line script field that marks itself when the script does not
+ * compile.
+ *
+ * @param errorsOf optional: how to compile this text instead of as a plain
+ * script. A QuickFunction's body passes one, because it has to be compiled
+ * with its own arguments in scope, and the argument list changes while the
+ * field is open.
+ */
+HmiDialogs.scriptArea = function(parent, label, value, project, onChange, rows,
+	errorsOf)
 {
 	var row = HmiDialogs.el('div', 'hmiFormRow hmiFormRowTop');
 	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
@@ -3004,8 +3014,10 @@ HmiDialogs.scriptArea = function(parent, label, value, project, onChange, rows)
 
 	var check = function()
 	{
-		var errors = (area.value !== '') ? HmiExpr.compile(area.value,
-			{project: project, mode: 'script'}).errors : [];
+		var errors = (area.value === '') ? [] :
+			((errorsOf != null) ? errorsOf(area.value) :
+				HmiExpr.compile(area.value,
+					{project: project, mode: 'script'}).errors);
 
 		if (errors.length > 0)
 		{
@@ -4319,6 +4331,462 @@ HmiDialogs.showUsers = function(ui, options)
 
 	render();
 	ui.showDialog(div, 560, (security != null) ? 720 : 560, true, true);
+};
+
+// ------------------------------------------------------------ quick functions
+
+/**
+ * HMI > QuickFunctions: the functions this project defines. Edits a copy,
+ * applied on OK.
+ *
+ * A function has typed arguments, which its body reads like variables, and
+ * gives a value back with Return. One that writes a tag or calls an action
+ * function can be called from a script only, which the list says of each.
+ */
+HmiDialogs.showQuickFunctions = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var fns = HmiQuickFn.copy(project.quickFunctions);
+	var current = fns[0] || null;
+
+	// The body being typed has to see the draft arguments and the other draft
+	// functions; tags still come from the real dictionary.
+	var scope = HmiQuickFn.draftScope(project, fns);
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiQuickFnDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
+		mxResources.get('hmiQuickFunctions')));
+	div.appendChild(HmiDialogs.el('div', 'hmiHint', 'A QuickFunction is ' +
+		'called like any other function. Its arguments are read in the body ' +
+		'like variables, and Return gives a value back; without a Return it ' +
+		'gives 0. One that writes a tag or calls an action function can be ' +
+		'used in scripts only.'));
+
+	var body = HmiDialogs.el('div', 'hmiQuickFns');
+	var left = HmiDialogs.el('div', 'hmiQuickFnList');
+	var right = HmiDialogs.el('div', 'hmiQuickFnEditor');
+	body.appendChild(left);
+	body.appendChild(right);
+	div.appendChild(body);
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	error.setAttribute('data-hmi-field', 'quickError');
+	div.appendChild(error);
+
+	var uniqueName = function(base)
+	{
+		var name = base;
+		var n = 2;
+
+		while (HmiQuickFn.find(fns, name) != null)
+		{
+			name = base + n;
+			n++;
+		}
+
+		return name;
+	};
+
+	var usage = function(fn)
+	{
+		var compiled = HmiQuickFn.compile(scope, fn);
+
+		return (compiled.impure) ? 'scripts only' : 'scripts and expressions';
+	};
+
+	var renderList = function()
+	{
+		left.innerText = '';
+		left.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'QuickFunctions'));
+
+		var list = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable');
+		var tbody = HmiDialogs.el('tbody');
+
+		if (fns.length === 0)
+		{
+			var empty = HmiDialogs.el('tr');
+			empty.appendChild(HmiDialogs.el('td', 'hmiEmpty',
+				'No QuickFunctions.'));
+			tbody.appendChild(empty);
+		}
+
+		for (var i = 0; i < fns.length; i++)
+		{
+			(function(fn)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow' +
+					((fn === current) ? ' hmiSelected' : ''));
+				row.setAttribute('data-hmi-fn', fn.name);
+				row.style.cursor = 'pointer';
+				row.appendChild(HmiDialogs.el('td', null,
+					HmiQuickFn.signature(fn)));
+				row.appendChild(HmiDialogs.el('td', 'hmiQuickFnUsage',
+					usage(fn)));
+
+				mxEvent.addListener(row, 'click', function()
+				{
+					current = fn;
+					error.innerText = '';
+					renderList();
+					renderEditor();
+				});
+
+				tbody.appendChild(row);
+			})(fns[i]);
+		}
+
+		table.appendChild(tbody);
+		list.appendChild(table);
+		left.appendChild(list);
+
+		var buttons = HmiDialogs.el('div', 'hmiQuickFnButtons');
+
+		var add = HmiDialogs.button('Add', function()
+		{
+			current = HmiQuickFn.newFunction(uniqueName('Function'));
+			fns.push(current);
+			scope.touch();
+			error.innerText = '';
+			renderList();
+			renderEditor();
+		});
+		add.setAttribute('data-hmi-field', 'addFunction');
+		buttons.appendChild(add);
+
+		var duplicate = HmiDialogs.button('Duplicate', function()
+		{
+			if (current == null)
+			{
+				return;
+			}
+
+			var copy = HmiQuickFn.copy([current])[0];
+			copy.name = uniqueName(current.name + 'Copy');
+			fns.push(copy);
+			current = copy;
+			scope.touch();
+			renderList();
+			renderEditor();
+		});
+		duplicate.setAttribute('data-hmi-field', 'duplicateFunction');
+		buttons.appendChild(duplicate);
+
+		var remove = HmiDialogs.button('Delete', function()
+		{
+			if (current == null)
+			{
+				return;
+			}
+
+			fns.splice(mxUtils.indexOf(fns, current), 1);
+			current = fns[0] || null;
+			scope.touch();
+			error.innerText = '';
+			renderList();
+			renderEditor();
+		});
+		remove.setAttribute('data-hmi-field', 'deleteFunction');
+		buttons.appendChild(remove);
+
+		left.appendChild(buttons);
+	};
+
+	var renderEditor = function()
+	{
+		right.innerText = '';
+
+		if (current == null)
+		{
+			right.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+				'Add a QuickFunction to begin.'));
+
+			return;
+		}
+
+		var fn = current;
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Function'));
+
+		var name = HmiDialogs.field(right, 'Name', fn.name, function() {});
+		name.setAttribute('data-hmi-field', 'fnName');
+		mxEvent.addListener(name, 'input', function()
+		{
+			fn.name = name.value.trim();
+			scope.touch();
+			var cell = left.querySelector('tr.hmiSelected td');
+
+			if (cell != null)
+			{
+				cell.innerText = HmiQuickFn.signature(fn);
+			}
+		});
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Arguments'));
+
+		var table = HmiDialogs.el('table', 'hmiUserTable hmiQuickFnArgTable');
+		var head = HmiDialogs.el('thead');
+		var headRow = HmiDialogs.el('tr');
+		headRow.appendChild(HmiDialogs.el('th', null, 'Name'));
+		headRow.appendChild(HmiDialogs.el('th', null, 'Type'));
+		headRow.appendChild(HmiDialogs.el('th', null, ''));
+		head.appendChild(headRow);
+		table.appendChild(head);
+
+		var tbody = HmiDialogs.el('tbody');
+
+		if (fn.args.length === 0)
+		{
+			var empty = HmiDialogs.el('tr');
+			var cell = HmiDialogs.el('td', 'hmiEmpty', 'No arguments.');
+			cell.setAttribute('colspan', '3');
+			empty.appendChild(cell);
+			tbody.appendChild(empty);
+		}
+
+		for (var i = 0; i < fn.args.length; i++)
+		{
+			(function(arg, index)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow');
+				row.setAttribute('data-hmi-arg', '' + index);
+
+				var nameCell = HmiDialogs.el('td');
+				var argName = document.createElement('input');
+				argName.className = 'hmiInput';
+				argName.setAttribute('type', 'text');
+				argName.setAttribute('data-hmi-field', 'argName');
+				argName.value = arg.name;
+				mxEvent.addListener(argName, 'input', function()
+				{
+					arg.name = argName.value.trim();
+					scope.touch();
+					recheckBody();
+					var cell = left.querySelector('tr.hmiSelected td');
+
+					if (cell != null)
+					{
+						cell.innerText = HmiQuickFn.signature(fn);
+					}
+				});
+				nameCell.appendChild(argName);
+				row.appendChild(nameCell);
+
+				var typeCell = HmiDialogs.el('td');
+				var type = document.createElement('select');
+				type.className = 'hmiInput';
+				type.setAttribute('data-hmi-field', 'argType');
+
+				for (var t = 0; t < HmiQuickFn.TYPES.length; t++)
+				{
+					var option = document.createElement('option');
+					option.setAttribute('value', HmiQuickFn.TYPES[t]);
+					mxUtils.write(option, HmiQuickFn.TYPES[t]);
+					type.appendChild(option);
+				}
+
+				type.value = HmiQuickFn.normalizeType(arg.type);
+				mxEvent.addListener(type, 'change', function()
+				{
+					arg.type = type.value;
+					scope.touch();
+					recheckBody();
+				});
+				typeCell.appendChild(type);
+				row.appendChild(typeCell);
+
+				var actions = HmiDialogs.el('td', 'hmiUserActions');
+
+				var up = HmiDialogs.button('▲', function()
+				{
+					if (index > 0)
+					{
+						fn.args.splice(index - 1, 0, fn.args.splice(index, 1)[0]);
+						scope.touch();
+						renderEditor();
+					}
+				});
+				up.setAttribute('title', 'Move up');
+				actions.appendChild(up);
+
+				var down = HmiDialogs.button('▼', function()
+				{
+					if (index < fn.args.length - 1)
+					{
+						fn.args.splice(index + 1, 0, fn.args.splice(index, 1)[0]);
+						scope.touch();
+						renderEditor();
+					}
+				});
+				down.setAttribute('title', 'Move down');
+				actions.appendChild(down);
+
+				var remove = HmiDialogs.button('Remove', function()
+				{
+					fn.args.splice(index, 1);
+					scope.touch();
+					renderEditor();
+				});
+				remove.setAttribute('data-hmi-field', 'removeArg');
+				actions.appendChild(remove);
+
+				row.appendChild(actions);
+				tbody.appendChild(row);
+			})(fn.args[i], i);
+		}
+
+		table.appendChild(tbody);
+		right.appendChild(table);
+
+		var argButtons = HmiDialogs.el('div', 'hmiQuickFnButtons');
+		var addArg = HmiDialogs.button('Add argument', function()
+		{
+			if (fn.args.length >= HmiQuickFn.MAX_ARGS)
+			{
+				error.innerText = 'A QuickFunction takes at most ' +
+					HmiQuickFn.MAX_ARGS + ' arguments.';
+
+				return;
+			}
+
+			fn.args.push({name: '', type: 'Analog'});
+			scope.touch();
+			renderEditor();
+
+			var inputs = right.querySelectorAll('[data-hmi-field="argName"]');
+
+			if (inputs.length > 0)
+			{
+				inputs[inputs.length - 1].focus();
+			}
+		});
+		addArg.setAttribute('data-hmi-field', 'addArg');
+		argButtons.appendChild(addArg);
+		right.appendChild(argButtons);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Script'));
+
+		var area = HmiDialogs.scriptArea(right, 'Body', fn.body, project,
+			function(value)
+			{
+				fn.body = value;
+				scope.touch();
+				showUsage();
+			}, 12, function(text)
+			{
+				return HmiQuickFn.compileText(scope, fn, text).errors;
+			});
+		area.setAttribute('data-hmi-field', 'fnBody');
+
+		var usageLine = HmiDialogs.el('div', 'hmiHint');
+		usageLine.setAttribute('data-hmi-field', 'fnUsage');
+		right.appendChild(usageLine);
+
+		function showUsage()
+		{
+			usageLine.innerText = 'Can be used in: ' + usage(fn) + '.';
+			var row = left.querySelector('tr.hmiSelected td.hmiQuickFnUsage');
+
+			if (row != null)
+			{
+				row.innerText = usage(fn);
+			}
+		}
+
+		function recheckBody()
+		{
+			// The arguments changed, so what the body means changed with them
+			area.dispatchEvent(new Event('input'));
+			showUsage();
+		}
+
+		showUsage();
+	};
+
+	/** Problems with the functions as edited, or null when they can be saved. */
+	var check = function()
+	{
+		for (var i = 0; i < fns.length; i++)
+		{
+			var fn = fns[i];
+			fn.name = ('' + fn.name).trim();
+			fn.args = fn.args.filter(function(arg)
+			{
+				return ('' + arg.name).trim() !== '';
+			});
+
+			for (var a = 0; a < fn.args.length; a++)
+			{
+				fn.args[a].name = ('' + fn.args[a].name).trim();
+				fn.args[a].type = HmiQuickFn.normalizeType(fn.args[a].type);
+			}
+		}
+
+		scope.touch();
+
+		for (var i = 0; i < fns.length; i++)
+		{
+			var problem = HmiQuickFn.nameProblem(scope, fns, fns[i]);
+
+			if (problem == null && HmiQuickFn.inCycle(scope, fns[i].name))
+			{
+				problem = '"' + fns[i].name + '" calls itself, directly or ' +
+					'through another QuickFunction.';
+			}
+
+			if (problem == null)
+			{
+				var errors = HmiQuickFn.compile(scope, fns[i]).errors;
+
+				if (errors.length > 0)
+				{
+					problem = 'In "' + fns[i].name + '": ' + errors[0].message;
+				}
+			}
+
+			if (problem != null)
+			{
+				current = fns[i];
+				renderList();
+				renderEditor();
+				error.innerText = problem;
+
+				return problem;
+			}
+		}
+
+		return null;
+	};
+
+	renderList();
+	renderEditor();
+
+	HmiDialogs.okCancel(ui, div, function()
+	{
+		if (check() != null)
+		{
+			return false;
+		}
+
+		if (JSON.stringify(fns) !== JSON.stringify(project.quickFunctions))
+		{
+			project.quickFunctions = fns;
+			// Compiled expressions hold the old functions until this
+			project.touch();
+			ui.editor.setModified(true);
+		}
+
+		return true;
+	});
+
+	ui.showDialog(div, 860, 620, true, true);
+
+	return div;
 };
 
 // ----------------------------------------------------------------- recipes

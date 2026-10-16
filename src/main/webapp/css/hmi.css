@@ -1543,6 +1543,78 @@
 	gap: 6px;
 }
 
+/* ------------------------------------------------------- QuickFunctions */
+
+.hmiQuickFns
+{
+	display: flex;
+	gap: 12px;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.hmiQuickFnList
+{
+	width: 260px;
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+}
+
+.hmiQuickFnEditor
+{
+	flex: 1 1 auto;
+	overflow-y: auto;
+	min-height: 0;
+}
+
+.hmiQuickFnUsage
+{
+	font-size: 11px;
+	color: #707070;
+	text-align: right;
+	white-space: nowrap;
+}
+
+[data-theme="dark"] .hmiQuickFnUsage
+{
+	color: #A0A0A0;
+}
+
+.hmiQuickFnArgTable td input,
+.hmiQuickFnArgTable td select
+{
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.hmiQuickFnArgTable th:nth-child(2)
+{
+	width: 110px;
+}
+
+.hmiQuickFnButtons
+{
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.hmiQuickFnButtons button.geBtn
+{
+	min-width: 0;
+	margin: 0;
+}
+
+.hmiQuickFnArgTable td.hmiUserActions button.geBtn
+{
+	min-width: 0;
+	padding: 2px 8px;
+	margin: 0 2px 0 0;
+}
+
 /* ------------------------------------------- find/replace tag references */
 
 .hmiRefTable

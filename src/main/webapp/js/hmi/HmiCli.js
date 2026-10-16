@@ -222,6 +222,9 @@ HmiCli.TYPES = {
 
 HmiCli.RECIPE_BOOK_FIELDS = ['name', 'uploadDownload', 'items', 'recipes'];
 
+HmiCli.QUICK_FUNCTION_FIELDS = ['name', 'args', 'body'];
+HmiCli.QUICK_ARG_FIELDS = ['name', 'type'];
+
 HmiCli.TAG_FIELDS = ['comment', 'engUnits', 'initial', 'minEU', 'maxEU', 'scaled', 'minRaw', 'maxRaw',
 	'device', 'address', 'onMsg', 'offMsg', 'scanMs', 'alarms', 'sim', 'retentive'];
 
@@ -458,6 +461,8 @@ HmiCli.buildProject = function(spec, errors)
 
 	HmiCli.buildUsers(hmi, spec.users || [], errors);
 	HmiCli.buildRecipeBooks(hmi, spec.recipeBooks || [], errors);
+	// After the tags, because a function may not take a tag's name
+	HmiCli.buildQuickFunctions(hmi, spec.quickFunctions || [], errors);
 
 	return hmi;
 };
@@ -768,6 +773,72 @@ HmiCli.applyLinks = function(graph, cell, links, what, errors)
  * Recipe books: [{name, uploadDownload, items: [{tag, ioTag}] or ["tag"],
  * recipes: {name: {tag: value}}}].
  */
+/**
+ * The project's QuickFunctions. Their bodies are compiled by --hmi-check, as
+ * every other script is; what is checked here is the shape and the names.
+ */
+HmiCli.buildQuickFunctions = function(hmi, fns, errors)
+{
+	if (!Array.isArray(fns))
+	{
+		errors.push('quickFunctions: must be a list');
+
+		return;
+	}
+
+	for (var i = 0; i < fns.length; i++)
+	{
+		var f = fns[i] || {};
+		var what = 'QuickFunction ' + (f.name || (i + 1));
+
+		for (var key in f)
+		{
+			if (mxUtils.indexOf(HmiCli.QUICK_FUNCTION_FIELDS, key) < 0)
+			{
+				errors.push(what + ': unknown field "' + key + '" (allowed: ' +
+					HmiCli.QUICK_FUNCTION_FIELDS.join(', ') + ')');
+			}
+		}
+
+		var fn = HmiQuickFn.newFunction(('' + (f.name || '')).trim());
+		fn.body = (f.body != null) ? '' + f.body : '';
+
+		var args = Array.isArray(f.args) ? f.args : [];
+
+		for (var a = 0; a < args.length; a++)
+		{
+			// A bare name is an Analog argument, as a recipe item may be a
+			// bare tag name
+			var arg = (typeof args[a] === 'string') ? {name: args[a]} :
+				(args[a] || {});
+
+			for (var k in arg)
+			{
+				if (mxUtils.indexOf(HmiCli.QUICK_ARG_FIELDS, k) < 0)
+				{
+					errors.push(what + ' argument ' + (a + 1) +
+						': unknown field "' + k + '" (allowed: ' +
+						HmiCli.QUICK_ARG_FIELDS.join(', ') + ')');
+				}
+			}
+
+			fn.args.push({name: ('' + (arg.name || '')).trim(),
+				type: HmiQuickFn.normalizeType(arg.type)});
+		}
+
+		var problem = HmiQuickFn.nameProblem(hmi, hmi.quickFunctions, fn);
+
+		if (problem != null)
+		{
+			errors.push(what + ': ' + problem);
+
+			continue;
+		}
+
+		hmi.quickFunctions.push(fn);
+	}
+};
+
 HmiCli.buildRecipeBooks = function(hmi, books, errors)
 {
 	if (!Array.isArray(books))
@@ -932,6 +1003,17 @@ HmiCli.dump = function(ui)
 			}
 
 			return out;
+		});
+	}
+
+	if (hmi.quickFunctions.length > 0)
+	{
+		spec.quickFunctions = hmi.quickFunctions.map(function(f)
+		{
+			return {name: f.name, args: f.args.map(function(a)
+			{
+				return {name: a.name, type: a.type};
+			}), body: f.body};
 		});
 	}
 

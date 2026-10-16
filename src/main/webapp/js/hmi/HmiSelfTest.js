@@ -40,6 +40,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testSimulation();
 		HmiSelfTest.testConditionals();
 		HmiSelfTest.testLocals();
+		HmiSelfTest.testQuickFunctions();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
@@ -49,6 +50,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRetentive(ui);
 		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testRecipes(ui);
+		HmiSelfTest.testQuickFunctionsDialog(ui);
 		HmiSelfTest.testTrends(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testArcs(ui);
@@ -7443,5 +7445,629 @@ HmiSelfTest.testRenameOtherPages = function(ui)
 	ui.removePage(other);
 	ui.selectPage((savedPage != null) ? savedPage : here);
 	HmiSelfTest.resetGraph(ui);
+	ui.hmiProject = saved;
+};
+
+// ------------------------------------------------------- QuickFunctions
+
+/**
+ * The language half of QuickFunctions: calling, arguments, Return, what makes
+ * one script-only, recursion and the caps. No graph and no dialog.
+ */
+HmiSelfTest.testQuickFunctions = function()
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryReal'));
+	project.quickFunctions = [
+		{name: 'Scaled', args: [{name: 'Raw', type: 'Analog'}],
+			body: 'Return Raw * 2;'},
+		{name: 'Outer', args: [{name: 'X', type: 'Analog'}],
+			body: 'Return Scaled(X) + Tank_Level;'},
+		{name: 'Writer', args: [], body: 'Pump1_Run = 1;\nReturn 1;'},
+		{name: 'Wrapper', args: [], body: 'Return Writer();'},
+		{name: 'Silent', args: [], body: 'DIM a AS Analog;\na = 1;'},
+		{name: 'Early', args: [{name: 'N', type: 'Analog'}],
+			body: 'IF N > 10 THEN Return 1; ENDIF;\nResult = 99;\nReturn 0;'},
+		{name: 'Label', args: [{name: 'T', type: 'Message'}],
+			body: 'Return T + "!";'},
+		{name: 'Flag', args: [{name: 'D', type: 'Discrete'}], body: 'Return D;'}
+	];
+
+	var values = {};
+	var written = {};
+
+	var reset = function()
+	{
+		values = {
+			'Tank_Level': {value: 10, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'Pump1_Run': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'Result': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5}
+		};
+		written = {};
+	};
+
+	var ctx = {
+		read: function(name)
+		{
+			return values[name] ||
+				{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+		},
+		write: function(name, value)
+		{
+			written[name] = value;
+			values[name] = {value: value, quality: HmiTypes.QUALITY_GOOD,
+				timestamp: 9};
+		},
+		now: function() { return Date.now(); }
+	};
+
+	var run = function(src, mode)
+	{
+		reset();
+
+		return HmiExpr.compile(src, {project: project, mode: mode}).eval(ctx);
+	};
+
+	var errorsOf = function(src, mode)
+	{
+		var errors = HmiExpr.compile(src, {project: project, mode: mode}).errors;
+		var messages = [];
+
+		for (var i = 0; i < errors.length; i++)
+		{
+			messages.push(errors[i].message);
+		}
+
+		return messages.join(' | ');
+	};
+
+	// --- calling ---------------------------------------------------------
+
+	check('quick.callsFromExpression', run('Scaled(21)').value === 42,
+		JSON.stringify(run('Scaled(21)')));
+	check('quick.caseInsensitive', run('scaled(3)').value === 6);
+	check('quick.nested', run('Outer(5)').value === 20, run('Outer(5)').value);
+	check('quick.arity', errorsOf('Scaled(1, 2)').indexOf('takes 1 argument, got 2') > 0,
+		errorsOf('Scaled(1, 2)'));
+	check('quick.unknownStillUnknown',
+		errorsOf('Nope(1)').indexOf('unknown function "Nope"') === 0);
+	check('quick.callsFromScript', (function()
+	{
+		var r = run('Result = Scaled(4);', 'script');
+
+		return written['Result'] === 8;
+	})(), JSON.stringify(written));
+
+	// --- arguments -------------------------------------------------------
+
+	var compiled = HmiExpr.compile('Outer(1)', {project: project});
+	check('quick.depsPropagate',
+		mxUtils.indexOf(compiled.deps, 'Tank_Level') >= 0,
+		compiled.deps.join(','));
+	check('quick.argsAreNotDeps',
+		mxUtils.indexOf(compiled.deps, 'Raw') < 0 &&
+		mxUtils.indexOf(compiled.deps, 'X') < 0, compiled.deps.join(','));
+	check('quick.coercesMessage', run('Label(7)').value === '7!',
+		run('Label(7)').value);
+	check('quick.coercesDiscrete', run('Flag(5)').value === 1);
+	check('quick.argQuality', (function()
+	{
+		reset();
+		values['Tank_Level'] = {value: 3, quality: HmiTypes.QUALITY_BAD,
+			timestamp: 1};
+
+		return HmiExpr.compile('Scaled(Tank_Level)',
+			{project: project}).eval(ctx).quality === HmiTypes.QUALITY_BAD;
+	})());
+
+	// --- Return ----------------------------------------------------------
+
+	check('quick.noReturnGivesZero', run('Silent()').value === 0 &&
+		run('Silent()').quality === HmiTypes.QUALITY_GOOD);
+	check('quick.returnStopsThere', (function()
+	{
+		run('Result = Early(20);', 'script');
+
+		return written['Result'] === 1;
+	})(), JSON.stringify(written));
+	check('quick.returnFallsThrough', (function()
+	{
+		run('Result = Early(1);', 'script');
+
+		return written['Result'] === 0 && values['Result'].value === 0;
+	})(), JSON.stringify(written));
+	check('quick.returnCarriesQuality', (function()
+	{
+		reset();
+		values['Tank_Level'] = {value: 7, quality: HmiTypes.QUALITY_UNCERTAIN,
+			timestamp: 42};
+		var r = HmiExpr.compile('Scaled(1) + 0', {project: project}).eval(ctx);
+
+		return r.quality === HmiTypes.QUALITY_GOOD;
+	})());
+	check('quick.returnOnlyInFunction',
+		errorsOf('Return 1;', 'script').indexOf('only be used in a QuickFunction') > 0,
+		errorsOf('Return 1;', 'script'));
+
+	// A tag named Return keeps working: the word is only a keyword where a
+	// statement begins and a value follows.
+	var rp = HmiSelfTest.sampleProject();
+	rp.addTag(HmiProject.createTag('Return', 'MemoryReal'));
+	rp.addTag(HmiProject.createTag('Result', 'MemoryReal'));
+	check('quick.tagNamedReturnReads',
+		HmiExpr.compile('Return + 1', {project: rp}).errors.length === 0);
+	check('quick.tagNamedReturnWrites',
+		HmiExpr.compile('Return = 3;', {project: rp, mode: 'script'}).errors.length === 0);
+
+	// --- what makes a function script-only -------------------------------
+
+	check('quick.impureRefusedInExpression',
+		errorsOf('Writer()').indexOf('only be used in a script') > 0,
+		errorsOf('Writer()'));
+	check('quick.impureAllowedInScript',
+		errorsOf('Result = Writer();', 'script') === '',
+		errorsOf('Result = Writer();', 'script'));
+	check('quick.impureIsTransitive',
+		errorsOf('Wrapper()').indexOf('only be used in a script') > 0,
+		errorsOf('Wrapper()'));
+	check('quick.pureIsAllowedInExpression', errorsOf('Scaled(1)') === '');
+	check('quick.writesPropagate', (function()
+	{
+		var c = HmiExpr.compile('Result = Writer();',
+			{project: project, mode: 'script'});
+
+		return mxUtils.indexOf(c.writes, 'Pump1_Run') >= 0;
+	})());
+	check('quick.bodyWritesAtRun', (function()
+	{
+		run('Result = Writer();', 'script');
+
+		return written['Pump1_Run'] === 1;
+	})(), JSON.stringify(written));
+
+	// --- the calls that pause --------------------------------------------
+
+	var wp = HmiSelfTest.sampleProject();
+	wp.recipeBooks = [HmiRecipes.newBook('Book')];
+	wp.quickFunctions = [
+		{name: 'Opener', args: [], body: 'ShowWindow("Main");\nReturn 1;'},
+		{name: 'Waiter', args: [],
+			body: 'ShowWindow("Main", "", "", 0, 1);\nReturn 1;'},
+		{name: 'Picker', args: [],
+			body: 'DIM r AS Message;\nr = ShowRecipeSelect("Book");\nReturn r;'}
+	];
+
+	var bodyErrors = function(fn)
+	{
+		var errors = HmiQuickFn.compile(wp, fn).errors;
+
+		return (errors.length > 0) ? errors[0].message : '';
+	};
+
+	check('quick.showWindowAllowed', bodyErrors(wp.quickFunctions[0]) === '',
+		bodyErrors(wp.quickFunctions[0]));
+	check('quick.showWindowMakesItScriptOnly',
+		HmiQuickFn.compile(wp, wp.quickFunctions[0]).impure === true);
+	check('quick.waitingShowWindowRefused',
+		bodyErrors(wp.quickFunctions[1]).indexOf('cannot be used in a QuickFunction') > 0,
+		bodyErrors(wp.quickFunctions[1]));
+	check('quick.showRecipeSelectRefused',
+		bodyErrors(wp.quickFunctions[2]).indexOf('cannot be used in a QuickFunction') > 0,
+		bodyErrors(wp.quickFunctions[2]));
+	check('quick.pausingCallSaysItOnce',
+		HmiQuickFn.compile(wp, wp.quickFunctions[1]).errors.length === 1,
+		'' + HmiQuickFn.compile(wp, wp.quickFunctions[1]).errors.length);
+
+	// A ShowWindow with nothing to wait for goes through ctx.call, which is
+	// what lets a body use it at all.
+	var calls = [];
+	var wctx = {
+		read: function() { return HmiExpr.GOOD(); },
+		write: function() {},
+		now: function() { return Date.now(); },
+		call: function(name, args) { calls.push(name + ':' + args.join(',')); return 1; },
+		callAsync: function(name) { calls.push('async ' + name); }
+	};
+	HmiExpr.compile('Opener();', {project: wp, mode: 'script'}).eval(wctx);
+	check('quick.showWindowIsSynchronous', calls.join(';') === 'ShowWindow:Main',
+		calls.join(';'));
+
+	// --- recursion and the caps ------------------------------------------
+
+	var cp = HmiSelfTest.sampleProject();
+	cp.quickFunctions = [
+		{name: 'Loop', args: [], body: 'Return Loop();'},
+		{name: 'Ping', args: [], body: 'Return Pong();'},
+		{name: 'Pong', args: [], body: 'Return Ping();'},
+		{name: 'Safe', args: [], body: 'Return 1;'}
+	];
+	var cycles = HmiQuickFn.cycles(cp.quickFunctions);
+
+	check('quick.cycleDirect', cycles['loop'] === true);
+	check('quick.cycleMutual', cycles['ping'] === true && cycles['pong'] === true);
+	check('quick.cycleLeavesOthers', cycles['safe'] === undefined);
+	check('quick.cycleAtCallSite', (function()
+	{
+		var errors = HmiExpr.compile('Loop()', {project: cp}).errors;
+
+		return errors.length > 0 && errors[0].message.indexOf('calls itself') > 0;
+	})());
+	check('quick.cycleIsReported', (function()
+	{
+		var problems = HmiQuickFn.problems(cp, cp.quickFunctions,
+			cp.quickFunctions[1]);
+
+		return problems.length === 1 && problems[0].indexOf('calls itself') > 0;
+	})());
+
+	var dp = HmiSelfTest.sampleProject();
+	dp.quickFunctions = [];
+
+	for (var i = 0; i < 25; i++)
+	{
+		dp.quickFunctions.push({name: 'D' + i, args: [],
+			body: (i < 24) ? 'Return D' + (i + 1) + '();' : 'Return 1;'});
+	}
+
+	var deep = HmiExpr.compile('D0()', {project: dp}).eval(ctx);
+	check('quick.depthCap', deep.quality === HmiTypes.QUALITY_BAD &&
+		('' + deep.error).indexOf('nested more than') > 0,
+		JSON.stringify(deep));
+
+	// --- the compile cache -----------------------------------------------
+
+	var ep = HmiSelfTest.sampleProject();
+	ep.quickFunctions = [{name: 'Edited', args: [], body: 'Return 1;'}];
+	check('quick.cacheBeforeEdit',
+		HmiExpr.compile('Edited()', {project: ep}).eval(ctx).value === 1);
+	ep.quickFunctions[0].body = 'Return 2;';
+	ep.touch();
+	check('quick.cacheAfterTouch',
+		HmiExpr.compile('Edited()', {project: ep}).eval(ctx).value === 2,
+		'' + HmiExpr.compile('Edited()', {project: ep}).eval(ctx).value);
+
+	var ap = HmiSelfTest.sampleProject();
+	var sameText = 'Return A;';
+	var fnA = {name: 'Argy', args: [{name: 'A', type: 'Analog'}], body: sameText};
+	var fnB = {name: 'Argy', args: [{name: 'A', type: 'Message'}], body: sameText};
+	check('quick.cacheKnowsArguments',
+		HmiQuickFn.compile(ap, fnA) !== HmiQuickFn.compile(ap, fnB));
+
+	// --- the names -------------------------------------------------------
+
+	check('quick.nameRefusesBuiltin', (function()
+	{
+		var p = HmiQuickFn.nameProblem(project, [],
+			{name: 'Abs', args: [], body: ''});
+
+		return p != null && p.indexOf('built-in') > 0;
+	})());
+	check('quick.nameRefusesTag', (function()
+	{
+		var p = HmiQuickFn.nameProblem(project, [],
+			{name: 'Tank_Level', args: [], body: ''});
+
+		return p != null && p.indexOf('name of a tag') > 0;
+	})());
+	check('quick.nameRefusesKeyword', (function()
+	{
+		var p = HmiQuickFn.nameProblem(project, [],
+			{name: 'Return', args: [], body: ''});
+
+		return p != null && p.indexOf('keyword') > 0;
+	})());
+	check('quick.argRefusesTagName', (function()
+	{
+		var p = HmiQuickFn.nameProblem(project, [], {name: 'Ok',
+			args: [{name: 'Tank_Level', type: 'Analog'}], body: ''});
+
+		return p != null && p.indexOf('name of a tag') > 0;
+	})());
+	check('quick.argRefusesDuplicate', (function()
+	{
+		var p = HmiQuickFn.nameProblem(project, [], {name: 'Ok',
+			args: [{name: 'A', type: 'Analog'}, {name: 'a', type: 'Analog'}],
+			body: ''});
+
+		return p != null && p.indexOf('two arguments') > 0;
+	})());
+	check('quick.nameAccepts',
+		HmiQuickFn.nameProblem(project, project.quickFunctions,
+			project.quickFunctions[0]) == null);
+	check('quick.noReturnIsReported', (function()
+	{
+		var problems = HmiQuickFn.problems(project, project.quickFunctions,
+			project.quickFunctions[4]);
+
+		return problems.length === 1 && problems[0].indexOf('no Return') > 0;
+	})(), HmiQuickFn.problems(project, project.quickFunctions,
+		project.quickFunctions[4]).join(' | '));
+
+	// --- the project file ------------------------------------------------
+
+	var mp = HmiSelfTest.sampleProject();
+	check('quick.emptyProjectHasNoElement', (function()
+	{
+		var doc = mxUtils.createXmlDocument();
+
+		return mp.toXml(doc).getElementsByTagName('quickFunctions').length === 0;
+	})());
+
+	mp.quickFunctions = [
+		{name: 'Kept', args: [{name: 'A', type: 'Discrete'},
+			{name: 'B', type: 'Message'}],
+			body: '{ a comment }\nIF A THEN\n\tReturn B + " <&>";\nENDIF;\nReturn "";'},
+		{name: 'Bare', args: [], body: ''}
+	];
+
+	var fresh = HmiSelfTest.sampleProject();
+	fresh.quickFunctions = HmiQuickFn.copy(mp.quickFunctions);
+	check('quick.makesProjectNonEmpty', !fresh.isEmpty());
+
+	var doc = mxUtils.createXmlDocument();
+	var xml1 = mxUtils.getXml(mp.toXml(doc));
+	var back = HmiProject.fromXml(mxUtils.parseXml(xml1).documentElement);
+	check('quick.roundTrip',
+		JSON.stringify(back.quickFunctions) === JSON.stringify(mp.quickFunctions),
+		JSON.stringify(back.quickFunctions));
+
+	var doc2 = mxUtils.createXmlDocument();
+	check('quick.xmlIsStable',
+		mxUtils.getXml(back.toXml(doc2)) === xml1);
+
+	var pretty = mxUtils.parseXml(mxUtils.getPrettyXml(
+		mxUtils.parseXml(xml1).documentElement)).documentElement;
+	var prettyBack = HmiProject.fromXml(pretty);
+	check('quick.prettyRoundTrip',
+		JSON.stringify(prettyBack.quickFunctions) ===
+		JSON.stringify(mp.quickFunctions),
+		JSON.stringify(prettyBack.quickFunctions));
+};
+
+/** The dialog, Validate, the command line and what a tag rename reaches. */
+HmiSelfTest.testQuickFunctionsDialog = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryReal'));
+	project.quickFunctions = [
+		{name: 'Scaled', args: [{name: 'Raw', type: 'Analog'}],
+			body: 'Return Raw * Tank_Level;'},
+		{name: 'Writer', args: [], body: 'Pump1_Run = 1;\nReturn 1;'}
+	];
+	ui.hmiProject = project;
+
+	// The dialog is driven with the host stubbed: a real hideDialog closes
+	// whatever else is open, and the focus it hands back breaks the deferred
+	// checks at the end of the suite.
+	var realShow = ui.showDialog;
+	var realHide = ui.hideDialog;
+	var shown = null;
+
+	ui.showDialog = function(div) { shown = div; };
+	ui.hideDialog = function() { shown = null; };
+
+	try
+	{
+		// --- the menu -----------------------------------------------------
+
+		var labels = [];
+		var fake = {showDisabled: true, hideShortcuts: true,
+			addItem: function(label)
+			{
+				labels.push(label);
+
+				return document.createElement('div');
+			},
+			addSeparator: function() {},
+			addCheckmark: function() {}};
+
+		try
+		{
+			ui.menus.get('hmi').funct(fake, null);
+		}
+		catch (e)
+		{
+			// Only our own item matters here
+		}
+
+		check('quickDlg.inMenu',
+			mxUtils.indexOf(labels,
+				mxResources.get('hmiQuickFunctions') + '...') >= 0,
+			labels.join(' | ').substring(0, 100));
+		check('quickDlg.actionRegistered',
+			ui.actions.get('hmiQuickFunctions') != null);
+
+		// --- the dialog ---------------------------------------------------
+
+		var box = HmiDialogs.showQuickFunctions(ui);
+		var field = function(name)
+		{
+			return box.querySelector('[data-hmi-field="' + name + '"]');
+		};
+
+		check('quickDlg.listsFunctions',
+			box.querySelectorAll('[data-hmi-fn]').length === 2);
+		check('quickDlg.showsSignature',
+			box.querySelector('[data-hmi-fn="Scaled"] td').innerText ===
+			'Scaled(Raw)',
+			box.querySelector('[data-hmi-fn="Scaled"] td').innerText);
+		check('quickDlg.showsUsage', (function()
+		{
+			var cells = box.querySelectorAll('[data-hmi-fn="Writer"] td');
+
+			return cells[1].innerText === 'scripts only';
+		})());
+
+		// The body is compiled with this function's own arguments in scope.
+		field('fnBody').value = 'Return Raw + 1;';
+		field('fnBody').dispatchEvent(new Event('input'));
+		check('quickDlg.bodyKnowsArguments',
+			!field('fnBody').classList.contains('hmiInvalid'),
+			field('fnBody').getAttribute('title'));
+
+		field('fnBody').value = 'Return Nope + 1;';
+		field('fnBody').dispatchEvent(new Event('input'));
+		check('quickDlg.bodyMarksUnknownTag',
+			field('fnBody').classList.contains('hmiInvalid'));
+
+		field('fnBody').value = 'Return Raw * Tank_Level;';
+		field('fnBody').dispatchEvent(new Event('input'));
+
+		// Arguments
+		field('addArg').click();
+		check('quickDlg.addsArgument',
+			box.querySelectorAll('[data-hmi-arg]').length === 2);
+		var argNames = box.querySelectorAll('[data-hmi-field="argName"]');
+		argNames[1].value = 'Span';
+		argNames[1].dispatchEvent(new Event('input'));
+		check('quickDlg.renamesArgument',
+			box.querySelector('[data-hmi-fn="Scaled"] td').innerText ===
+			'Scaled(Raw, Span)',
+			box.querySelector('[data-hmi-fn="Scaled"] td').innerText);
+		box.querySelectorAll('[data-hmi-field="removeArg"]')[1].click();
+		check('quickDlg.removesArgument',
+			box.querySelectorAll('[data-hmi-arg]').length === 1);
+
+		// A function added here is callable from another body at once.
+		field('addFunction').click();
+		check('quickDlg.adds',
+			box.querySelectorAll('[data-hmi-fn]').length === 3);
+		field('fnName').value = 'Doubled';
+		field('fnName').dispatchEvent(new Event('input'));
+		field('fnBody').value = 'Return Scaled(2);';
+		field('fnBody').dispatchEvent(new Event('input'));
+		check('quickDlg.bodySeesSibling',
+			!field('fnBody').classList.contains('hmiInvalid'),
+			field('fnBody').getAttribute('title'));
+		check('quickDlg.usageLine',
+			field('fnUsage').innerText.indexOf('scripts and expressions') > 0,
+			field('fnUsage').innerText);
+
+		// Refusals: OK stays open and says why.
+		field('fnName').value = 'Abs';
+		field('fnName').dispatchEvent(new Event('input'));
+		box.querySelector('.hmiOk').click();
+		check('quickDlg.refusesBuiltinName',
+			shown === box && field('quickError').innerText.indexOf('built-in') > 0,
+			field('quickError').innerText);
+
+		field('fnName').value = 'Tank_Level';
+		field('fnName').dispatchEvent(new Event('input'));
+		box.querySelector('.hmiOk').click();
+		check('quickDlg.refusesTagName',
+			shown === box &&
+			field('quickError').innerText.indexOf('name of a tag') > 0,
+			field('quickError').innerText);
+
+		field('fnName').value = 'Doubled';
+		field('fnName').dispatchEvent(new Event('input'));
+		field('deleteFunction').click();
+		box.querySelector('.hmiOk').click();
+		check('quickDlg.okApplies', shown == null &&
+			project.quickFunctions.length === 2 && ui.editor.modified,
+			'' + project.quickFunctions.length);
+
+		// Cancel leaves the project alone.
+		var before = JSON.stringify(project.quickFunctions);
+		var second = HmiDialogs.showQuickFunctions(ui);
+		second.querySelector('[data-hmi-field="addFunction"]').click();
+		ui.hideDialog();
+		check('quickDlg.cancelDiscards',
+			JSON.stringify(project.quickFunctions) === before);
+
+		// --- Validate ------------------------------------------------------
+
+		project.quickFunctions.push({name: 'Broken', args: [],
+			body: 'Return Nope;'});
+		project.quickFunctions.push({name: 'Looper', args: [],
+			body: 'Return Looper();'});
+		project.touch();
+
+		var found = HmiMenus.checkQuickFunctions(project);
+		var messages = [];
+
+		for (var i = 0; i < found.length; i++)
+		{
+			messages.push(found[i].name + ': ' + found[i].message);
+		}
+
+		check('quickDlg.validateReportsBody',
+			messages.join(' | ').indexOf('unknown tag "Nope"') > 0,
+			messages.join(' | '));
+		check('quickDlg.validateReportsCycle',
+			messages.join(' | ').indexOf('calls itself') > 0,
+			messages.join(' | '));
+
+		project.quickFunctions.pop();
+		project.quickFunctions.pop();
+		project.touch();
+		check('quickDlg.validateClean',
+			HmiMenus.checkQuickFunctions(project).length === 0,
+			JSON.stringify(HmiMenus.checkQuickFunctions(project)));
+
+		// --- the command line ----------------------------------------------
+
+		var errors = [];
+		var built = HmiCli.buildProject({version: 1,
+			tags: [{name: 'Level', type: 'MemoryReal'}],
+			quickFunctions: [{name: 'Half', args: ['Raw'],
+				body: 'Return Raw / 2;'}]}, errors);
+
+		check('quickDlg.cliBuilds', errors.length === 0 &&
+			built.quickFunctions.length === 1 &&
+			built.quickFunctions[0].args[0].type === 'Analog',
+			errors.join(' | '));
+
+		errors = [];
+		HmiCli.buildProject({version: 1, tags: [],
+			quickFunctions: [{name: 'Abs', args: [], body: 'Return 1;'}]}, errors);
+		check('quickDlg.cliRefusesBuiltin',
+			errors.join(' | ').indexOf('built-in') > 0, errors.join(' | '));
+
+		errors = [];
+		HmiCli.buildProject({version: 1, tags: [],
+			quickFunctions: [{name: 'Ok', args: [], body: 'Return 1;',
+				colour: 'red'}]}, errors);
+		check('quickDlg.cliRefusesUnknownField',
+			errors.join(' | ').indexOf('unknown field "colour"') > 0,
+			errors.join(' | '));
+
+		// --- a tag rename reaches a body, but not an argument ---------------
+
+		var sites = HmiTagRefs.findInProject(ui, 'Tank_Level');
+		var inBody = false;
+
+		for (var i = 0; i < sites.length; i++)
+		{
+			inBody = inBody || ('' + sites[i].path).indexOf('QuickFunction') === 0;
+		}
+
+		check('quickDlg.bodyIsAReferenceSite', inBody,
+			sites.length + ' sites');
+
+		var shielded = HmiTagRefs.rewriteText('Return Raw * 2;', {'raw': 'Other'},
+			'script', {'raw': true});
+		check('quickDlg.argumentsAreShielded', shielded.count === 0 &&
+			shielded.text === 'Return Raw * 2;', shielded.text);
+
+		var renamed = HmiTagRefs.rename(ui, {'tank_level': 'Vessel_Level'});
+		check('quickDlg.renameReachesBody',
+			project.quickFunctions[0].body.indexOf('Vessel_Level') > 0 &&
+			project.quickFunctions[0].body.indexOf('Raw') > 0,
+			project.quickFunctions[0].body);
+	}
+	finally
+	{
+		ui.showDialog = realShow;
+		ui.hideDialog = realHide;
+	}
+
+	// This test renames a tag, which changes the model and schedules a panel
+	// rebuild: settle it rather than leave it to land in a later test.
+	HmiSelfTest.resetGraph(ui);
+	HmiSelfTest.settleFormat(ui);
 	ui.hmiProject = saved;
 };

@@ -471,7 +471,7 @@ HmiTagRefs.scanDim = function(tokens)
  * where kind is 'ident' or 'literal' (a tag name passed to LinkIndirectTag or
  * TrendSetPen as text).
  */
-HmiTagRefs.scanText = function(src, mode)
+HmiTagRefs.scanText = function(src, mode, shield)
 {
 	var out = {sites: [], error: null};
 
@@ -492,6 +492,13 @@ HmiTagRefs.scanText = function(src, mode)
 	var tokens = lex.tokens;
 	var dim = (mode === 'script') ? HmiTagRefs.scanDim(tokens) :
 		{locals: {}, skip: {}};
+
+	// A QuickFunction's arguments are local variables that no DIM declares,
+	// so the caller names them and they are skipped like any other local.
+	for (var name in (shield || {}))
+	{
+		dim.locals[name] = true;
+	}
 
 	for (var i = 0; i < tokens.length; i++)
 	{
@@ -631,7 +638,7 @@ HmiTagRefs.localsIn = function(src)
  * The tag names one field holds: fn(name) for each reference, duplicates
  * included. System tags are not reported: they cannot be replaced.
  */
-HmiTagRefs.namesIn = function(value, role, fn)
+HmiTagRefs.namesIn = function(value, role, fn, shield)
 {
 	if (role === 'tag')
 	{
@@ -645,7 +652,8 @@ HmiTagRefs.namesIn = function(value, role, fn)
 		return;
 	}
 
-	var scan = HmiTagRefs.scanText(value, (role === 'script') ? 'script' : 'expr');
+	var scan = HmiTagRefs.scanText(value, (role === 'script') ? 'script' : 'expr',
+		shield);
 
 	for (var i = 0; i < scan.sites.length; i++)
 	{
@@ -663,12 +671,15 @@ HmiTagRefs.namesIn = function(value, role, fn)
  *
  * @param map {lowercase old name: new name}, applied as a whole: each site is
  * matched against the original text once, so nothing cascades.
+ * @param shield names this text holds that are not tags, lower case: a
+ * QuickFunction's arguments, which are local variables with no DIM to find
+ * them by.
  * @returns {Object} {text, count, error}; with an error the text is returned
  * unchanged.
  */
-HmiTagRefs.rewriteText = function(src, map, mode)
+HmiTagRefs.rewriteText = function(src, map, mode, shield)
 {
-	var scan = HmiTagRefs.scanText(src, mode);
+	var scan = HmiTagRefs.scanText(src, mode, shield);
 
 	if (scan.error != null)
 	{
@@ -1043,6 +1054,18 @@ HmiTagRefs.eachProjectField = function(project, fn)
 				path: 'recipe "' + name + '" in "' + book.name + '"'});
 		}
 	}
+
+	var fns = (project.quickFunctions != null) ? project.quickFunctions : [];
+
+	for (var q = 0; q < fns.length; q++)
+	{
+		if (typeof fns[q].body === 'string' && fns[q].body !== '')
+		{
+			fn({holder: fns[q], field: 'body', role: 'script',
+				path: 'QuickFunction "' + fns[q].name + '"',
+				shield: HmiQuickFn.argKeys(fns[q])});
+		}
+	}
 };
 
 /** Re-keys a recipe's values. Returns how many keys moved. */
@@ -1180,7 +1203,7 @@ HmiTagRefs.findInProject = function(ui, name)
 				found.push({cell: site.cell, link: (site.key != null) ? site.key : site.path,
 					field: site.field, path: site.path, page: site.page});
 			}
-		});
+		}, site.shield);
 	});
 
 	return found;
@@ -1299,7 +1322,7 @@ HmiTagRefs.rename = function(ui, map)
 		var src = site.holder[site.field];
 		var out = (site.role === 'tag') ? HmiTagRefs.rewriteName(src, map) :
 			HmiTagRefs.rewriteText(src, map,
-				(site.role === 'script') ? 'script' : 'expr');
+				(site.role === 'script') ? 'script' : 'expr', site.shield);
 
 		if (out.error != null)
 		{
