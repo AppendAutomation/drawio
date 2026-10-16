@@ -911,6 +911,50 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 3,
 		'rows = ' + dlg.listDiv.getElementsByClassName('hmiTagRow').length);
 
+	// Alphabetical, whatever order the project holds them in, and the list
+	// only: the file and the CSV keep the project's own order.
+	var listed = function()
+	{
+		var rows = dlg.listDiv.getElementsByClassName('hmiTagRow');
+		var names = [];
+
+		for (var i = 0; i < rows.length; i++)
+		{
+			names.push(rows[i].firstChild.innerText);
+		}
+
+		return names.join(',');
+	};
+
+	HmiSelfTest.check('tagDialog.listsAlphabetically',
+		listed() === 'Pump1_Run,Recipe_Name,Tank_Level', listed());
+	HmiSelfTest.check('tagDialog.keepsProjectOrder',
+		ui.hmiProject.tags[0].name === 'Tank_Level',
+		ui.hmiProject.tags[0].name);
+
+	// New tag... sits above the filter, where a new tag is reached before
+	// the list it lands in.
+	var pane = dlg.filter.parentNode;
+	var newTagSelect = dlg.container.querySelector('[data-hmi-field="newTagType"]');
+
+	HmiSelfTest.check('tagDialog.newTagAboveFilter', newTagSelect != null &&
+		pane.firstChild === newTagSelect && pane.childNodes[1] === dlg.filter);
+
+	// An HMI edit has to mark the file, not just the editor: when the
+	// application closes it asks the file whether to offer a save.
+	var currentFile = (ui.getCurrentFile != null) ? ui.getCurrentFile() : null;
+
+	if (currentFile != null)
+	{
+		currentFile.setModified(false);
+		HmiFile.markModified(ui);
+
+		HmiSelfTest.check('tagDialog.marksTheFileModified',
+			currentFile.isModified() === true && ui.editor.modified === true);
+
+		currentFile.setModified(false);
+	}
+
 	dlg.filter.value = 'pump';
 	dlg.renderList();
 

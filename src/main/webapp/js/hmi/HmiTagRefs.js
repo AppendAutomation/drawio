@@ -1347,7 +1347,7 @@ HmiTagRefs.rename = function(ui, map)
 	if (res.sites > 0 && project != null)
 	{
 		project.touch();
-		ui.editor.setModified(true);
+		HmiFile.markModified(ui);
 	}
 
 	return res;

@@ -62,6 +62,33 @@ HmiFile.install = function()
 		return node;
 	};
 
+	// ---------------------------------------------------------- modified
+
+	/**
+	 * Marks the project changed, the way editing the drawing does.
+	 *
+	 * An HMI edit -- a tag, a device, a recipe book, a QuickFunction -- changes
+	 * no cells, so without this the file is never told that anything happened:
+	 * the title shows no change, no draft is written, and closing the
+	 * application offers to save nothing.
+	 */
+	HmiFile.markModified = function(ui)
+	{
+		if (ui == null || ui.editor == null)
+		{
+			return;
+		}
+
+		ui.editor.setModified(true);
+
+		var file = (ui.getCurrentFile != null) ? ui.getCurrentFile() : null;
+
+		if (file != null && file.fileChanged != null)
+		{
+			HmiLog.guard('file.changed', function() { file.fileChanged(); });
+		}
+	};
+
 	// ----------------------------------------------------------- loading
 
 	var editorUiSetFileData = EditorUi.prototype.setFileData;

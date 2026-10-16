@@ -150,22 +150,10 @@ HmiTagDialog = function(ui)
 	// Left: the list plus its toolbar.
 	var left = HmiDialogs.el('div', 'hmiTagListPane');
 
-	this.filter = document.createElement('input');
-	this.filter.className = 'hmiInput';
-	this.filter.setAttribute('type', 'text');
-	this.filter.setAttribute('placeholder', 'Filter');
-
 	var that = this;
-	mxEvent.addListener(this.filter, 'input', function() { that.renderList(); });
-	left.appendChild(this.filter);
-
-	this.listDiv = HmiDialogs.el('div', 'hmiTagList');
-	left.appendChild(this.listDiv);
-
-	var tools = HmiDialogs.el('div', 'hmiTagTools');
-
 	var newSelect = document.createElement('select');
-	newSelect.className = 'hmiInput';
+	newSelect.className = 'hmiInput hmiNewTag';
+	newSelect.setAttribute('data-hmi-field', 'newTagType');
 	var first = document.createElement('option');
 	first.setAttribute('value', '');
 	mxUtils.write(first, 'New tag...');
@@ -188,7 +176,21 @@ HmiTagDialog = function(ui)
 		}
 	});
 
-	tools.appendChild(newSelect);
+	left.appendChild(newSelect);
+
+	this.filter = document.createElement('input');
+	this.filter.className = 'hmiInput';
+	this.filter.setAttribute('type', 'text');
+	this.filter.setAttribute('placeholder', 'Filter');
+
+	mxEvent.addListener(this.filter, 'input', function() { that.renderList(); });
+	left.appendChild(this.filter);
+
+	this.listDiv = HmiDialogs.el('div', 'hmiTagList');
+	left.appendChild(this.listDiv);
+
+	var tools = HmiDialogs.el('div', 'hmiTagTools');
+
 	tools.appendChild(HmiDialogs.button('Duplicate', function() { that.duplicate(); }));
 	tools.appendChild(HmiDialogs.button('Delete', function() { that.remove(); }));
 	left.appendChild(tools);
@@ -250,6 +252,16 @@ HmiTagDialog.prototype.visibleTags = function()
 			res.push(tag);
 		}
 	}
+
+	// Sorted for the list only: the project keeps the order it was built in,
+	// which is the order the file is written and the CSV exported in.
+	res.sort(function(a, b)
+	{
+		var x = a.name.toLowerCase();
+		var y = b.name.toLowerCase();
+
+		return (x < y) ? -1 : ((x > y) ? 1 : 0);
+	});
 
 	return res;
 };
@@ -843,7 +855,7 @@ HmiTagDialog.rewriteReferences = function(ui, from, to)
 HmiTagDialog.prototype.markModified = function()
 {
 	this.project.touch();
-	this.ui.editor.setModified(true);
+	HmiFile.markModified(this.ui);
 };
 
 // --------------------------------------------------------------- CSV
@@ -1261,7 +1273,7 @@ HmiTagEditorDialog.prototype.save = function()
 	// The compile cache is keyed on the dictionary's revision: without this
 	// every cached expression still says the tag is unknown.
 	this.project.touch();
-	this.ui.editor.setModified(true);
+	HmiFile.markModified(this.ui);
 	this.dirty = false;
 	this.finish(true);
 
@@ -2004,7 +2016,7 @@ HmiDialogs.showDevices = function(ui)
 	var changed = function()
 	{
 		project.touch();
-		ui.editor.setModified(true);
+		HmiFile.markModified(ui);
 	};
 
 	var renderList = function()
@@ -2618,14 +2630,14 @@ HmiDialogs.showAppSettings = function(ui)
 				rt.salt = salt;
 				rt.hash = hash;
 				project.touch();
-				ui.editor.setModified(true);
+				HmiFile.markModified(ui);
 			});
 		}
 
 		if (changed)
 		{
 			project.touch();
-			ui.editor.setModified(true);
+			HmiFile.markModified(ui);
 			HmiFrame.refresh(ui);
 		}
 
@@ -2970,7 +2982,7 @@ HmiDialogs.showWindowProps = function(ui, page)
 		if (changed)
 		{
 			project.touch();
-			ui.editor.setModified(true);
+			HmiFile.markModified(ui);
 			HmiFrame.refresh(ui);
 		}
 
@@ -3864,7 +3876,7 @@ HmiDialogs.showPublishOptions = function(ui, tools)
 			{
 				project.settings.publish = remembered;
 				project.touch();
-				ui.editor.setModified(true);
+				HmiFile.markModified(ui);
 			}
 		})['catch'](function(e)
 		{
@@ -4316,7 +4328,7 @@ HmiDialogs.showUsers = function(ui, options)
 			{
 				project.users = HmiSecurity.copyUsers(users);
 				project.touch();
-				ui.editor.setModified(true);
+				HmiFile.markModified(ui);
 			}
 		}
 
@@ -5101,7 +5113,7 @@ HmiDialogs.showQuickFunctions = function(ui)
 			project.quickFunctions = fns;
 			// Compiled expressions hold the old functions until this
 			project.touch();
-			ui.editor.setModified(true);
+			HmiFile.markModified(ui);
 		}
 
 		return true;
@@ -5605,7 +5617,7 @@ HmiDialogs.showRecipes = function(ui)
 		{
 			project.recipeBooks = books;
 			project.touch();
-			ui.editor.setModified(true);
+			HmiFile.markModified(ui);
 		}
 
 		return true;
