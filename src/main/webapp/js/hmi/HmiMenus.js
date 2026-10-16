@@ -326,7 +326,7 @@ HmiMenus.installMenu = function()
 			// the item is skipped silently, leaving an empty menu.
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
-				this.addMenuItems(menu, ['hmiTagDictionary',
+				this.addMenuItems(menu, ['hmiTagDictionary', 'hmiFindReplaceTags',
 					'hmiDevices', 'hmiUsers', 'hmiRecipes', 'hmiQuickFunctions', '-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
@@ -335,8 +335,6 @@ HmiMenus.installMenu = function()
 
 				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers', 'hmiClearRuntimeRecipes'], parent);
 			})));
-
-			HmiMenus.extendEditMenu(this);
 		}));
 	};
 
@@ -351,30 +349,6 @@ HmiMenus.installMenu = function()
 		next.splice((at >= 0) ? at : next.length, 0, 'hmi');
 		Menus.prototype.defaultMenuItems = next;
 	}
-};
-
-/**
- * Find/Replace Tag References joins the upstream Edit menu, beside its own
- * Find/Replace. The menu's builder is wrapped rather than replaced, so
- * whatever upstream adds to Edit later still appears.
- */
-HmiMenus.extendEditMenu = function(menus)
-{
-	var edit = menus.get('edit');
-
-	if (edit == null || edit.funct == null || edit.hmiExtended)
-	{
-		return;
-	}
-
-	var funct = edit.funct;
-	edit.hmiExtended = true;
-
-	edit.funct = function(menu, parent)
-	{
-		funct(menu, parent);
-		menus.addMenuItems(menu, ['-', 'hmiFindReplaceTags'], parent);
-	};
 };
 
 // ------------------------------------------------------------ page menu

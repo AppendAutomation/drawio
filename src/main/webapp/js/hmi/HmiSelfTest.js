@@ -947,6 +947,43 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 	HmiSelfTest.check('tagDialog.csvNumeric',
 		ui.hmiProject.getTag('CSV_Flow').maxEU === 500);
 
+	// --- duplicating counts up ------------------------------------------
+	// A copy of NewTag is NewTag1 and a copy of that is NewTag2, rather than
+	// a name growing a suffix every time it is copied.
+
+	var taken = function(name)
+	{
+		return mxUtils.indexOf(['NewTag', 'NewTag1', 'Valve12'], name) >= 0;
+	};
+
+	HmiSelfTest.check('name.nextStartsAtOne',
+		HmiDialogs.nextName('Tank_Level', taken) === 'Tank_Level1');
+	HmiSelfTest.check('name.nextCountsUp',
+		HmiDialogs.nextName('NewTag1', taken) === 'NewTag2');
+	HmiSelfTest.check('name.nextSkipsTaken',
+		HmiDialogs.nextName('NewTag', taken) === 'NewTag2',
+		HmiDialogs.nextName('NewTag', taken));
+	HmiSelfTest.check('name.nextOnlyTheEndCounts',
+		HmiDialogs.nextName('Pump9_Run', taken) === 'Pump9_Run1');
+	HmiSelfTest.check('name.nextKeepsDigits',
+		HmiDialogs.nextName('Valve12', taken) === 'Valve13');
+	HmiSelfTest.check('name.freeKeepsAFreeName',
+		HmiDialogs.freeName('Spare', taken) === 'Spare' &&
+		HmiDialogs.freeName('NewTag', taken) === 'NewTag2');
+
+	dlg.selected = ui.hmiProject.getTag('Pump1_Run');
+	dlg.duplicate();
+	HmiSelfTest.check('tagDialog.duplicateCountsUp',
+		ui.hmiProject.getTag('Pump1_Run1') != null &&
+		dlg.selected.name === 'Pump1_Run1',
+		dlg.selected.name);
+	dlg.duplicate();
+	HmiSelfTest.check('tagDialog.duplicateCountsUpAgain',
+		ui.hmiProject.getTag('Pump1_Run2') != null, dlg.selected.name);
+	ui.hmiProject.removeTag('Pump1_Run1');
+	ui.hmiProject.removeTag('Pump1_Run2');
+	dlg.selected = null;
+
 	// --- rename rewrites references --------------------------------------
 	// A rename that does not carry its references breaks every animation
 	// using the tag, so this is asserted rather than assumed.
@@ -7051,14 +7088,14 @@ HmiSelfTest.testFindReplace = function(ui)
 
 	try
 	{
-		ui.menus.get('edit').funct(fake, null);
+		ui.menus.get('hmi').funct(fake, null);
 	}
 	catch (e)
 	{
 		// Only our own item matters here.
 	}
 
-	check('findReplace.inEditMenu',
+	check('findReplace.inHmiMenu',
 		mxUtils.indexOf(labels, mxResources.get('hmiFindReplaceTags') + '...') >= 0,
 		labels.join(' | ').substring(0, 100));
 	check('findReplace.actionRegistered',
@@ -8049,6 +8086,21 @@ HmiSelfTest.testQuickFunctionsDialog = function(ui)
 		// The stubbed host last saw the tag browser: what follows asks
 		// whether OK left this dialog open, so put it back.
 		shown = box;
+
+		// Duplicate counts up, as a duplicated tag does.
+		box.querySelector('[data-hmi-fn="Scaled"]').click();
+		field('duplicateFunction').click();
+		check('quickDlg.duplicateCountsUp',
+			field('fnName').value === 'Scaled1', field('fnName').value);
+		field('duplicateFunction').click();
+		check('quickDlg.duplicateCountsUpAgain',
+			field('fnName').value === 'Scaled2', field('fnName').value);
+		field('deleteFunction').click();
+		box.querySelector('[data-hmi-fn="Scaled1"]').click();
+		field('deleteFunction').click();
+
+		// Back to the one the rest of this test is editing
+		box.querySelector('[data-hmi-fn="Doubled"]').click();
 
 		// Refusals: OK stays open and says why.
 		field('fnName').value = 'Abs';

@@ -637,15 +637,7 @@ HmiTagDialog.prototype.formRename = function(tag, value)
 
 HmiTagDialog.prototype.uniqueName = function(base)
 {
-	var name = base;
-	var n = 1;
-
-	while (this.project.getTag(name) != null)
-	{
-		name = base + '_' + (++n);
-	}
-
-	return name;
+	return HmiDialogs.uniqueTagName(this.project, base);
 };
 
 HmiTagDialog.prototype.createTag = function(type)
@@ -665,8 +657,13 @@ HmiTagDialog.prototype.duplicate = function()
 		return;
 	}
 
+	var that = this;
 	var copy = JSON.parse(JSON.stringify(this.selected));
-	copy.name = this.uniqueName(this.selected.name);
+	// A copy of NewTag is NewTag1, a copy of that is NewTag2
+	copy.name = HmiDialogs.nextName(this.selected.name, function(name)
+	{
+		return that.project.getTag(name) != null;
+	});
 	this.project.addTag(copy);
 	this.selected = copy;
 	this.markModified();
@@ -4388,19 +4385,44 @@ HmiDialogs.copyFallback = function(text)
 	return ok;
 };
 
-/** A tag name nothing has yet: NewTag, NewTag_2, ... */
-HmiDialogs.uniqueTagName = function(project, base)
+/**
+ * The next name after this one: the number at its end counts up, and a name
+ * that ends in no number gets a 1.
+ *
+ * NewTag becomes NewTag1, NewTag1 becomes NewTag2, and so on past anything
+ * already taken. Copying Pump9_Run gives Pump9_Run1, not Pump10_Run: only a
+ * number at the very end counts, so the rest of a name is never reinterpreted.
+ *
+ * @param taken(name) whether something already has that name
+ */
+HmiDialogs.nextName = function(name, taken)
 {
-	var name = base;
-	var n = 2;
+	var match = ('' + name).match(/^(.*?)(\d*)$/);
+	var base = match[1];
+	var n = (match[2] !== '') ? parseInt(match[2], 10) : 0;
+	var next = base + (++n);
 
-	while (project != null && project.getTag(name) != null)
+	while (taken(next))
 	{
-		name = base + '_' + n;
-		n++;
+		next = base + (++n);
 	}
 
-	return name;
+	return next;
+};
+
+/** This name when nothing has it, else the next free one after it. */
+HmiDialogs.freeName = function(name, taken)
+{
+	return (!taken(name)) ? name : HmiDialogs.nextName(name, taken);
+};
+
+/** A tag name nothing has yet: NewTag, NewTag1, NewTag2, ... */
+HmiDialogs.uniqueTagName = function(project, base)
+{
+	return HmiDialogs.freeName(base, function(name)
+	{
+		return project != null && project.getTag(name) != null;
+	});
 };
 
 /**
@@ -4665,18 +4687,14 @@ HmiDialogs.showQuickFunctions = function(ui)
 	error.setAttribute('data-hmi-field', 'quickError');
 	div.appendChild(error);
 
+	var taken = function(name)
+	{
+		return HmiQuickFn.find(fns, name) != null;
+	};
+
 	var uniqueName = function(base)
 	{
-		var name = base;
-		var n = 2;
-
-		while (HmiQuickFn.find(fns, name) != null)
-		{
-			name = base + n;
-			n++;
-		}
-
-		return name;
+		return HmiDialogs.freeName(base, taken);
 	};
 
 	var usage = function(fn)
@@ -4754,7 +4772,8 @@ HmiDialogs.showQuickFunctions = function(ui)
 			}
 
 			var copy = HmiQuickFn.copy([current])[0];
-			copy.name = uniqueName(current.name + 'Copy');
+			// Scaled, Scaled1, Scaled2, as a duplicated tag counts up
+			copy.name = HmiDialogs.nextName(current.name, taken);
 			fns.push(copy);
 			current = copy;
 			scope.touch();

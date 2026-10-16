@@ -43,6 +43,65 @@ HmiFrame.refresh = function(ui)
 	}
 };
 
+/**
+ * Puts the whole screen area on the canvas, centered, zooming out when it is
+ * wider than the window.
+ *
+ * A new document starts with the canvas origin in the middle of the window,
+ * which puts the screen's top left corner there and the rest of it off to the
+ * bottom right -- the first thing an engineer sees is a corner of their
+ * screen. This is what opening a file ends up doing, done deliberately.
+ */
+HmiFrame.showScreen = function(ui)
+{
+	var graph = (ui != null && ui.editor != null) ? ui.editor.graph : null;
+	var project = (ui != null) ? ui.hmiProject : null;
+
+	if (graph == null || project == null || graph.container == null ||
+		graph.container.clientWidth === 0)
+	{
+		return;
+	}
+
+	var container = graph.container;
+	var width = project.settings.width;
+	var height = project.settings.height;
+
+	if (!(width > 0) || !(height > 0))
+	{
+		return;
+	}
+
+	// Room for the border itself, and a little air around it
+	var margin = 48;
+	var scale = Math.min((container.clientWidth - margin) / width,
+		(container.clientHeight - margin) / height);
+	// Never larger than life: a small screen at 200% helps nobody
+	scale = Math.min(1, Math.max(0.2, Math.floor(scale * 100) / 100));
+
+	if (Math.abs(scale - graph.view.scale) > 0.001)
+	{
+		graph.zoomTo(scale);
+	}
+
+	HmiFrame.centerScreen(ui);
+};
+
+/** Scrolls so the screen area sits in the middle of the window. */
+HmiFrame.centerScreen = function(ui)
+{
+	var graph = ui.editor.graph;
+	var project = ui.hmiProject;
+	var container = graph.container;
+	var scale = graph.view.scale;
+	var translate = graph.view.translate;
+
+	container.scrollLeft = Math.round((translate.x +
+		project.settings.width / 2) * scale - container.clientWidth / 2);
+	container.scrollTop = Math.round((translate.y +
+		project.settings.height / 2) * scale - container.clientHeight / 2);
+};
+
 HmiFrame.draw = function(ui)
 {
 	var graph = ui.editor.graph;
