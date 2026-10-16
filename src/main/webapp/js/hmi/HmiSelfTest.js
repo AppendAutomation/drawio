@@ -932,6 +932,21 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 		ui.hmiProject.tags[0].name === 'Tank_Level',
 		ui.hmiProject.tags[0].name);
 
+	// Descenders were being clipped: the name's box has to be at least as
+	// tall as the text in it. Measured in the document, because a detached
+	// element has no layout at all.
+	document.body.appendChild(dlg.container);
+
+	var firstName = dlg.listDiv.getElementsByClassName('hmiTagName')[0];
+
+	HmiSelfTest.check('tagDialog.nameNotClipped', firstName != null &&
+		firstName.clientHeight > 0 &&
+		firstName.scrollHeight <= firstName.clientHeight,
+		(firstName != null) ? firstName.scrollHeight + ' in ' +
+			firstName.clientHeight : 'no row');
+
+	document.body.removeChild(dlg.container);
+
 	// New tag... sits above the filter, where a new tag is reached before
 	// the list it lands in.
 	var pane = dlg.filter.parentNode;

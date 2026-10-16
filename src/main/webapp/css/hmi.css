@@ -428,6 +428,9 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
+	/* Room for the descenders: the default line box is shorter than the
+	   glyphs, and overflow:hidden cuts the tail off a g or a p */
+	line-height: 1.45;
 }
 
 .hmiTagType
@@ -435,6 +438,7 @@
 	color: gray;
 	font-size: 11px;
 	flex: 0 0 auto;
+	line-height: 1.45;
 }
 
 .hmiTagTools
