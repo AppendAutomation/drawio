@@ -99,6 +99,20 @@ HmiFile.install = function()
 			// The page (and the screen frame with it) was drawn while the
 			// previous project's settings were still in place
 			HmiFrame.refresh(this);
+
+			// An empty document arrives looking at the corner of the screen
+			// area: loading the file is what put it there, so this is where
+			// it is put right. A file with something on it keeps the view it
+			// came with. Deferred, because the view settles after this.
+			var loadedUi = this;
+
+			window.setTimeout(function()
+			{
+				HmiLog.guard('frame.showScreen', function()
+				{
+					HmiFrame.showScreenIfEmpty(loadedUi);
+				});
+			}, 0);
 		}));
 	};
 

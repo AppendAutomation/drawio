@@ -58,25 +58,6 @@ Hmi.captureUi = function()
 		this.editor.graph.hmiUi = this;
 		HmiFrame.refresh(this);
 
-		// An empty canvas opens looking at the corner of the screen area, so
-		// show all of it. A file brings its own view with it, and the graph
-		// is no longer empty by the time it has loaded.
-		var startUi = this;
-
-		window.setTimeout(function()
-		{
-			HmiLog.guard('frame.showScreen', function()
-			{
-				var graph = startUi.editor.graph;
-
-				if (graph.getChildCells(graph.getDefaultParent(), true, true)
-					.length === 0)
-				{
-					HmiFrame.showScreen(startUi);
-				}
-			});
-		}, 0);
-
 		// Command-line check or publish (--hmi-check, --hmi-publish)
 		if (HmiCli.isActive())
 		{

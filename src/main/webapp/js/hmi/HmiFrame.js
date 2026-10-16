@@ -52,6 +52,20 @@ HmiFrame.refresh = function(ui)
  * bottom right -- the first thing an engineer sees is a corner of their
  * screen. This is what opening a file ends up doing, done deliberately.
  */
+/** Shows the whole screen area, but only while nothing has been drawn yet. */
+HmiFrame.showScreenIfEmpty = function(ui)
+{
+	var graph = (ui != null && ui.editor != null) ? ui.editor.graph : null;
+
+	if (graph == null || graph.getChildCells(graph.getDefaultParent(),
+		true, true).length > 0)
+	{
+		return;
+	}
+
+	HmiFrame.showScreen(ui);
+};
+
 HmiFrame.showScreen = function(ui)
 {
 	var graph = (ui != null && ui.editor != null) ? ui.editor.graph : null;
