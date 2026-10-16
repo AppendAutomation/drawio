@@ -131,6 +131,27 @@ HmiExpr.FUNCTIONS = {
 	// Save dialog is on its way; the script does not wait for it
 	'ScreenToPDF': {arity: 0, action: true},
 
+	// SQL databases (HmiSql.js). The ones that reach a database are
+	// asynchronous, which is exactly the call form they are written in:
+	// ResultCode = SQLSelect(...). The results table and its cursor live in
+	// the runtime, so moving through a selection costs nothing and the rest
+	// are ordinary actions.
+	//
+	// SQLConnect's first argument is the tag that receives the connection
+	// number, so it is named rather than read: tagArgs says which arguments
+	// are tags to be written instead of values to be read.
+	'SQLConnect': {arity: 2, action: true, async: true, tagArgs: [0]},
+	'SQLDisconnect': {arity: 1, action: true, async: true},
+	'SQLSelect': {arity: 5, action: true, async: true},
+	'SQLFirst': {arity: 1, action: true},
+	'SQLNext': {arity: 1, action: true},
+	'SQLPrev': {arity: 1, action: true},
+	'SQLLast': {arity: 1, action: true},
+	'SQLGetRecord': {arity: 2, action: true},
+	'SQLNumRows': {arity: 1, action: true},
+	'SQLEnd': {arity: 1, action: true},
+	'SQLErrorMsg': {arity: 1, action: true},
+
 	// Trends (HmiTrend.js), by the trend's name; TrendSetPen also takes the
 	// pen's tag name. Names are text: literals or message tags
 	'TrendSetPen': {arity: 2, action: true},
@@ -1304,6 +1325,45 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 		this.callsAction = true;
 	}
 
+	// An argument the function writes to rather than reads: it must be a bare
+	// tag, and what reaches the function is its name. It stays an ordinary tag
+	// token in the source, so a rename and Find/Replace reach it as they reach
+	// any other.
+	for (var ta = 0; def != null && def.tagArgs != null && ta < def.tagArgs.length; ta++)
+	{
+		var at = def.tagArgs[ta];
+		var arg = args[at];
+
+		if (arg == null)
+		{
+			continue;
+		}
+
+		if (arg.type === 'local')
+		{
+			this.error(name + ' argument ' + (at + 1) +
+				' must be a tag, not a local variable', token);
+		}
+		else if (arg.type !== 'ref' || arg.field != null)
+		{
+			this.error(name + ' argument ' + (at + 1) +
+				' must be a tag for the result to be written to', token);
+		}
+		else if (HmiTypes.systemTag(arg.name) != null)
+		{
+			this.error(arg.name + ' cannot be written to', token);
+		}
+		else
+		{
+			args[at] = {type: 'tagname', name: arg.name};
+
+			if (mxUtils.indexOf(this.writes, arg.name) < 0)
+			{
+				this.writes.push(arg.name);
+			}
+		}
+	}
+
 	var node = {type: 'call', name: name, args: args};
 
 	if (def != null && def.async && this.opts.mode === 'quick' &&
@@ -1733,6 +1793,15 @@ HmiExpr.text = function(v)
 	}
 
 	return '' + v;
+};
+
+/**
+ * An argument naming the tag a function writes its result to. It evaluates to
+ * the name, so the function can write it; the tag's own value is not read.
+ */
+HmiExpr.Evaluator.prototype.eval_tagname = function(node)
+{
+	return {value: node.name, quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
 };
 
 HmiExpr.Evaluator.prototype.eval_call = function(node)

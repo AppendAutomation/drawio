@@ -44,6 +44,10 @@ HmiRuntime = function(config)
 	// The Run's HmiTrendManager (TrendSetPen() ..., Trend objects)
 	this.trends = config.trends || null;
 
+	// The Run's HmiSqlManager (SQLConnect() ...): the connections and the
+	// rows a selection fetched, shared by every window of the Run
+	this.sql = config.sql || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -569,7 +573,8 @@ HmiRuntime.prototype.context = function()
 
 				var owner = HmiRecipes.isFunction(name) ? that.recipes :
 					((name === HmiIndirect.FUNCTION) ? that.indirect :
-					(HmiTrend.isFunction(name) ? that.trends : that.security));
+					(HmiTrend.isFunction(name) ? that.trends :
+					(HmiSql.isFunction(name) ? that.sql : that.security)));
 
 				return (owner != null) ? owner.call(name, args) : null;
 			},
@@ -598,6 +603,28 @@ HmiRuntime.prototype.context = function()
 						HmiWindowManager.reportShowWindow(null, args, 'Windows can only be shown while the application runs.');
 						done(0);
 					}
+
+					return;
+				}
+
+				// A database call pauses the script until the database
+				// answers, and a Run that stopped meanwhile drops the resume
+				if (HmiSql.isFunction(name))
+				{
+					if (that.sql == null)
+					{
+						done(HmiSql.CODES.INVALID_CONNECTION);
+
+						return;
+					}
+
+					that.sql.callAsync(name, args, function(value)
+					{
+						if (that.running)
+						{
+							done(value);
+						}
+					});
 
 					return;
 				}

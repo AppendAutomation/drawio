@@ -711,3 +711,752 @@ HmiSql.setOverride = function(store, name, override, fn, error)
 			fn(Array.isArray(list) ? list : []);
 		}, error);
 };
+
+// ============================================================ result codes
+
+/**
+ * What a SQL function hands back, and what SQLErrorMsg says about it.
+ *
+ * The numbers are an interface: scripts test them, so they are fixed. They are
+ * the same numbers src/main/sql/ResultCodes.js uses -- a test keeps the two
+ * tables in step, because the renderer cannot import from the main process.
+ *
+ * -1007 is absent on purpose. It warned that a column had been truncated on
+ * its way into a message tag, and our message tags have no length limit.
+ */
+HmiSql.CODES = {
+	OK: 0,
+	PROVIDER_ERROR: -1,
+	EMPTY_STATEMENT: -2,
+	NULL_VALUE: -4,
+	NO_MORE_ROWS: -5,
+	INVALID_PARAM_ID: -7,
+	INVALID_PARAM_LIST: -8,
+	INVALID_NULL_TYPE: -9,
+	PARAM_TYPE_CHANGED: -10,
+	PARAM_AFTER_EXECUTE: -11,
+	INVALID_DATETIME: -12,
+	INVALID_DECIMAL: -13,
+	INVALID_CURRENCY: -14,
+	INVALID_STATEMENT_TYPE: -15,
+	OUT_OF_MEMORY: -1001,
+	INVALID_CONNECTION: -1002,
+	NO_BIND_LIST: -1003,
+	NO_TEMPLATE: -1004,
+	INTERNAL: -1005,
+	STRING_NULL: -1006,
+	NO_WHERE_CLAUSE: -1008,
+	CONNECT_FAILED: -1009,
+	NO_DATABASE: -1010,
+	NO_ROWS_SELECTED: -1011,
+	NO_FILE: -1013,
+	NO_DATA_SOURCE: -1100,
+	TIMED_OUT: -1101,
+	TOO_MANY_ROWS: -1102,
+	TOO_MANY_CONNECTIONS: -1103,
+	PROVIDER_UNAVAILABLE: -1104,
+	NO_QUERY: -1105,
+	TRANSACTION_STATE: -1106,
+	FILE_NOT_ALLOWED: -1107
+};
+
+HmiSql.MESSAGES = {
+	0: 'No errors occurred',
+	'-1': 'The database reported an error',
+	'-2': 'There is no statement to execute',
+	'-4': 'The value read was null',
+	'-5': 'There are no more rows to fetch',
+	'-7': 'That parameter number is not valid',
+	'-8': 'The statement has a gap in its parameter numbers',
+	'-9': 'That type cannot be used for a null parameter',
+	'-10': "A parameter's type cannot be changed once it is set",
+	'-11': 'A parameter cannot be added after the statement has run',
+	'-12': 'That is not a valid date or time',
+	'-13': 'That is not a valid decimal number',
+	'-14': 'That is not a valid currency amount',
+	'-15': 'That operation does not suit this kind of statement',
+	'-1001': 'There is not enough memory to complete this operation',
+	'-1002': 'That connection number is not open',
+	'-1003': 'There is no bind list of that name',
+	'-1004': 'There is no table template of that name',
+	'-1005': 'An internal error occurred',
+	'-1006': 'The string read was null',
+	'-1008': 'Deleting records needs a where expression',
+	'-1009': 'The database could not be reached',
+	'-1010': 'That database does not exist',
+	'-1011': 'No rows have been selected',
+	'-1013': 'The file could not be found',
+	'-1100': 'There is no data source of that name',
+	'-1101': 'The database did not answer in time',
+	'-1102': 'The query returned more rows than the limit allows',
+	'-1103': 'Too many database connections are open',
+	'-1104': 'That kind of database is not supported',
+	'-1105': 'There is no query of that name',
+	'-1106': 'That does not suit the current transaction',
+	'-1107': 'A database file must be in Documents or the application data folder'
+};
+
+/**
+ * Codes that are not failures: a script meets them in the ordinary course of
+ * things, so they go to the runtime log and not to the Database Error window.
+ *
+ * Running off the end of a selection is how a loop over the rows finishes
+ * (WHILE SQLNext(ConnId) == 0), and a null column is something a database
+ * holds legitimately -- the tag gets 0 or no text. Showing an operator a
+ * window for either would make the feature unusable.
+ */
+HmiSql.WARNINGS = [HmiSql.CODES.NO_MORE_ROWS, HmiSql.CODES.NULL_VALUE, HmiSql.CODES.STRING_NULL];
+
+HmiSql.isWarning = function(code)
+{
+	return mxUtils.indexOf(HmiSql.WARNINGS, Number(code)) >= 0;
+};
+
+/** The message for a code. A code we do not know still reads sensibly. */
+HmiSql.message = function(code)
+{
+	var n = Number(code);
+
+	if (!isFinite(n))
+	{
+		return HmiSql.MESSAGES[HmiSql.CODES.INTERNAL];
+	}
+
+	var found = HmiSql.MESSAGES['' + n];
+
+	return (found != null) ? found : 'Result code ' + n;
+};
+
+// ============================================================== the functions
+
+/** Every SQL* script function this release provides. */
+HmiSql.FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect', 'SQLFirst', 'SQLNext',
+	'SQLPrev', 'SQLLast', 'SQLGetRecord', 'SQLNumRows', 'SQLEnd', 'SQLErrorMsg'];
+
+/** The ones that reach a database and so pause the script. */
+HmiSql.ASYNC_FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect'];
+
+HmiSql.isFunction = function(name)
+{
+	return mxUtils.indexOf(HmiSql.FUNCTIONS, name) >= 0;
+};
+
+HmiSql.isAsyncFunction = function(name)
+{
+	return mxUtils.indexOf(HmiSql.ASYNC_FUNCTIONS, name) >= 0;
+};
+
+/** How a call reads in an error message. */
+HmiSql.describeCall = function(name, args)
+{
+	return name + '(' + (args || []).map(function(a)
+	{
+		return (typeof a === 'string') ? '"' + a + '"' : String(a);
+	}).join(', ') + ')';
+};
+
+/**
+ * A connect string, for a script that gives one instead of naming a data
+ * source in the project. Only what is needed to reach the two kinds of
+ * database we support is understood; anything else in it is ignored.
+ */
+HmiSql.parseConnectString = function(text)
+{
+	var parts = ('' + text).split(';');
+	var found = {};
+
+	for (var i = 0; i < parts.length; i++)
+	{
+		var at = parts[i].indexOf('=');
+
+		if (at > 0)
+		{
+			found[parts[i].substring(0, at).trim().toLowerCase().replace(/\s+/g, ' ')] =
+				parts[i].substring(at + 1).trim();
+		}
+	}
+
+	var pick = function()
+	{
+		for (var a = 0; a < arguments.length; a++)
+		{
+			if (found[arguments[a]] != null && found[arguments[a]] !== '')
+			{
+				return found[arguments[a]];
+			}
+		}
+
+		return '';
+	};
+
+	var spec = HmiSql.newDataSource('');
+	var file = pick('file', 'database file');
+
+	if (file !== '')
+	{
+		spec.provider = 'sqlite';
+		spec.file = file;
+
+		return spec;
+	}
+
+	spec.provider = 'mssql';
+	spec.host = pick('data source', 'server', 'address', 'addr');
+	spec.database = pick('initial catalog', 'database', 'db');
+	spec.user = pick('user id', 'uid', 'user', 'username');
+	spec.password = pick('password', 'pwd');
+
+	return spec;
+};
+
+// ================================================================= manager
+
+/**
+ * The database side of one Run, shared by every window as the connections
+ * themselves are: a connection opened by one window's script is the same
+ * connection another window's script addresses by its number.
+ *
+ * The results of a selection are held here, so moving through them costs
+ * nothing: SQLFirst and the rest are ordinary synchronous actions, and only
+ * the calls that reach a database pause the script.
+ *
+ * @param project  the HmiProject
+ * @param driver   a hub client: writes the tags a selection fetches into
+ * @param options  {ui, store (the per-PC credentials), report(call, message)
+ *                 (default: the Database Error window), request(action, args,
+ *                 fn, error) (default: the main process)}
+ */
+HmiSqlManager = function(project, driver, options)
+{
+	this.project = project;
+	this.driver = driver;
+	this.options = options || {};
+	this.connections = {};
+	this.running = false;
+
+	// SQLErrorMsg(-1) gives the database's own words for the last failure
+	this.lastProviderMessage = '';
+};
+
+HmiSqlManager.prototype.start = function()
+{
+	this.running = true;
+};
+
+/** Closes every connection as the Run ends. */
+HmiSqlManager.prototype.stop = function()
+{
+	this.running = false;
+
+	for (var id in this.connections)
+	{
+		this.request('hmiSql.close', {connectionId: Number(id)}, function() {}, function() {});
+	}
+
+	this.connections = {};
+};
+
+HmiSqlManager.prototype.request = function(action, args, fn, error)
+{
+	if (this.options.request != null)
+	{
+		this.options.request(action, args, fn, error);
+
+		return;
+	}
+
+	HmiSql.request(action, args, fn, error);
+};
+
+HmiSqlManager.prototype.report = function(call, message)
+{
+	HmiLog.warn('sql: ' + (call ? call + ': ' : '') + message);
+
+	if (this.options.report != null)
+	{
+		this.options.report(call, message);
+	}
+	else if (this.options.ui != null)
+	{
+		HmiDialogs.queueFunctionError(this.options.ui, call, message);
+	}
+};
+
+/**
+ * A failure: the code a script sees, with the reason shown in the Database
+ * Error window. A code alone would leave an operator with nothing.
+ */
+HmiSqlManager.prototype.fail = function(call, code, message)
+{
+	var text = (message != null && message !== '') ? message : HmiSql.message(code);
+
+	if (code === HmiSql.CODES.PROVIDER_ERROR)
+	{
+		this.lastProviderMessage = text;
+	}
+
+	// A loop over a selection ends by running off the end of it, so that code
+	// belongs in the log and not in front of an operator
+	if (HmiSql.isWarning(code))
+	{
+		HmiLog.warn('sql: ' + (call ? call + ': ' : '') + text);
+	}
+	else
+	{
+		this.report(call, text);
+	}
+
+	return code;
+};
+
+HmiSqlManager.prototype.connectionOf = function(id)
+{
+	var n = Number(id);
+
+	return (isFinite(n) && this.connections[n] != null) ? this.connections[n] : null;
+};
+
+// ------------------------------------------------------------- the calls
+
+/** The synchronous functions: everything that does not reach a database. */
+HmiSqlManager.prototype.call = function(name, args)
+{
+	var call = HmiSql.describeCall(name, args);
+
+	switch (name)
+	{
+		case 'SQLErrorMsg':
+			return this.errorMessage(args[0]);
+		case 'SQLNumRows':
+			return this.numRows(call, args[0]);
+		case 'SQLFirst':
+			return this.move(call, args[0], 'first');
+		case 'SQLNext':
+			return this.move(call, args[0], 'next');
+		case 'SQLPrev':
+			return this.move(call, args[0], 'prev');
+		case 'SQLLast':
+			return this.move(call, args[0], 'last');
+		case 'SQLGetRecord':
+			return this.getRecord(call, args[0], args[1]);
+		case 'SQLEnd':
+			return this.end(call, args[0]);
+	}
+
+	return null;
+};
+
+/** The asynchronous ones: the script waits for the database. */
+HmiSqlManager.prototype.callAsync = function(name, args, done)
+{
+	var call = HmiSql.describeCall(name, args);
+
+	if (!this.running)
+	{
+		done(HmiSql.CODES.INVALID_CONNECTION);
+
+		return;
+	}
+
+	switch (name)
+	{
+		case 'SQLConnect':
+			this.connect(call, args[0], args[1], done);
+
+			return;
+		case 'SQLDisconnect':
+			this.disconnect(call, args[0], done);
+
+			return;
+		case 'SQLSelect':
+			this.select(call, args, done);
+
+			return;
+	}
+
+	done(HmiSql.CODES.INTERNAL);
+};
+
+/** SQLErrorMsg: the words for a code, the database's own for -1. */
+HmiSqlManager.prototype.errorMessage = function(code)
+{
+	if (Number(code) === HmiSql.CODES.PROVIDER_ERROR && this.lastProviderMessage !== '')
+	{
+		return this.lastProviderMessage;
+	}
+
+	return HmiSql.message(code);
+};
+
+/**
+ * SQLConnect(ConnectionID, "DataSource or connect string"): opens a
+ * connection and writes its number to the named tag.
+ */
+HmiSqlManager.prototype.connect = function(call, tagName, which, done)
+{
+	var that = this;
+	var name = '' + (which == null ? '' : which);
+	var source = HmiSql.dataSource(this.project, name);
+
+	if (source == null)
+	{
+		// A script may give a connect string instead of naming a data source
+		if (name.indexOf('=') > 0)
+		{
+			source = HmiSql.parseConnectString(name);
+			source.name = name;
+		}
+		else
+		{
+			done(this.fail(call, HmiSql.CODES.NO_DATA_SOURCE,
+				'There is no data source named "' + name + '".'));
+
+			return;
+		}
+	}
+
+	this.request('hmiSql.connect', {dataSource: HmiSql.toSpec(source), store: this.options.store || ''},
+		function(res)
+		{
+			if (res == null || res.code !== HmiSql.CODES.OK)
+			{
+				done(that.fail(call, (res != null) ? res.code : HmiSql.CODES.INTERNAL,
+					(res != null) ? res.message : null));
+
+				return;
+			}
+
+			that.connections[res.connectionId] = {id: res.connectionId, source: source.name,
+				provider: res.provider, results: null, cursor: -1, bindList: ''};
+			that.writeTag(tagName, res.connectionId);
+			done(HmiSql.CODES.OK);
+		},
+		function(e)
+		{
+			done(that.fail(call, HmiSql.CODES.CONNECT_FAILED, e.message));
+		});
+};
+
+HmiSqlManager.prototype.disconnect = function(call, id, done)
+{
+	var that = this;
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	delete this.connections[connection.id];
+
+	this.request('hmiSql.close', {connectionId: connection.id}, function()
+	{
+		done(HmiSql.CODES.OK);
+	},
+	function(e)
+	{
+		done(that.fail(call, HmiSql.CODES.PROVIDER_ERROR, e.message));
+	});
+};
+
+/**
+ * SQLSelect(ConnectionID, TableName, BindList, WhereExpr, OrderByExpr): the
+ * rows are held here, to be walked with SQLFirst and the rest.
+ */
+HmiSqlManager.prototype.select = function(call, args, done)
+{
+	var that = this;
+	var connection = this.connectionOf(args[0]);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	var table = ('' + (args[1] == null ? '' : args[1])).trim();
+	var bindName = '' + (args[2] == null ? '' : args[2]);
+	var where = ('' + (args[3] == null ? '' : args[3])).trim();
+	var order = ('' + (args[4] == null ? '' : args[4])).trim();
+
+	if (table === '')
+	{
+		done(this.fail(call, HmiSql.CODES.EMPTY_STATEMENT, 'SQLSelect needs the name of a table.'));
+
+		return;
+	}
+
+	var bindList = HmiSql.bindList(this.project, bindName);
+
+	if (bindList == null)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'There is no bind list named "' + bindName + '".'));
+
+		return;
+	}
+
+	var columns = bindList.items.map(function(item) { return HmiSql.quoteColumn(item.column); });
+	var sql = 'SELECT ' + columns.join(', ') + ' FROM ' + HmiSql.quoteColumn(table);
+
+	if (where !== '')
+	{
+		sql += ' WHERE ' + where;
+	}
+
+	if (order !== '')
+	{
+		sql += ' ORDER BY ' + order;
+	}
+
+	this.request('hmiSql.exec', {connectionId: connection.id, sql: sql,
+		maxRows: HmiSql.maxRows()}, function(res)
+		{
+			if (res == null || res.code !== HmiSql.CODES.OK)
+			{
+				done(that.fail(call, (res != null) ? res.code : HmiSql.CODES.INTERNAL,
+					(res != null) ? res.message : null));
+
+				return;
+			}
+
+			connection.results = {columns: res.columns || [], rows: res.rows || []};
+			connection.cursor = -1;
+			connection.bindList = bindList.name;
+
+			if (res.truncated)
+			{
+				// Not a failure: the rows that came back are usable, and a
+				// script that never looks at the code still works
+				that.report(call, HmiSql.message(HmiSql.CODES.TOO_MANY_ROWS) + ' (' +
+					connection.results.rows.length + ' kept).');
+			}
+
+			done(HmiSql.CODES.OK);
+		},
+		function(e)
+		{
+			done(that.fail(call, HmiSql.CODES.PROVIDER_ERROR, e.message));
+		});
+};
+
+/** SQLNumRows: how many rows the last selection found. */
+HmiSqlManager.prototype.numRows = function(call, id)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	if (connection.results == null)
+	{
+		return this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED);
+	}
+
+	return connection.results.rows.length;
+};
+
+/** SQLFirst, SQLNext, SQLPrev, SQLLast: move the cursor and fetch the row. */
+HmiSqlManager.prototype.move = function(call, id, how)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	if (connection.results == null)
+	{
+		return this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED);
+	}
+
+	var rows = connection.results.rows;
+	var at = (how === 'first') ? 0 :
+		((how === 'last') ? rows.length - 1 :
+		((how === 'next') ? connection.cursor + 1 : connection.cursor - 1));
+
+	if (at < 0 || at >= rows.length)
+	{
+		// The cursor stays where it was, so a loop that runs off the end can
+		// still ask where it is
+		return this.fail(call, HmiSql.CODES.NO_MORE_ROWS);
+	}
+
+	connection.cursor = at;
+
+	return this.fetch(call, connection);
+};
+
+/** SQLGetRecord: the row at a given number, counting from 1. */
+HmiSqlManager.prototype.getRecord = function(call, id, number)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	if (connection.results == null)
+	{
+		return this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED);
+	}
+
+	var at = Math.round(Number(number)) - 1;
+
+	if (!isFinite(at) || at < 0 || at >= connection.results.rows.length)
+	{
+		return this.fail(call, HmiSql.CODES.NO_MORE_ROWS);
+	}
+
+	connection.cursor = at;
+
+	return this.fetch(call, connection);
+};
+
+/** SQLEnd: lets the rows go. */
+HmiSqlManager.prototype.end = function(call, id)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	connection.results = null;
+	connection.cursor = -1;
+	connection.bindList = '';
+
+	return HmiSql.CODES.OK;
+};
+
+/** Writes the row the cursor is on into the bind list's tags. */
+HmiSqlManager.prototype.fetch = function(call, connection)
+{
+	var bindList = HmiSql.bindList(this.project, connection.bindList);
+
+	if (bindList == null)
+	{
+		return this.fail(call, HmiSql.CODES.NO_BIND_LIST);
+	}
+
+	var row = connection.results.rows[connection.cursor] || [];
+	var writes = {};
+	var nulls = 0;
+
+	for (var i = 0; i < bindList.items.length; i++)
+	{
+		var item = bindList.items[i];
+		var value = row[i];
+
+		if (value == null)
+		{
+			nulls++;
+		}
+
+		// A dotfield is read from a tag, never written to it: the alarm state
+		// of a tag is the alarm manager's to say
+		if (item.field)
+		{
+			continue;
+		}
+
+		var tag = this.project.getTag(item.tag);
+
+		if (tag == null)
+		{
+			return this.fail(call, HmiSql.CODES.INTERNAL,
+				'Bind list "' + bindList.name + '" names the tag "' + item.tag + '", which does not exist.');
+		}
+
+		writes[tag.name] = HmiSql.coerceForTag(tag, value);
+	}
+
+	if (Object.keys(writes).length > 0)
+	{
+		this.driver.write(writes);
+	}
+
+	// A null column is a warning, not a failure: the tag gets 0 or no text,
+	// and the script carries on
+	return (nulls > 0) ? HmiSql.CODES.NULL_VALUE : HmiSql.CODES.OK;
+};
+
+HmiSqlManager.prototype.writeTag = function(name, value)
+{
+	var tag = (name != null) ? this.project.getTag(name) : null;
+
+	if (tag == null)
+	{
+		return;
+	}
+
+	var writes = {};
+	writes[tag.name] = HmiSql.coerceForTag(tag, value);
+	this.driver.write(writes);
+};
+
+/** A database value as the tag that receives it can hold it. */
+HmiSql.coerceForTag = function(tag, value)
+{
+	if (HmiTypes.isMessage(tag.type))
+	{
+		return (value == null) ? '' : '' + value;
+	}
+
+	if (HmiTypes.isDiscrete(tag.type))
+	{
+		if (typeof value === 'string')
+		{
+			// A database may hold a flag as text
+			return (/^(1|true|yes|on|y|t)$/i.test(value.trim())) ? 1 : 0;
+		}
+
+		return (HmiExpr.truthy(value)) ? 1 : 0;
+	}
+
+	var n = Number(value);
+
+	if (!isFinite(n))
+	{
+		return 0;
+	}
+
+	return HmiTypes.isInteger(tag.type) ? Math.round(n) : n;
+};
+
+/**
+ * How many rows a selection may bring back. A safety limit, not something a
+ * project sets: a screen walks a selection a row at a time, and a query that
+ * would return more than this is a query to narrow. The rows that do come
+ * back are usable and the script is told in the Database Error window.
+ */
+HmiSql.maxRows = function()
+{
+	return HmiSql.DEFAULT_MAX_ROWS;
+};
+
+/**
+ * A table or column name as a statement can carry it. A name that is a plain
+ * identifier is left alone; anything else is bracketed, which both databases
+ * accept. A name already bracketed or qualified is left as the script wrote
+ * it.
+ */
+HmiSql.quoteColumn = function(name)
+{
+	var text = '' + (name == null ? '' : name);
+
+	if (text === '' || /^[\[\]"`]/.test(text) || text.indexOf('.') >= 0)
+	{
+		return text;
+	}
+
+	return HmiSql.needsBrackets(text) ? '[' + text.replace(/]/g, ']]') + ']' : text;
+};

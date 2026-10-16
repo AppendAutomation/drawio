@@ -366,6 +366,11 @@ HmiWindowManager = function(ui, project, driver, options)
 	// its history is kept with the alarm history's store
 	this.trends = new HmiTrendManager(project, this.hub.client(), {ui: ui, store: store,
 		trends: HmiTrend.collect(ui).map(function(t) { return t.cfg; })});
+
+	// Databases: the connections belong to the Run, not to a window, so a
+	// connection one window's script opened is the one another addresses
+	this.sql = new HmiSqlManager(project, this.hub.client(), {ui: ui,
+		store: (options != null) ? options.retentiveStore : null});
 };
 
 HmiWindowManager.prototype.start = function()
@@ -392,6 +397,7 @@ HmiWindowManager.prototype.start = function()
 	this.security.start();
 	this.recipes.start();
 	this.trends.start();
+	this.sql.start();
 
 	// On start runs before the first window opens, so it can set up what the
 	// windows show
@@ -430,6 +436,10 @@ HmiWindowManager.prototype.stop = function()
 	this.stopAppScripts();
 
 	this.security.stop();
+	// Every connection closes with the Run, rolling back anything a script
+	// left open
+	this.sql.stop();
+	this.sql.driver.disconnect();
 	this.trends.stop();
 	this.trends.driver.disconnect();
 	this.recipes.stop();
@@ -485,7 +495,7 @@ HmiWindowManager.prototype.startAppScripts = function()
 
 	this.app = new HmiRuntime({graph: null, project: this.project, driver: this.hub.client(),
 		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect, trends: this.trends,
-		scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
+		sql: this.sql, scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
 	this.app.startScripts();
 
 	var app = this.app;
@@ -1211,7 +1221,8 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
-		indirect: this.indirect, trends: this.trends, scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
+		indirect: this.indirect, trends: this.trends, sql: this.sql,
+		scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

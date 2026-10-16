@@ -43,6 +43,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testQuickFunctions();
 		HmiSelfTest.testProjectRoundTrip();
 		HmiSelfTest.testSql();
+		HmiSelfTest.testSqlFunctions();
 		HmiSelfTest.testCellLinks(ui);
 		HmiSelfTest.testFileRoundTrip(ui);
 		HmiSelfTest.testFilenames(ui);
@@ -7246,6 +7247,306 @@ HmiSelfTest.testDatabaseDialog = function(ui)
 		ui.hideDialog = realHide;
 		ui.hmiProject = saved;
 	}
+};
+
+/**
+ * The SQL* script functions: what the engine makes of them, and what the
+ * manager does with a stubbed main process. No database is involved.
+ */
+HmiSelfTest.testSqlFunctions = function()
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sqlProject();
+	project.addTag(HmiProject.createTag('ConnId', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('RowCount', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Result', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('ErrText', 'MemoryMessage'));
+
+	var compile = function(src, mode)
+	{
+		return HmiExpr.compile(src, {project: project, mode: mode || 'script'});
+	};
+
+	// --- the engine ---------------------------------------------------
+
+	var ok = compile('Result = SQLConnect(ConnId, "Plant");');
+	check('sqlFn.compiles', ok.errors.length === 0,
+		ok.errors.length > 0 ? ok.errors[0].message : '');
+
+	// The tag that receives the connection number is written, not read
+	check('sqlFn.outArgIsAWrite', mxUtils.indexOf(ok.writes, 'ConnId') >= 0,
+		ok.writes.join(','));
+
+	var notATag = compile('Result = SQLConnect(7, "Plant");');
+	check('sqlFn.outArgMustBeATag', notATag.errors.length > 0 &&
+		notATag.errors[0].message.indexOf('must be a tag') >= 0,
+		notATag.errors.length > 0 ? notATag.errors[0].message : 'no error');
+
+	var local = compile('DIM n AS Analog;\nResult = SQLConnect(n, "Plant");');
+	check('sqlFn.outArgNotALocal', local.errors.length > 0 &&
+		local.errors[0].message.indexOf('not a local variable') >= 0,
+		local.errors.length > 0 ? local.errors[0].message : 'no error');
+
+	var system = compile('Result = SQLConnect(_AlarmsActive, "Plant");');
+	check('sqlFn.outArgNotASystemTag', system.errors.length > 0,
+		system.errors.length > 0 ? system.errors[0].message : 'no error');
+
+	// A database call pauses, so it may only be a statement or the whole
+	// right-hand side of an assignment -- which is the form they are written
+	// in anyway
+	var midExpression = compile('Result = SQLNumRows(ConnId) + SQLConnect(ConnId, "Plant");');
+	check('sqlFn.asyncNotMidExpression', midExpression.errors.length > 0,
+		midExpression.errors.length > 0 ? midExpression.errors[0].message : 'no error');
+
+	var inExpression = HmiExpr.compile('SQLNumRows(ConnId)', {project: project});
+	check('sqlFn.notInAnimationExpression', inExpression.errors.length > 0 &&
+		inExpression.errors[0].message.indexOf('only be used in a script') >= 0,
+		inExpression.errors.length > 0 ? inExpression.errors[0].message : 'no error');
+
+	var inQuick = compile('Result = SQLSelect(ConnId, "T", "BatchRow", "", "");', 'quick');
+	check('sqlFn.refusedInQuickFunction', inQuick.errors.length > 0 &&
+		inQuick.errors[0].message.indexOf('QuickFunction') >= 0,
+		inQuick.errors.length > 0 ? inQuick.errors[0].message : 'no error');
+
+	// The cursor family does not pause, so a QuickFunction may walk a
+	// selection -- it writes tags, so it is script-only all the same
+	var cursorInQuick = compile('Return SQLNumRows(ConnId);', 'quick');
+	check('sqlFn.cursorAllowedInQuickFunction', cursorInQuick.errors.length === 0,
+		cursorInQuick.errors.length > 0 ? cursorInQuick.errors[0].message : '');
+	check('sqlFn.cursorIsImpure', cursorInQuick.impure === true);
+
+	var arity = compile('Result = SQLSelect(ConnId, "T");');
+	check('sqlFn.arityChecked', arity.errors.length > 0 &&
+		arity.errors[0].message.indexOf('takes 5 arguments') >= 0,
+		arity.errors.length > 0 ? arity.errors[0].message : 'no error');
+
+	// --- the messages -------------------------------------------------
+
+	check('sqlFn.messagesCoverEveryCode', (function()
+	{
+		for (var key in HmiSql.CODES)
+		{
+			if (HmiSql.MESSAGES['' + HmiSql.CODES[key]] == null)
+			{
+				return false;
+			}
+		}
+
+		return true;
+	})());
+	check('sqlFn.unknownCodeReadsSensibly', HmiSql.message(-4242) === 'Result code -4242');
+	check('sqlFn.truncationCodeUnused', HmiSql.MESSAGES['-1007'] == null);
+
+	// --- the manager, with the main process stubbed -------------------
+
+	var sent = [];
+	var answers = [];
+	var writes = {};
+	var errors = [];
+
+	var manager = new HmiSqlManager(project, {
+			write: function(w) { for (var k in w) { writes[k] = w[k]; } }
+		}, {
+			report: function(call, message) { errors.push(call + ' :: ' + message); },
+			request: function(action, args, fn, error)
+			{
+				sent.push({action: action, args: args});
+				var next = answers.shift();
+
+				if (next == null) { fn({code: 0}); }
+				else if (next.throws) { error(new Error(next.throws)); }
+				else { fn(next); }
+			}
+		});
+
+	manager.start();
+
+	var done = null;
+	var last = null;
+	var callAsync = function(name, args)
+	{
+		last = null;
+		manager.callAsync(name, args, function(code) { last = code; });
+
+		return last;
+	};
+
+	// Connect: the number comes back in the named tag
+	answers.push({code: 0, connectionId: 1, provider: 'mssql'});
+	check('sqlMgr.connect', callAsync('SQLConnect', ['ConnId', 'Plant']) === 0, '' + last);
+	check('sqlMgr.connectWritesTheTag', writes.ConnId === 1, '' + writes.ConnId);
+	check('sqlMgr.connectSendsTheSpec', sent.length === 1 &&
+		sent[0].action === 'hmiSql.connect' && sent[0].args.dataSource.host === 'db.example',
+		JSON.stringify(sent[0] || {}).substring(0, 120));
+
+	check('sqlMgr.unknownDataSource',
+		callAsync('SQLConnect', ['ConnId', 'Nope']) === HmiSql.CODES.NO_DATA_SOURCE, '' + last);
+	check('sqlMgr.unknownDataSourceIsReported',
+		errors.length === 1 && errors[0].indexOf('no data source named "Nope"') > 0,
+		errors.join(' | '));
+
+	// A connect string instead of a name
+	answers.push({code: 0, connectionId: 2, provider: 'mssql'});
+	check('sqlMgr.connectString',
+		callAsync('SQLConnect', ['ConnId', 'Data Source=other;Initial Catalog=D;User ID=u;Password=p']) === 0,
+		'' + last);
+	check('sqlMgr.connectStringParsed', (function()
+	{
+		var spec = sent[sent.length - 1].args.dataSource;
+
+		return spec.host === 'other' && spec.database === 'D' && spec.user === 'u';
+	})(), JSON.stringify(sent[sent.length - 1].args.dataSource));
+
+	// A failure carries the database's own words, and SQLErrorMsg gives them
+	errors = [];
+	answers.push({code: HmiSql.CODES.PROVIDER_ERROR, message: 'Invalid object name BatchLog'});
+	check('sqlMgr.selectFailureCode',
+		callAsync('SQLSelect', [1, 'BatchLog', 'BatchRow', '', '']) === HmiSql.CODES.PROVIDER_ERROR,
+		'' + last);
+	check('sqlMgr.failureReported', errors.length === 1 &&
+		errors[0].indexOf('Invalid object name') > 0, errors.join(' | '));
+	check('sqlMgr.errorMsgGivesTheDatabaseWords',
+		manager.call('SQLErrorMsg', [HmiSql.CODES.PROVIDER_ERROR]) === 'Invalid object name BatchLog',
+		manager.call('SQLErrorMsg', [HmiSql.CODES.PROVIDER_ERROR]));
+	check('sqlMgr.errorMsgOfAKnownCode',
+		manager.call('SQLErrorMsg', [HmiSql.CODES.NO_BIND_LIST]) ===
+		HmiSql.MESSAGES['' + HmiSql.CODES.NO_BIND_LIST]);
+
+	// A selection, then the cursor
+	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
+		rows: [[1.5, 'A', 0], [2.5, 'B', 1], [3.5, 'C', 0]]});
+	check('sqlMgr.select', callAsync('SQLSelect', [1, 'BatchLog', 'BatchRow', 'Level > 0', 'Level ASC']) === 0,
+		'' + last);
+	check('sqlMgr.selectBuildsTheStatement', (function()
+	{
+		var sql = sent[sent.length - 1].args.sql;
+
+		return sql === 'SELECT Level, Recipe, InAlarm FROM BatchLog WHERE Level > 0 ORDER BY Level ASC';
+	})(), sent[sent.length - 1].args.sql);
+
+	check('sqlMgr.numRows', manager.call('SQLNumRows', [1]) === 3, '' + manager.call('SQLNumRows', [1]));
+
+	writes = {};
+	check('sqlMgr.first', manager.call('SQLFirst', [1]) === 0, '' + manager.call('SQLFirst', [1]));
+	check('sqlMgr.firstFetchesIntoTags',
+		writes.Tank_Level === 1.5 && writes.Recipe_Name === 'A',
+		JSON.stringify(writes));
+	// A dotfield is read from a tag, never written to one
+	check('sqlMgr.dotfieldNotWritten', Object.keys(writes).length === 2, JSON.stringify(writes));
+
+	writes = {};
+	manager.call('SQLNext', [1]);
+	check('sqlMgr.next', writes.Recipe_Name === 'B', JSON.stringify(writes));
+	writes = {};
+	manager.call('SQLLast', [1]);
+	check('sqlMgr.last', writes.Recipe_Name === 'C', JSON.stringify(writes));
+	// Running off the end is how a loop over the rows finishes, so it must
+	// not put a window in front of an operator
+	errors = [];
+	check('sqlMgr.pastTheEnd', manager.call('SQLNext', [1]) === HmiSql.CODES.NO_MORE_ROWS,
+		'' + manager.call('SQLNext', [1]));
+	check('sqlMgr.pastTheEndIsNotReported', errors.length === 0, errors.join(' | '));
+	check('sqlMgr.warningsAreNotFailures', HmiSql.isWarning(HmiSql.CODES.NO_MORE_ROWS) &&
+		HmiSql.isWarning(HmiSql.CODES.NULL_VALUE) &&
+		!HmiSql.isWarning(HmiSql.CODES.PROVIDER_ERROR) &&
+		!HmiSql.isWarning(HmiSql.CODES.INVALID_CONNECTION));
+	writes = {};
+	manager.call('SQLPrev', [1]);
+	check('sqlMgr.prev', writes.Recipe_Name === 'B', JSON.stringify(writes));
+	check('sqlMgr.beforeTheStart', (function()
+	{
+		manager.call('SQLFirst', [1]);
+
+		return manager.call('SQLPrev', [1]) === HmiSql.CODES.NO_MORE_ROWS;
+	})());
+
+	writes = {};
+	check('sqlMgr.getRecordCountsFromOne', manager.call('SQLGetRecord', [1, 2]) === 0 &&
+		writes.Recipe_Name === 'B', JSON.stringify(writes));
+	check('sqlMgr.getRecordOutOfRange',
+		manager.call('SQLGetRecord', [1, 9]) === HmiSql.CODES.NO_MORE_ROWS);
+
+	// A null column warns and leaves the tag empty rather than failing
+	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
+		rows: [[null, null, null]]});
+	errors = [];
+	callAsync('SQLSelect', [1, 'BatchLog', 'BatchRow', '', '']);
+	writes = {};
+	check('sqlMgr.nullIsAWarning', manager.call('SQLFirst', [1]) === HmiSql.CODES.NULL_VALUE,
+		'' + manager.call('SQLFirst', [1]));
+	check('sqlMgr.nullBecomesEmpty', writes.Tank_Level === 0 && writes.Recipe_Name === '',
+		JSON.stringify(writes));
+	check('sqlMgr.nullIsNotReported', errors.length === 0, errors.join(' | '));
+
+	// SQLEnd lets the rows go; the cursor functions then say so
+	check('sqlMgr.end', manager.call('SQLEnd', [1]) === 0);
+	check('sqlMgr.cursorAfterEnd', manager.call('SQLFirst', [1]) === HmiSql.CODES.NO_ROWS_SELECTED);
+	check('sqlMgr.numRowsAfterEnd', manager.call('SQLNumRows', [1]) === HmiSql.CODES.NO_ROWS_SELECTED);
+
+	// An unknown connection number
+	check('sqlMgr.badConnection', manager.call('SQLFirst', [99]) === HmiSql.CODES.INVALID_CONNECTION);
+	check('sqlMgr.selectNeedsABindList', (function()
+	{
+		answers.push({code: 0, columns: [], rows: []});
+
+		return callAsync('SQLSelect', [1, 'T', 'NoSuchList', '', '']) === HmiSql.CODES.NO_BIND_LIST;
+	})(), '' + last);
+	check('sqlMgr.selectNeedsATable',
+		callAsync('SQLSelect', [1, '', 'BatchRow', '', '']) === HmiSql.CODES.EMPTY_STATEMENT);
+
+	// Disconnect, and the Run ending
+	check('sqlMgr.disconnect', callAsync('SQLDisconnect', [1]) === 0, '' + last);
+	check('sqlMgr.disconnectedIsGone',
+		callAsync('SQLDisconnect', [1]) === HmiSql.CODES.INVALID_CONNECTION);
+
+	answers.push({code: 0, connectionId: 7, provider: 'sqlite'});
+	callAsync('SQLConnect', ['ConnId', 'Local']);
+	check('sqlMgr.stopClosesEverything', (function()
+	{
+		// However many are open, every one of them is closed
+		var open = Object.keys(manager.connections).length;
+		var before = sent.length;
+		manager.stop();
+		var closes = 0;
+
+		for (var i = before; i < sent.length; i++)
+		{
+			if (sent[i].action === 'hmiSql.close') { closes++; }
+		}
+
+		return open >= 2 && closes === open && Object.keys(manager.connections).length === 0;
+	})(), 'open at stop: ' + Object.keys(manager.connections).length);
+	check('sqlMgr.callsAfterStop', (function()
+	{
+		var code = null;
+		manager.callAsync('SQLConnect', ['ConnId', 'Plant'], function(c) { code = c; });
+
+		return code === HmiSql.CODES.INVALID_CONNECTION;
+	})());
+
+	// --- names a statement has to carry safely ------------------------
+
+	check('sqlMgr.quotesOnlyWhatNeedsIt', HmiSql.quoteColumn('BatchName') === 'BatchName' &&
+		HmiSql.quoteColumn('Valve ID') === '[Valve ID]' &&
+		HmiSql.quoteColumn('[Already]') === '[Already]' &&
+		HmiSql.quoteColumn('dbo.BatchLog') === 'dbo.BatchLog',
+		HmiSql.quoteColumn('Valve ID'));
+
+	// --- what a tag can hold ------------------------------------------
+	var message = HmiProject.createTag('M', 'MemoryMessage');
+	var discrete = HmiProject.createTag('D', 'MemoryDiscrete');
+	var integer = HmiProject.createTag('I', 'MemoryInteger');
+	var real = HmiProject.createTag('R', 'MemoryReal');
+
+	check('sqlMgr.coerce.message', HmiSql.coerceForTag(message, 12.5) === '12.5' &&
+		HmiSql.coerceForTag(message, null) === '');
+	check('sqlMgr.coerce.discrete', HmiSql.coerceForTag(discrete, 1) === 1 &&
+		HmiSql.coerceForTag(discrete, 0) === 0 && HmiSql.coerceForTag(discrete, true) === 1 &&
+		HmiSql.coerceForTag(discrete, 'True') === 1 && HmiSql.coerceForTag(discrete, 'no') === 0);
+	check('sqlMgr.coerce.integerRounds', HmiSql.coerceForTag(integer, 2.6) === 3);
+	check('sqlMgr.coerce.realKeepsDecimals', HmiSql.coerceForTag(real, 2.5) === 2.5);
+	check('sqlMgr.coerce.nonsenseIsZero', HmiSql.coerceForTag(real, 'not a number') === 0 &&
+		HmiSql.coerceForTag(integer, null) === 0);
 };
 
 // --------------------------------------------- tag references (HmiTagRefs)
