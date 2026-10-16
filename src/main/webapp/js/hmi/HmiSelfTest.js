@@ -7946,6 +7946,110 @@ HmiSelfTest.testQuickFunctionsDialog = function(ui)
 			field('fnUsage').innerText.indexOf('scripts and expressions') > 0,
 			field('fnUsage').innerText);
 
+		// --- the script tools ---------------------------------------------
+
+		check('quickDlg.validateSaysClean', (function()
+		{
+			field('fnBody').value = 'Return Tank_Level * 2;';
+			field('fnBody').dispatchEvent(new Event('input'));
+			field('validateScript').click();
+
+			return field('scriptMessage').innerText === 'No problems found.';
+		})(), field('scriptMessage').innerText);
+
+		check('quickDlg.validateReportsError', (function()
+		{
+			field('fnBody').value = 'Return Nope * 2;';
+			field('fnBody').dispatchEvent(new Event('input'));
+			field('validateScript').click();
+
+			return field('scriptMessage').innerText.indexOf('unknown tag "Nope"') >= 0;
+		})(), field('scriptMessage').innerText);
+
+		// The message is the user's to clear: pressing it again on a script
+		// that now compiles replaces it.
+		check('quickDlg.validateClearsError', (function()
+		{
+			field('fnBody').value = 'Return Tank_Level * 3;';
+			field('fnBody').dispatchEvent(new Event('input'));
+			field('validateScript').click();
+
+			return field('scriptMessage').innerText === 'No problems found.';
+		})(), field('scriptMessage').innerText);
+
+		// New Tag: the editor opens on a name nothing has, and saving it
+		// makes the body that reads it compile.
+		field('fnBody').value = 'Return Tank_Level * NewTag;';
+		field('fnBody').dispatchEvent(new Event('input'));
+		check('quickDlg.bodyWantsTheNewTag',
+			field('fnBody').classList.contains('hmiInvalid'));
+
+		field('newTag').click();
+		var editor = shown;
+		check('quickDlg.newTagOpensEditor', editor != null &&
+			editor.querySelector('[data-hmi-prop="name"]') != null &&
+			editor.querySelector('[data-hmi-prop="name"]').value === 'NewTag',
+			(editor != null) ? 'no name field' : 'no editor');
+
+		editor.querySelector('[data-hmi-field="saveTag"]').click();
+		check('quickDlg.newTagIsCreated', project.getTag('NewTag') != null);
+		check('quickDlg.newTagClearsTheError',
+			!field('fnBody').classList.contains('hmiInvalid'),
+			field('fnBody').getAttribute('title'));
+		check('quickDlg.newTagIsReported',
+			field('scriptMessage').innerText.indexOf('created') > 0,
+			field('scriptMessage').innerText);
+
+		// Browse Tags: pick one, and its name is on the clipboard.
+		var copied = [];
+		var realCopy = HmiDialogs.copyText;
+		HmiDialogs.copyText = function(host, text, done)
+		{
+			copied.push(text);
+			done(true);
+		};
+
+		try
+		{
+			field('browseTags').click();
+			var browser = shown;
+			check('quickDlg.browseListsTags', browser != null &&
+				browser.querySelectorAll('[data-hmi-tag]').length ===
+					project.tags.length,
+				(browser != null) ?
+					'' + browser.querySelectorAll('[data-hmi-tag]').length : 'none');
+			check('quickDlg.browseCopyWaitsForAPick',
+				browser.querySelector('[data-hmi-field="copyTag"]').disabled === true);
+
+			browser.querySelector('[data-hmi-field="tagFilter"]').value = 'pump';
+			browser.querySelector('[data-hmi-field="tagFilter"]')
+				.dispatchEvent(new Event('input'));
+			check('quickDlg.browseFilters',
+				browser.querySelectorAll('[data-hmi-tag]').length === 1 &&
+				browser.querySelector('[data-hmi-tag]')
+					.getAttribute('data-hmi-tag') === 'Pump1_Run',
+				'' + browser.querySelectorAll('[data-hmi-tag]').length);
+
+			browser.querySelector('[data-hmi-tag]').click();
+			browser.querySelector('[data-hmi-field="copyTag"]').click();
+			check('quickDlg.browseCopies', copied.join(',') === 'Pump1_Run',
+				copied.join(','));
+			check('quickDlg.browseSaysSo',
+				field('scriptMessage').innerText.indexOf('clipboard') > 0,
+				field('scriptMessage').innerText);
+		}
+		finally
+		{
+			HmiDialogs.copyText = realCopy;
+		}
+
+		field('fnBody').value = 'Return Tank_Level;';
+		field('fnBody').dispatchEvent(new Event('input'));
+
+		// The stubbed host last saw the tag browser: what follows asks
+		// whether OK left this dialog open, so put it back.
+		shown = box;
+
 		// Refusals: OK stays open and says why.
 		field('fnName').value = 'Abs';
 		field('fnName').dispatchEvent(new Event('input'));

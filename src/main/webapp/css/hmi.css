@@ -1615,6 +1615,25 @@
 	margin: 0 2px 0 0;
 }
 
+.hmiScriptTools
+{
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 6px 0 0 138px;
+}
+
+.hmiScriptTools button.geBtn
+{
+	min-width: 0;
+	margin: 0;
+}
+
+.hmiScriptTools + .hmiError
+{
+	margin-left: 138px;
+}
+
 /* ------------------------------------------- find/replace tag references */
 
 .hmiRefTable

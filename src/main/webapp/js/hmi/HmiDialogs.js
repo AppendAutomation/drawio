@@ -4333,6 +4333,293 @@ HmiDialogs.showUsers = function(ui, options)
 	ui.showDialog(div, 560, (security != null) ? 720 : 560, true, true);
 };
 
+// ------------------------------------------------------------ script tools
+
+/**
+ * Puts text on the system clipboard, through the app's own helper where there
+ * is one. done(true) when it is there.
+ */
+HmiDialogs.copyText = function(ui, text, done)
+{
+	done = done || function() {};
+
+	if (ui != null && ui.writeTextToClipboard != null)
+	{
+		// (text, onError, onDone): the clipboard API needs the window to
+		// have the focus, and refuses rather than throwing when it does not
+		ui.writeTextToClipboard('' + text, function()
+		{
+			done(HmiDialogs.copyFallback(text));
+		}, function()
+		{
+			done(true);
+		});
+
+		return;
+	}
+
+	done(HmiDialogs.copyFallback(text));
+};
+
+/** A hidden field and the old copy command, for when the clipboard API will not. */
+HmiDialogs.copyFallback = function(text)
+{
+	var area = document.createElement('textarea');
+	area.style.position = 'fixed';
+	area.style.left = '-1000px';
+	area.value = '' + text;
+	document.body.appendChild(area);
+	var ok = false;
+
+	try
+	{
+		// Both ways of copying need the window to have the focus
+		window.focus();
+		area.select();
+		ok = document.execCommand('copy');
+	}
+	catch (e)
+	{
+		ok = false;
+	}
+
+	document.body.removeChild(area);
+
+	return ok;
+};
+
+/** A tag name nothing has yet: NewTag, NewTag_2, ... */
+HmiDialogs.uniqueTagName = function(project, base)
+{
+	var name = base;
+	var n = 2;
+
+	while (project != null && project.getTag(name) != null)
+	{
+		name = base + '_' + n;
+		n++;
+	}
+
+	return name;
+};
+
+/**
+ * The buttons under a script field: check it now, make a tag it needs, or
+ * look one up.
+ *
+ * Writing a script means knowing what the tags are called, and the dictionary
+ * is behind a dialog that cannot be opened from here. These three keep that
+ * within reach of the script being written.
+ *
+ * opts: {ui, project, scope, area, errorsOf, onTagsChanged}
+ * - project is where a new tag is created, scope what the script compiles
+ *   against (the same object, unless the host edits a draft);
+ * - errorsOf(text) returns the compile errors, as HmiDialogs.scriptArea takes;
+ * - onTagsChanged() is called after a tag is created, so the host can rebuild
+ *   what it shows and check the script again.
+ */
+HmiDialogs.scriptTools = function(parent, opts)
+{
+	var ui = opts.ui;
+	var row = HmiDialogs.el('div', 'hmiScriptTools');
+	var message = HmiDialogs.el('div', 'hmiError');
+	message.setAttribute('data-hmi-field', 'scriptMessage');
+
+	var say = function(text, ok)
+	{
+		message.innerText = (text != null) ? text : '';
+		message.className = (ok) ? 'hmiError hmiAddressOk' : 'hmiError';
+	};
+
+	var validate = HmiDialogs.button('Validate', function()
+	{
+		var errors = (opts.area.value !== '') ? opts.errorsOf(opts.area.value) : [];
+
+		if (errors.length === 0)
+		{
+			say('No problems found.', true);
+
+			return;
+		}
+
+		say(errors[0].message + ((errors.length > 1) ? ' (and ' +
+			(errors.length - 1) + ' more)' : ''), false);
+	});
+	validate.setAttribute('data-hmi-field', 'validateScript');
+	validate.setAttribute('title', 'Check this script now');
+	row.appendChild(validate);
+
+	var newTag = HmiDialogs.button('New Tag...', function()
+	{
+		var name = HmiDialogs.uniqueTagName(opts.project, 'NewTag');
+
+		HmiDialogs.showTagEditor(ui, name, function(result)
+		{
+			if (!result.saved)
+			{
+				return;
+			}
+
+			HmiDialogs.tagDatalist(opts.project);
+
+			if (opts.onTagsChanged != null)
+			{
+				opts.onTagsChanged();
+			}
+
+			say('Tag "' + result.name + '" created.', true);
+		});
+	});
+	newTag.setAttribute('data-hmi-field', 'newTag');
+	newTag.setAttribute('title', 'Create a tag without leaving this script');
+	row.appendChild(newTag);
+
+	var browse = HmiDialogs.button('Browse Tags...', function()
+	{
+		HmiDialogs.showTagBrowser(ui, opts.project, function(name)
+		{
+			HmiDialogs.copyText(ui, name, function(ok)
+			{
+				// Naming it anyway: the engineer can still type it, which is
+				// better than a dead end when the clipboard refuses
+				say((ok) ? 'Copied "' + name + '" to the clipboard.' :
+					'The clipboard could not be reached. The tag is "' +
+					name + '".', ok);
+			});
+		});
+	});
+	browse.setAttribute('data-hmi-field', 'browseTags');
+	browse.setAttribute('title', 'Find a tag and copy its name');
+	row.appendChild(browse);
+
+	parent.appendChild(row);
+	parent.appendChild(message);
+
+	return {container: row, message: message, say: say};
+};
+
+/**
+ * The project's tags, to find one and copy its name into a script.
+ *
+ * It only reads: picking a tag copies its name and leaves the script to the
+ * engineer, rather than guessing where in it the name belongs.
+ */
+HmiDialogs.showTagBrowser = function(ui, project, onPick)
+{
+	var selected = null;
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Browse Tags'));
+	div.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Pick a tag to copy its name, then paste it into the script.'));
+
+	var body = HmiDialogs.el('div', 'hmiDialogBody hmiDialogBodyPlain');
+
+	var filter = document.createElement('input');
+	filter.className = 'hmiInput';
+	filter.setAttribute('type', 'text');
+	filter.setAttribute('placeholder', 'Filter');
+	filter.setAttribute('data-hmi-field', 'tagFilter');
+	body.appendChild(filter);
+
+	var list = HmiDialogs.el('div', 'hmiTagList');
+	list.setAttribute('data-hmi-field', 'tagBrowserList');
+	body.appendChild(list);
+	div.appendChild(body);
+
+	var copy = null;
+
+	var pick = function()
+	{
+		if (selected == null)
+		{
+			return;
+		}
+
+		ui.hideDialog();
+		onPick(selected.name);
+	};
+
+	var render = function()
+	{
+		var text = filter.value.toLowerCase();
+		list.innerText = '';
+		var shown = 0;
+
+		for (var i = 0; i < project.tags.length; i++)
+		{
+			var tag = project.tags[i];
+
+			if (text !== '' && tag.name.toLowerCase().indexOf(text) < 0 &&
+				('' + (tag.comment || '')).toLowerCase().indexOf(text) < 0)
+			{
+				continue;
+			}
+
+			(function(t)
+			{
+				var row = HmiDialogs.el('div', 'hmiTagRow' +
+					((selected === t) ? ' hmiTagRowOn' : ''));
+				row.setAttribute('data-hmi-tag', t.name);
+				row.appendChild(HmiDialogs.el('span', 'hmiTagName', t.name));
+				row.appendChild(HmiDialogs.el('span', 'hmiTagType', t.type));
+
+				mxEvent.addListener(row, 'click', function()
+				{
+					selected = t;
+					copy.disabled = false;
+					render();
+				});
+				mxEvent.addListener(row, 'dblclick', function()
+				{
+					selected = t;
+					pick();
+				});
+
+				list.appendChild(row);
+				shown++;
+			})(tag);
+		}
+
+		if (shown === 0)
+		{
+			list.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+				(project.tags.length === 0) ? 'No tags defined.' :
+					'No tag matches "' + filter.value + '".'));
+		}
+	};
+
+	mxEvent.addListener(filter, 'input', function()
+	{
+		render();
+	});
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+
+	var close = HmiDialogs.button('Close', function()
+	{
+		ui.hideDialog();
+	});
+	close.setAttribute('data-hmi-field', 'closeBrowser');
+	footer.appendChild(close);
+
+	copy = HmiDialogs.button('Copy Name', function()
+	{
+		pick();
+	}, true);
+	copy.setAttribute('data-hmi-field', 'copyTag');
+	copy.disabled = true;
+	footer.appendChild(copy);
+
+	div.appendChild(footer);
+
+	render();
+	ui.showDialog(div, 420, 480, true, true);
+	window.setTimeout(function() { filter.focus(); }, 0);
+
+	return div;
+};
+
 // ------------------------------------------------------------ quick functions
 
 /**
@@ -4677,11 +4964,28 @@ HmiDialogs.showQuickFunctions = function(ui)
 				fn.body = value;
 				scope.touch();
 				showUsage();
-			}, 12, function(text)
+			}, 10, function(text)
 			{
 				return HmiQuickFn.compileText(scope, fn, text).errors;
 			});
 		area.setAttribute('data-hmi-field', 'fnBody');
+
+		HmiDialogs.scriptTools(right, {
+			ui: ui,
+			project: project,
+			area: area,
+			errorsOf: function(text)
+			{
+				return HmiQuickFn.compileText(scope, fn, text).errors;
+			},
+			onTagsChanged: function()
+			{
+				// The draft keeps its own revision, so a tag created from
+				// here only reaches the next compile after this
+				scope.touch();
+				recheckBody();
+			}
+		});
 
 		var usageLine = HmiDialogs.el('div', 'hmiHint');
 		usageLine.setAttribute('data-hmi-field', 'fnUsage');
