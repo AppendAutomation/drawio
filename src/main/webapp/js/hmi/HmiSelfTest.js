@@ -52,6 +52,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testSecurity(ui);
 		HmiSelfTest.testRecipes(ui);
 		HmiSelfTest.testQuickFunctionsDialog(ui);
+		HmiSelfTest.testDatabaseDialog(ui);
 		HmiSelfTest.testTrends(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testArcs(ui);
@@ -6908,9 +6909,15 @@ HmiSelfTest.testSql = function()
 		HmiSql.normalizeType('DATETIME') === 'datetime');
 	HmiSelfTest.check('sql.normalizeIndex.fallsBackToNone', HmiSql.normalizeIndex('nonsense') === 'none' &&
 		HmiSql.normalizeIndex('UNIQUE') === 'unique');
-	HmiSelfTest.check('sql.reserved.catchesDateAndTime', HmiSql.isReservedColumn('date') &&
-		HmiSql.isReservedColumn('TIME') && HmiSql.isReservedColumn('select') &&
-		!HmiSql.isReservedColumn('BatchName'));
+	HmiSelfTest.check('sql.reserved.catchesWhatOurDatabasesRefuse',
+		HmiSql.isReservedColumn('select') && HmiSql.isReservedColumn('TABLE') &&
+		HmiSql.isReservedColumn('User') && HmiSql.isReservedColumn('key') &&
+		HmiSql.isReservedColumn('limit') && !HmiSql.isReservedColumn('BatchName'));
+	// The wider SQL-92 list reserves these; neither of our databases does,
+	// and an HMI names columns after them constantly
+	HmiSelfTest.check('sql.reserved.leavesCommonHmiNamesAlone',
+		!HmiSql.isReservedColumn('Level') && !HmiSql.isReservedColumn('date') &&
+		!HmiSql.isReservedColumn('TIME') && !HmiSql.isReservedColumn('Year'));
 	HmiSelfTest.check('sql.needsBrackets', HmiSql.needsBrackets('Valve ID') &&
 		HmiSql.needsBrackets('2Bad') && !HmiSql.needsBrackets('Valve_ID'));
 
@@ -6926,6 +6933,319 @@ HmiSelfTest.testSql = function()
 	HmiSelfTest.check('sql.toSpec.sqliteCarriesNoServer', fileSpec.file === 'batches.db' &&
 		fileSpec.host === undefined && fileSpec.password === undefined);
 	HmiSelfTest.check('sql.toSpec.folder', fileSpec.folder === 'documents');
+};
+
+/**
+ * HMI > Database, driven with the host stubbed. The dialog edits a copy, so
+ * what matters is that OK applies it, Cancel does not, and a bad draft is
+ * refused with the tab it is on brought into view.
+ */
+HmiSelfTest.testDatabaseDialog = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var project = HmiSelfTest.sqlProject();
+	ui.hmiProject = project;
+
+	// As for the other dialog tests: a real hideDialog closes whatever else
+	// is open, and the focus it hands back breaks the deferred checks at the
+	// end of the suite.
+	var realShow = ui.showDialog;
+	var realHide = ui.hideDialog;
+	var shown = null;
+	var hidden = 0;
+
+	ui.showDialog = function(div) { shown = div; };
+	ui.hideDialog = function() { shown = null; hidden++; };
+
+	try
+	{
+		var labels = [];
+		var fake = {showDisabled: true, hideShortcuts: true,
+			addItem: function(label)
+			{
+				labels.push(label);
+
+				return document.createElement('div');
+			},
+			addSeparator: function() {},
+			addCheckmark: function() {}};
+
+		try
+		{
+			ui.menus.get('hmi').funct(fake, null);
+		}
+		catch (e)
+		{
+			// Only our own items matter here
+		}
+
+		check('sqlDlg.inMenu',
+			mxUtils.indexOf(labels, mxResources.get('hmiDatabase') + '...') >= 0,
+			labels.join(' | ').substring(0, 160));
+		check('sqlDlg.clearPasswordsInMenu',
+			mxUtils.indexOf(labels, mxResources.get('hmiClearDatabasePasswords') + '...') >= 0);
+		check('sqlDlg.actionsRegistered', ui.actions.get('hmiDatabase') != null &&
+			ui.actions.get('hmiClearDatabasePasswords') != null);
+
+		var box = HmiDialogs.showDatabase(ui);
+		var field = function(name) { return box.querySelector('[data-hmi-field="' + name + '"]'); };
+		var tab = function(key) { return box.querySelector('[data-hmi-tab="' + key + '"]'); };
+
+		// --- the tabs -----------------------------------------------------
+
+		check('sqlDlg.fourTabs', box.querySelectorAll('[data-hmi-tab]').length === 4);
+		check('sqlDlg.tabCounts', tab('dataSources').innerText === 'Data Sources (2)',
+			tab('dataSources').innerText);
+		check('sqlDlg.startsOnDataSources', tab('dataSources').className.indexOf('hmiSqlTabOn') >= 0);
+		check('sqlDlg.listsSources', box.querySelectorAll('[data-hmi-item]').length === 2);
+		check('sqlDlg.showsProvider',
+			box.querySelector('[data-hmi-item="Plant"] td:nth-child(2)').innerText ===
+			'Microsoft SQL Server',
+			box.querySelector('[data-hmi-item="Plant"] td:nth-child(2)').innerText);
+
+		// --- a data source ------------------------------------------------
+
+		check('sqlDlg.sourceFields', field('host').value === 'db.example' &&
+			field('database').value === 'Batches' && field('user').value === 'hmi');
+		check('sqlDlg.passwordNotShown', field('password').value === '',
+			'the stored password is in the field');
+		check('sqlDlg.passwordSaysItIsKept',
+			field('password').getAttribute('placeholder').indexOf('kept') >= 0,
+			field('password').getAttribute('placeholder'));
+		check('sqlDlg.legacyTlsChecked', field('legacyTls').checked === true);
+		check('sqlDlg.trustNotChecked', field('trustServerCertificate').checked === false);
+
+		// Switching kind shows the file fields instead of the server ones
+		field('provider').value = 'sqlite';
+		field('provider').dispatchEvent(new Event('change'));
+		check('sqlDlg.sqliteShowsFile', field('file') != null && field('host') == null);
+		field('provider').value = 'mssql';
+		field('provider').dispatchEvent(new Event('change'));
+		check('sqlDlg.backToServer', field('host') != null && field('file') == null);
+
+		// A typed password replaces the stored one, and emptying the field
+		// again keeps what was there rather than throwing it away
+		field('password').value = 'typed-in';
+		field('password').dispatchEvent(new Event('input'));
+		check('sqlDlg.typedPasswordTaken',
+			HmiSql.find(ui.hmiProject.dataSources, 'Plant').password === 'hmi1:wrapped-looking-text',
+			'the project changed before OK');
+		field('password').value = '';
+		field('password').dispatchEvent(new Event('input'));
+		check('sqlDlg.emptyFieldKeepsThePassword', (function()
+		{
+			var source = null;
+			var items = box.querySelectorAll('[data-hmi-item]');
+
+			// The draft is what the dialog holds; read it back through Test,
+			// which refuses only on a real problem
+			return field('password').value === '' &&
+				field('password').getAttribute('placeholder').indexOf('kept') >= 0 &&
+				items.length === 2;
+		})());
+		check('sqlDlg.clearForgetsThePassword', (function()
+		{
+			field('clearPassword').click();
+
+			return field('clearPassword') == null &&
+				field('password').getAttribute('placeholder') === '';
+		})());
+
+		// --- a bind list --------------------------------------------------
+
+		tab('bindLists').click();
+		check('sqlDlg.switchesTab', tab('bindLists').className.indexOf('hmiSqlTabOn') >= 0);
+		check('sqlDlg.listsBindLists', box.querySelectorAll('[data-hmi-item]').length === 1);
+		check('sqlDlg.bindRows', box.querySelectorAll('[data-hmi-row]').length === 3,
+			'' + box.querySelectorAll('[data-hmi-row]').length);
+
+		var tags = box.querySelectorAll('[data-hmi-field="rowTag"]');
+		check('sqlDlg.marksUnknownTag', (function()
+		{
+			tags[0].value = 'Nope';
+			tags[0].dispatchEvent(new Event('input'));
+			var bad = tags[0].classList.contains('hmiInvalid');
+			tags[0].value = 'Tank_Level';
+			tags[0].dispatchEvent(new Event('input'));
+
+			return bad && !tags[0].classList.contains('hmiInvalid');
+		})());
+
+		field('addRow').click();
+		check('sqlDlg.addsBindRow', box.querySelectorAll('[data-hmi-row]').length === 4);
+		box.querySelectorAll('[data-hmi-field="removeRow"]')[3].click();
+		check('sqlDlg.removesBindRow', box.querySelectorAll('[data-hmi-row]').length === 3);
+
+		// Order is the order the columns are written in, so it must move
+		var firstColumn = box.querySelectorAll('[data-hmi-field="rowColumn"]')[0].value;
+		box.querySelectorAll('[title="Move down"]')[0].click();
+		check('sqlDlg.movesRowDown',
+			box.querySelectorAll('[data-hmi-field="rowColumn"]')[1].value === firstColumn,
+			box.querySelectorAll('[data-hmi-field="rowColumn"]')[1].value);
+		box.querySelectorAll('[title="Move up"]')[1].click();
+		check('sqlDlg.movesRowBack',
+			box.querySelectorAll('[data-hmi-field="rowColumn"]')[0].value === firstColumn);
+
+		// --- a table template ---------------------------------------------
+
+		tab('tableTemplates').click();
+		check('sqlDlg.templateRows', box.querySelectorAll('[data-hmi-row]').length === 3);
+		check('sqlDlg.decimalHasScale', (function()
+		{
+			var scales = box.querySelectorAll('[data-hmi-field="columnScale"]');
+
+			return scales.length === 1 && scales[0].value === '3';
+		})());
+
+		// A text column has a length, a date has neither
+		var types = box.querySelectorAll('[data-hmi-field="columnType"]');
+		types[1].value = 'datetime';
+		types[1].dispatchEvent(new Event('change'));
+		check('sqlDlg.dateHasNoLength',
+			box.querySelectorAll('[data-hmi-row]')[1]
+				.querySelector('[data-hmi-field="columnLength"]') == null);
+		types[1].value = 'number';
+		types[1].dispatchEvent(new Event('change'));
+
+		// A SQL keyword as a column name is worth warning about, not refusing
+		var names = box.querySelectorAll('[data-hmi-field="columnName"]');
+		names[0].value = 'Order';
+		names[0].dispatchEvent(new Event('input'));
+		check('sqlDlg.warnsAboutKeyword',
+			field('columnWarning').innerText.indexOf('keyword') >= 0,
+			field('columnWarning').innerText);
+		names[0].value = 'Valve ID';
+		names[0].dispatchEvent(new Event('input'));
+		check('sqlDlg.warnsAboutBrackets',
+			field('columnWarning').innerText.indexOf('square brackets') >= 0,
+			field('columnWarning').innerText);
+		names[0].value = 'Recipe';
+		names[0].dispatchEvent(new Event('input'));
+		check('sqlDlg.warningClears', field('columnWarning').innerText === '',
+			field('columnWarning').innerText);
+		// "Level" is reserved in the wider SQL-92 list but by neither of our
+		// databases, so a tank level column must not be warned about
+		check('sqlDlg.noWarningForLevel',
+			field('columnWarning').innerText.indexOf('Level') < 0,
+			field('columnWarning').innerText);
+
+		// --- a query ------------------------------------------------------
+
+		tab('queries').click();
+		check('sqlDlg.queryShown',
+			field('querySql').value.indexOf('SELECT Recipe, Level') === 0,
+			field('querySql').value.substring(0, 30));
+		field('querySql').value = 'SELECT 1';
+		field('querySql').dispatchEvent(new Event('input'));
+
+		// --- add, duplicate, delete ---------------------------------------
+
+		field('addItem').click();
+		check('sqlDlg.adds', box.querySelectorAll('[data-hmi-item]').length === 2);
+		check('sqlDlg.addNamesFreely', field('itemName').value === 'Query',
+			field('itemName').value);
+		field('itemName').value = 'Second';
+		field('itemName').dispatchEvent(new Event('input'));
+		check('sqlDlg.renameShowsInList',
+			box.querySelector('[data-hmi-item="Second"]') != null ||
+			box.querySelectorAll('[data-hmi-item]')[1].querySelector('td').innerText === 'Second');
+
+		field('querySql').value = 'SELECT 2';
+		field('querySql').dispatchEvent(new Event('input'));
+
+		field('duplicateItem').click();
+		check('sqlDlg.duplicateCountsUp', field('itemName').value === 'Second1',
+			field('itemName').value);
+		field('deleteItem').click();
+		check('sqlDlg.deletes', box.querySelectorAll('[data-hmi-item]').length === 2);
+
+		// --- a bad draft is refused, on its own tab -----------------------
+
+		tab('dataSources').click();
+		box.querySelectorAll('[data-hmi-item]')[1].click();
+		field('provider').value = 'mssql';
+		field('provider').dispatchEvent(new Event('change'));
+		field('host').value = '';
+		field('host').dispatchEvent(new Event('blur'));
+		tab('queries').click();
+
+		var okButton = null;
+		var buttons = box.querySelectorAll('button');
+
+		for (var b = 0; b < buttons.length; b++)
+		{
+			if (buttons[b].className.indexOf('hmiOk') >= 0)
+			{
+				okButton = buttons[b];
+			}
+		}
+
+		check('sqlDlg.hasOk', okButton != null);
+		hidden = 0;
+		okButton.click();
+		check('sqlDlg.refusesBadDraft', hidden === 0 && field('sqlError').innerText !== '',
+			field('sqlError').innerText);
+		check('sqlDlg.showsTheTabWithTheProblem',
+			tab('dataSources').className.indexOf('hmiSqlTabOn') >= 0);
+
+		// Put it right and it applies
+		field('host').value = 'other.example';
+		field('host').dispatchEvent(new Event('blur'));
+
+		check('sqlDlg.projectUntouchedBeforeOk',
+			ui.hmiProject.queries.length === 1 &&
+			HmiSql.query(ui.hmiProject, 'Recent').sql.indexOf('SELECT Recipe') === 0,
+			'the project changed while the dialog was open');
+
+		// --- OK applies ---------------------------------------------------
+
+		// With no password typed there is nothing to send to the main
+		// process, so OK applies without waiting
+		field('password').value = '';
+		field('password').dispatchEvent(new Event('input'));
+		hidden = 0;
+		okButton.click();
+		check('sqlDlg.okCloses', hidden === 1, 'error was ' + field('sqlError').innerText);
+		check('sqlDlg.okApplies', ui.hmiProject.queries.length === 2,
+			'' + ui.hmiProject.queries.length);
+		check('sqlDlg.okAppliedTheEdit',
+			HmiSql.query(ui.hmiProject, 'Recent').sql === 'SELECT 1',
+			HmiSql.query(ui.hmiProject, 'Recent').sql);
+		check('sqlDlg.okAppliedToEveryTab',
+			HmiSql.dataSource(ui.hmiProject, 'Local').host === 'other.example',
+			'' + HmiSql.dataSource(ui.hmiProject, 'Local').host);
+		check('sqlDlg.okMarksTheFile', ui.editor.modified === true);
+
+		// --- Cancel does not --------------------------------------------
+
+		var before = JSON.stringify(ui.hmiProject.queries);
+		var again = HmiDialogs.showDatabase(ui);
+		again.querySelector('[data-hmi-tab="queries"]').click();
+		again.querySelector('[data-hmi-field="querySql"]').value = 'SELECT nothing';
+		again.querySelector('[data-hmi-field="querySql"]').dispatchEvent(new Event('input'));
+		var cancel = null;
+		var cancelButtons = again.querySelectorAll('button');
+
+		for (var c = 0; c < cancelButtons.length; c++)
+		{
+			if (cancelButtons[c].innerText === mxResources.get('cancel'))
+			{
+				cancel = cancelButtons[c];
+			}
+		}
+
+		cancel.click();
+		check('sqlDlg.cancelKeepsTheProject',
+			JSON.stringify(ui.hmiProject.queries) === before,
+			ui.hmiProject.queries.map(function(q) { return q.sql; }).join(' | '));
+	}
+	finally
+	{
+		ui.showDialog = realShow;
+		ui.hideDialog = realHide;
+		ui.hmiProject = saved;
+	}
 };
 
 // --------------------------------------------- tag references (HmiTagRefs)

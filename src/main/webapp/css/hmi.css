@@ -1769,3 +1769,134 @@
 	cursor: pointer;
 	font-size: 13px;
 }
+
+/* --------------------------------------------------------- HMI > Database */
+
+.hmiSqlTabs
+{
+	display: flex;
+	gap: 2px;
+	border-bottom: 1px solid #d0d0d0;
+	margin-bottom: 8px;
+	flex: 0 0 auto;
+}
+
+[data-theme="dark"] .hmiSqlTabs
+{
+	border-bottom-color: #505050;
+}
+
+.hmiSqlTab
+{
+	padding: 5px 12px;
+	cursor: pointer;
+	border: 1px solid transparent;
+	border-bottom: none;
+	border-radius: 4px 4px 0 0;
+	color: #606060;
+	white-space: nowrap;
+	font-size: 12px;
+}
+
+.hmiSqlTab:hover
+{
+	background-color: rgba(26, 127, 193, 0.08);
+}
+
+.hmiSqlTabOn
+{
+	background-color: rgba(26, 127, 193, 0.14);
+	border-color: #d0d0d0;
+	color: inherit;
+	font-weight: 600;
+}
+
+[data-theme="dark"] .hmiSqlTab
+{
+	color: #A0A0A0;
+}
+
+[data-theme="dark"] .hmiSqlTabOn
+{
+	border-color: #505050;
+	color: inherit;
+}
+
+.hmiSqlBody
+{
+	display: flex;
+	gap: 12px;
+	flex: 1 1 auto;
+	min-height: 0;
+}
+
+.hmiSqlList
+{
+	width: 220px;
+	flex: 0 0 auto;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	min-height: 0;
+}
+
+.hmiSqlList > *
+{
+	flex: none;
+}
+
+.hmiSqlList .hmiUserList
+{
+	max-height: 360px;
+}
+
+.hmiSqlList tr.hmiSelected td
+{
+	background-color: rgba(26, 127, 193, 0.14);
+}
+
+.hmiSqlEditor
+{
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-y: auto;
+}
+
+.hmiSqlButtons
+{
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin-top: 6px;
+}
+
+.hmiSqlButtons button.geBtn
+{
+	min-width: 0;
+	margin: 0;
+}
+
+.hmiSqlTable td input,
+.hmiSqlTable td select
+{
+	width: 100%;
+	box-sizing: border-box;
+}
+
+/* Length and scale share one cell for a decimal column */
+.hmiSqlTable td input + input
+{
+	margin-top: 3px;
+}
+
+.hmiSqlTable td.hmiUserActions button.geBtn
+{
+	min-width: 0;
+	padding: 2px 8px;
+	margin: 0 2px 0 0;
+}
+
+.hmiSqlTable th:last-child
+{
+	width: 140px;
+}

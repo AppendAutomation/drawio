@@ -293,6 +293,16 @@ HmiMenus.installActions = function()
 				HmiDialogs.showQuickFunctions(ui);
 			});
 
+			this.addAction('hmiDatabase...', function()
+			{
+				HmiDialogs.showDatabase(ui);
+			});
+
+			this.addAction('hmiClearDatabasePasswords...', function()
+			{
+				HmiMenus.clearDatabasePasswords(ui);
+			});
+
 			this.addAction('hmiClearRuntimeRecipes...', function()
 			{
 				HmiMenus.clearRuntimeRecipes(ui);
@@ -327,13 +337,15 @@ HmiMenus.installMenu = function()
 			this.put('hmi', new Menu(mxUtils.bind(this, function(menu, parent)
 			{
 				this.addMenuItems(menu, ['hmiTagDictionary', 'hmiFindReplaceTags',
-					'hmiDevices', 'hmiUsers', 'hmiRecipes', 'hmiQuickFunctions', '-', 'hmiAppSettings', 'hmiWindowProps',
+					'hmiDevices', 'hmiUsers', 'hmiRecipes', 'hmiQuickFunctions', 'hmiDatabase',
+					'-', 'hmiAppSettings', 'hmiWindowProps',
 					'-', 'hmiValidate', 'hmiPublish', '-'], parent);
 
 				this.addMenuItems(menu,
 					[(HmiMenus.isRunning(ui)) ? 'hmiStop' : 'hmiRun'], parent);
 
-				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers', 'hmiClearRuntimeRecipes'], parent);
+				this.addMenuItems(menu, ['-', 'hmiRuntimeLog', 'hmiClearRetentive', 'hmiClearRuntimeUsers',
+					'hmiClearRuntimeRecipes', 'hmiClearDatabasePasswords'], parent);
 			})));
 		}));
 	};
@@ -645,6 +657,37 @@ HmiMenus.clearRuntimeRecipes = function(ui)
 			{
 				ui.showError(mxResources.get('error'), message, mxResources.get('ok'));
 			}
+		});
+	}, null, 'Clear', mxResources.get('cancel'));
+};
+
+/**
+ * Forgets the database credentials this computer holds of its own, so every
+ * data source falls back to whatever the project carries.
+ */
+HmiMenus.clearDatabasePasswords = function(ui)
+{
+	var store = HmiMenus.alarmStore(ui, false);
+
+	if (store == null || !HmiSql.available())
+	{
+		return;
+	}
+
+	if (HmiMenus.isRunning(ui))
+	{
+		ui.showError(mxResources.get('hmiClearDatabasePasswords'), 'Stop the Run first.',
+			mxResources.get('ok'));
+
+		return;
+	}
+
+	ui.confirm('Forget the database user names and passwords kept on this computer? Every data source ' +
+		'then uses what the project carries.', function()
+	{
+		HmiSql.request('hmiSql.clearOverrides', {store: store}, function() {}, function(e)
+		{
+			ui.showError(mxResources.get('error'), e.message, mxResources.get('ok'));
 		});
 	}, null, 'Clear', mxResources.get('cancel'));
 };

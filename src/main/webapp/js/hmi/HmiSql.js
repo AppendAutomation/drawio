@@ -129,30 +129,35 @@ HmiSql.normalizeIndex = function(value)
 };
 
 /**
- * Words a column may not be named. A database rejects its own keywords, and
- * which ones it rejects differs between them, so the list is the union of the
- * usual ones: it is better to refuse a name here than to have a statement fail
- * at run time on one database and not another. DATE and TIME are the two that
- * catch people out.
+ * Words a column may not be named, because one of the two databases this
+ * application supports reserves it: the union of SQL Server's reserved
+ * keywords and SQLite's.
+ *
+ * It is deliberately not the wider SQL-92 or ODBC list. That one reserves
+ * LEVEL, DATE and TIME, which neither of our databases refuses and which an
+ * HMI names a column after constantly -- a warning that fires on "Level" is a
+ * warning nobody reads. A third kind of database would widen this list.
  */
-HmiSql.RESERVED_COLUMNS = ('absolute action add all allocate alter and any are as asc assertion at ' +
-	'authorization avg begin between bit boolean both by cascade cascaded case cast catalog char ' +
-	'character check close coalesce collate collation column commit connect connection constraint ' +
-	'constraints continue convert corresponding count create cross current current_date current_time ' +
-	'current_timestamp current_user cursor date day deallocate dec decimal declare default deferrable ' +
-	'deferred delete desc describe descriptor diagnostics disconnect distinct domain double drop else ' +
-	'end escape except exception exec execute exists external extract false fetch first float for ' +
-	'foreign found from full get global go goto grant group having hour identity immediate in index ' +
-	'indicator initially inner input insensitive insert int integer intersect interval into is ' +
-	'isolation join key language last leading left level like local lower match max min minute module ' +
-	'month names national natural nchar next no not null nullif numeric octet_length of on only open ' +
-	'option or order outer output overlaps pad partial position precision prepare preserve primary ' +
-	'prior privileges procedure public read real references relative restrict revoke right rollback ' +
-	'rows schema scroll second section select session session_user set size smallint some space sql ' +
-	'sqlcode sqlerror sqlstate substring sum system_user table temporary then time timestamp ' +
-	'timezone_hour timezone_minute to trailing transaction translate translation trim true union ' +
-	'unique unknown update upper usage user using value values varchar varying view when whenever ' +
-	'where with work write year zone').split(' ');
+HmiSql.RESERVED_COLUMNS = ('abort action add after all alter always analyze and any as asc attach authorization ' +
+	'autoincrement backup before begin between break browse bulk by cascade case cast check ' +
+	'checkpoint close clustered coalesce collate column commit compute conflict constraint contains ' +
+	'containstable continue convert create cross current current_date current_time current_timestamp ' +
+	'current_user cursor database dbcc deallocate declare default deferrable deferred delete deny ' +
+	'desc detach disk distinct distributed do double drop dump each else end errlvl escape except ' +
+	'exclude exclusive exec execute exists exit explain external fail fetch file fillfactor filter ' +
+	'first following for foreign freetext freetexttable from full function generated glob goto grant ' +
+	'group groups having holdlock identity identity_insert identitycol if ignore immediate in index ' +
+	'indexed initially inner insert instead intersect into is isnull join key kill last left like ' +
+	'limit lineno load match materialized merge national natural no nocheck nonclustered not nothing ' +
+	'notnull null nullif nulls of off offsets on open opendatasource openquery openrowset openxml ' +
+	'option or order others outer over partition percent pivot plan pragma preceding precision ' +
+	'primary print proc procedure public query raise raiserror range read readtext reconfigure ' +
+	'recursive references regexp reindex release rename replace replication restore restrict return ' +
+	'returning revert revoke right rollback row rowcount rowguidcol rows rule save savepoint schema ' +
+	'securityaudit select session_user set setuser shutdown some statistics system_user table ' +
+	'tablesample temp temporary textsize then ties to top tran transaction trigger truncate tsequal ' +
+	'unbounded union unique unpivot update updatetext use user using vacuum values varying view ' +
+	'virtual waitfor when where while window with without writetext').split(' ');
 
 HmiSql.isReservedColumn = function(name)
 {
@@ -167,6 +172,37 @@ HmiSql.isReservedColumn = function(name)
 HmiSql.needsBrackets = function(name)
 {
 	return !/^[A-Za-z_][A-Za-z0-9_]*$/.test('' + (name == null ? '' : name));
+};
+
+/**
+ * The column type that suits a tag, for building a table template out of a
+ * bind list. A dotfield reads a flag rather than the tag's own value.
+ */
+HmiSql.typeForTag = function(project, name, field)
+{
+	if (field === 'InAlarm' || field === 'Acked')
+	{
+		return 'boolean';
+	}
+
+	var tag = (project != null) ? project.getTag(name) : null;
+
+	if (tag == null)
+	{
+		return 'text';
+	}
+
+	if (HmiTypes.isDiscrete(tag.type))
+	{
+		return 'boolean';
+	}
+
+	if (HmiTypes.isMessage(tag.type))
+	{
+		return 'text';
+	}
+
+	return HmiTypes.isInteger(tag.type) ? 'integer' : 'number';
 };
 
 // ----------------------------------------------------------------- new items
@@ -516,6 +552,12 @@ HmiSql.request = function(action, args, fn, error)
 	window.electron.request(msg, fn, error);
 };
 
+/** A deep copy of one of the project's lists, for a dialog to edit. */
+HmiSql.copyList = function(list)
+{
+	return (list != null) ? JSON.parse(JSON.stringify(list)) : [];
+};
+
 /**
  * Wraps a password for storing in the project. The algorithm lives in the
  * main process, so there is one of it.
@@ -584,4 +626,88 @@ HmiSql.toSpec = function(source)
 	}
 
 	return spec;
+};
+
+/** Whether any password is still in plain text and needs wrapping. */
+HmiSql.needsWrapping = function(sources)
+{
+	for (var i = 0; sources != null && i < sources.length; i++)
+	{
+		if (sources[i].password && !HmiSql.isWrapped(sources[i].password))
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+/**
+ * Wraps every data source password that is still in plain text: what the
+ * dialog took from the user, or what a command-line spec gave. One that is
+ * already wrapped -- loaded from a project, or from a dump -- is left alone,
+ * so wrapping twice cannot happen and a dump rebuilds identically.
+ */
+HmiSql.wrapPasswords = function(sources)
+{
+	var pending = [];
+
+	for (var i = 0; sources != null && i < sources.length; i++)
+	{
+		var source = sources[i];
+
+		if (!source.password || HmiSql.isWrapped(source.password))
+		{
+			continue;
+		}
+
+		pending.push(function(s)
+		{
+			return new Promise(function(resolve, reject)
+			{
+				HmiSql.wrapPassword(s.password, function(wrapped)
+				{
+					s.password = wrapped;
+					resolve();
+				}, reject);
+			});
+		}(source));
+	}
+
+	return Promise.all(pending);
+};
+
+/** Whether a password has already been wrapped (src/main/sql/Secret.js). */
+HmiSql.isWrapped = function(value)
+{
+	return typeof value === 'string' && value.indexOf('hmi1:') === 0;
+};
+
+/** What this computer holds for the project's data sources, if anything. */
+HmiSql.overrides = function(store, fn, error)
+{
+	if (!store || !HmiSql.available())
+	{
+		fn([]);
+
+		return;
+	}
+
+	HmiSql.request('hmiSql.overrides', {store: store}, function(list)
+	{
+		fn(Array.isArray(list) ? list : []);
+	}, error);
+};
+
+/**
+ * Sets or removes this computer's own credentials for one data source. A
+ * window may set one and may ask whether one is set, but never reads one back.
+ */
+HmiSql.setOverride = function(store, name, override, fn, error)
+{
+	HmiSql.request('hmiSql.setOverride', {store: store, name: name, override: override},
+		function(list)
+		{
+			fn(Array.isArray(list) ? list : []);
+		}, error);
 };

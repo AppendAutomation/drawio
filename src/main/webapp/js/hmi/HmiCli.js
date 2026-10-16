@@ -298,7 +298,9 @@ HmiCli.build = function(ui, project)
 
 	return HmiCli.applyPassword(hmi, spec).then(function()
 	{
-		return HmiCli.wrapDataSourcePasswords(hmi);
+		// Shared with the Database dialog: a plain text password from a spec
+		// is wrapped before the project is written
+		return HmiSql.wrapPasswords(hmi.dataSources);
 	}).then(function()
 	{
 		var xml = ui.getFileData(true, null, null, null, true, false, null, null, null, true);
@@ -751,40 +753,6 @@ HmiCli.applyPassword = function(hmi, spec)
 		hmi.settings.runtime.salt = salt;
 		hmi.settings.runtime.hash = hash;
 	});
-};
-
-/**
- * Wraps any data source password the spec gave in plain text, so what lands
- * in the project is wrapped like the dialog's. A password that arrived already
- * wrapped -- from a dump -- is left as it is.
- */
-HmiCli.wrapDataSourcePasswords = function(hmi)
-{
-	var pending = [];
-
-	for (var i = 0; i < hmi.dataSources.length; i++)
-	{
-		var source = hmi.dataSources[i];
-
-		if (!source.password || source.password.indexOf('hmi1:') === 0)
-		{
-			continue;
-		}
-
-		pending.push(function(s)
-		{
-			return new Promise(function(resolve, reject)
-			{
-				HmiSql.wrapPassword(s.password, function(wrapped)
-				{
-					s.password = wrapped;
-					resolve();
-				}, reject);
-			});
-		}(source));
-	}
-
-	return Promise.all(pending);
 };
 
 HmiCli.buildPages = function(ui, spec, hmi, errors)

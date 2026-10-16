@@ -6138,3 +6138,1090 @@ HmiDialogs.renderRecipeErrors = function(state)
 		state.list.appendChild(HmiDialogs.el('li', null, 'and ' + state.extra + ' more'));
 	}
 };
+
+// --------------------------------------------------- database (HmiSql.js)
+
+/**
+ * HMI > Database: the four things the SQL* script functions name. Four tabs
+ * rather than four menu items, because they are one subject and are nearly
+ * always edited together.
+ *
+ * Everything is edited in a copy and applied on OK. A password typed here is
+ * still in plain text while the dialog is open, so OK wraps it before the
+ * project is written -- which is asynchronous, so this dialog builds its own
+ * footer instead of using okCancel.
+ */
+HmiDialogs.showDatabase = function(ui)
+{
+	if (ui.hmiProject == null)
+	{
+		ui.hmiProject = HmiFile.createDefaultProject();
+	}
+
+	var project = ui.hmiProject;
+	var draft = {
+		dataSources: HmiSql.copyList(project.dataSources),
+		bindLists: HmiSql.copyList(project.bindLists),
+		tableTemplates: HmiSql.copyList(project.tableTemplates),
+		queries: HmiSql.copyList(project.queries)
+	};
+
+	var listId = HmiDialogs.tagDatalist(project);
+	var store = HmiMenus.alarmStore(ui, false);
+	var onThisPc = [];
+
+	var TABS = [
+		{key: 'dataSources', label: 'Data Sources', one: 'data source', fresh: 'DataSource'},
+		{key: 'bindLists', label: 'Bind Lists', one: 'bind list', fresh: 'BindList'},
+		{key: 'tableTemplates', label: 'Table Templates', one: 'table template', fresh: 'TableTemplate'},
+		{key: 'queries', label: 'Queries', one: 'query', fresh: 'Query'}
+	];
+
+	var tab = TABS[0];
+	var current = {};
+
+	for (var t = 0; t < TABS.length; t++)
+	{
+		current[TABS[t].key] = draft[TABS[t].key][0] || null;
+	}
+
+	var div = HmiDialogs.el('div', 'hmiDialog hmiSqlDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', mxResources.get('hmiDatabase')));
+	var hint = HmiDialogs.el('div', 'hmiHint');
+	div.appendChild(hint);
+
+	var strip = HmiDialogs.el('div', 'hmiSqlTabs');
+	div.appendChild(strip);
+
+	var body = HmiDialogs.el('div', 'hmiSqlBody');
+	var left = HmiDialogs.el('div', 'hmiSqlList');
+	var right = HmiDialogs.el('div', 'hmiSqlEditor');
+	body.appendChild(left);
+	body.appendChild(right);
+	div.appendChild(body);
+
+	var error = HmiDialogs.el('div', 'hmiError');
+	error.setAttribute('data-hmi-field', 'sqlError');
+	div.appendChild(error);
+
+	var HINTS = {
+		dataSources: 'A data source is a database the application can open. SQLConnect names one, and ' +
+			'every other SQL function works through the connection it gives back. A password kept here ' +
+			'travels with the project and is only obfuscated, not protected; a computer running the ' +
+			'application can hold its own instead.',
+		bindLists: 'A bind list pairs a tag with a database column. SQLSelect writes the columns into ' +
+			'the tags; SQLInsert and SQLUpdate read the tags into the columns.',
+		tableTemplates: 'A table template is the shape of a table the application creates for itself ' +
+			'with SQLCreateTable. The types are the studio’s own: each database gets whatever it wants.',
+		queries: 'A query is a statement kept in the project, so nothing has to be deployed beside the ' +
+			'installer. SQLLoadStatement loads one by name, and a ? in it marks a parameter to set first.'
+	};
+
+	var listOf = function() { return draft[tab.key]; };
+	var selected = function() { return current[tab.key]; };
+
+	var taken = function(name)
+	{
+		return HmiSql.find(listOf(), name) != null;
+	};
+
+	/** What is wrong with the whole draft, or null. Drafts may still be empty. */
+	var check = function()
+	{
+		for (var i = 0; i < TABS.length; i++)
+		{
+			var key = TABS[i].key;
+			var list = draft[key];
+
+			for (var j = 0; j < list.length; j++)
+			{
+				var problem = (key === 'dataSources') ? HmiSql.dataSourceProblem(list, list[j]) :
+					((key === 'bindLists') ? HmiSql.bindListProblem(list, list[j], true) :
+					((key === 'tableTemplates') ? HmiSql.templateProblem(list, list[j], true) :
+						HmiSql.queryProblem(list, list[j], true)));
+
+				if (problem != null)
+				{
+					// Show the tab the problem is on, so the message is not
+					// about something out of sight
+					if (tab.key !== key)
+					{
+						tab = TABS[i];
+						current[key] = list[j];
+						render();
+					}
+
+					return problem;
+				}
+			}
+		}
+
+		return null;
+	};
+
+	var renderTabs = function()
+	{
+		strip.innerText = '';
+
+		for (var i = 0; i < TABS.length; i++)
+		{
+			(function(entry)
+			{
+				var count = draft[entry.key].length;
+				var el = HmiDialogs.el('div', 'hmiSqlTab' + ((entry === tab) ? ' hmiSqlTabOn' : ''),
+					entry.label + ((count > 0) ? ' (' + count + ')' : ''));
+				el.setAttribute('data-hmi-tab', entry.key);
+				mxEvent.addListener(el, 'click', function()
+				{
+					tab = entry;
+					error.innerText = '';
+					render();
+				});
+				strip.appendChild(el);
+			})(TABS[i]);
+		}
+	};
+
+	var renderList = function()
+	{
+		left.innerText = '';
+		left.appendChild(HmiDialogs.el('div', 'hmiFormSection', tab.label));
+
+		var wrap = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable');
+		var tbody = HmiDialogs.el('tbody');
+		var list = listOf();
+
+		if (list.length === 0)
+		{
+			var empty = HmiDialogs.el('tr');
+			empty.appendChild(HmiDialogs.el('td', 'hmiEmpty', 'No ' + tab.label.toLowerCase() + '.'));
+			tbody.appendChild(empty);
+		}
+
+		for (var i = 0; i < list.length; i++)
+		{
+			(function(item)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow' + ((item === selected()) ? ' hmiSelected' : ''));
+				row.setAttribute('data-hmi-item', item.name);
+				row.style.cursor = 'pointer';
+				row.appendChild(HmiDialogs.el('td', 'hmiUserName', item.name || '(unnamed)'));
+
+				if (tab.key === 'dataSources')
+				{
+					var kind = HmiSql.provider(item.provider);
+					row.appendChild(HmiDialogs.el('td', 'hmiQuickFnUsage',
+						(kind != null) ? kind.label : item.provider));
+				}
+
+				mxEvent.addListener(row, 'click', function()
+				{
+					current[tab.key] = item;
+					error.innerText = '';
+					renderList();
+					renderEditor();
+				});
+				tbody.appendChild(row);
+			})(list[i]);
+		}
+
+		table.appendChild(tbody);
+		wrap.appendChild(table);
+		left.appendChild(wrap);
+
+		var buttons = HmiDialogs.el('div', 'hmiSqlButtons');
+
+		var add = HmiDialogs.button('Add', function()
+		{
+			var name = HmiDialogs.freeName(tab.fresh, taken);
+			var item = (tab.key === 'dataSources') ? HmiSql.newDataSource(name) :
+				((tab.key === 'bindLists') ? HmiSql.newBindList(name) :
+				((tab.key === 'tableTemplates') ? HmiSql.newTemplate(name) : HmiSql.newQuery(name)));
+			listOf().push(item);
+			current[tab.key] = item;
+			error.innerText = '';
+			render();
+		});
+		add.setAttribute('data-hmi-field', 'addItem');
+		buttons.appendChild(add);
+
+		var duplicate = HmiDialogs.button('Duplicate', function()
+		{
+			var item = selected();
+
+			if (item == null)
+			{
+				return;
+			}
+
+			var copy = HmiSql.copyList([item])[0];
+			// Plant, Plant1, Plant2, as a duplicated tag counts up
+			copy.name = HmiDialogs.nextName(item.name, taken);
+			// A copy does not inherit the original's password: it is wrapped,
+			// and quietly giving another data source the same credentials is
+			// not something to do behind the user's back
+			if (copy.password)
+			{
+				copy.password = '';
+			}
+
+			listOf().push(copy);
+			current[tab.key] = copy;
+			error.innerText = '';
+			render();
+		});
+		duplicate.setAttribute('data-hmi-field', 'duplicateItem');
+		buttons.appendChild(duplicate);
+
+		var remove = HmiDialogs.button('Delete', function()
+		{
+			var item = selected();
+
+			if (item == null)
+			{
+				return;
+			}
+
+			listOf().splice(mxUtils.indexOf(listOf(), item), 1);
+			current[tab.key] = listOf()[0] || null;
+			error.innerText = '';
+			render();
+		});
+		remove.setAttribute('data-hmi-field', 'deleteItem');
+		buttons.appendChild(remove);
+
+		left.appendChild(buttons);
+	};
+
+	var nameField = function(parent, item)
+	{
+		var input = HmiDialogs.field(parent, 'Name', item.name, function() {});
+		input.setAttribute('data-hmi-field', 'itemName');
+		mxEvent.addListener(input, 'input', function()
+		{
+			item.name = input.value.trim();
+			var cell = left.querySelector('tr.hmiSelected td');
+
+			if (cell != null)
+			{
+				cell.innerText = item.name || '(unnamed)';
+			}
+		});
+
+		return input;
+	};
+
+	var tagInput = function(value, onChange, field)
+	{
+		var input = document.createElement('input');
+		input.className = 'hmiInput';
+		input.setAttribute('type', 'text');
+		input.setAttribute('list', listId);
+		input.setAttribute('placeholder', 'tag name');
+		input.setAttribute('data-hmi-field', field);
+		input.value = value || '';
+
+		var validate = function()
+		{
+			var bad = input.value !== '' && project.getTag(input.value) == null;
+			input.classList.toggle('hmiInvalid', bad);
+			input.setAttribute('title', bad ? 'Unknown tag' : '');
+		};
+
+		mxEvent.addListener(input, 'input', function()
+		{
+			onChange(input.value.trim());
+			validate();
+		});
+		validate();
+
+		return input;
+	};
+
+	var cellInput = function(value, onChange, field, placeholder)
+	{
+		var input = document.createElement('input');
+		input.className = 'hmiInput';
+		input.setAttribute('type', 'text');
+		input.setAttribute('data-hmi-field', field);
+
+		if (placeholder)
+		{
+			input.setAttribute('placeholder', placeholder);
+		}
+
+		input.value = (value != null) ? value : '';
+		mxEvent.addListener(input, 'input', function() { onChange(input.value); });
+
+		return input;
+	};
+
+	var moveRow = function(rows, index, by)
+	{
+		var to = index + by;
+
+		if (to >= 0 && to < rows.length)
+		{
+			rows.splice(to, 0, rows.splice(index, 1)[0]);
+			renderEditor();
+		}
+	};
+
+	var rowActions = function(rows, index)
+	{
+		var actions = HmiDialogs.el('td', 'hmiUserActions');
+		var up = HmiDialogs.button('▲', function() { moveRow(rows, index, -1); });
+		up.setAttribute('title', 'Move up');
+		var down = HmiDialogs.button('▼', function() { moveRow(rows, index, 1); });
+		down.setAttribute('title', 'Move down');
+		var remove = HmiDialogs.button('Remove', function()
+		{
+			rows.splice(index, 1);
+			renderEditor();
+		});
+		remove.setAttribute('data-hmi-field', 'removeRow');
+		actions.appendChild(up);
+		actions.appendChild(down);
+		actions.appendChild(remove);
+
+		return actions;
+	};
+
+	var renderDataSource = function(source)
+	{
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Data source'));
+		nameField(right, source);
+
+		var kind = HmiDialogs.select(right, 'Kind', source.provider, HmiSql.PROVIDERS, function(v)
+		{
+			source.provider = v;
+			renderList();
+			renderEditor();
+		});
+		kind.setAttribute('data-hmi-field', 'provider');
+
+		if (source.provider === 'sqlite')
+		{
+			var file = HmiDialogs.field(right, 'File name', source.file, function(v)
+			{
+				source.file = v.trim();
+			});
+			file.setAttribute('data-hmi-field', 'file');
+			file.setAttribute('placeholder', 'batches.db');
+
+			var folder = HmiDialogs.select(right, 'Kept in', HmiSql.normalizeFolder(source.folder),
+				HmiSql.FOLDERS, function(v) { source.folder = v; });
+			folder.setAttribute('data-hmi-field', 'folder');
+			right.appendChild(HmiDialogs.el('div', 'hmiHint',
+				'A name, not a path, so the application finds its database on whatever computer it ' +
+				'runs on. The file is created when something first writes to it.'));
+		}
+		else
+		{
+			var host = HmiDialogs.field(right, 'Server', source.host, function(v) { source.host = v.trim(); });
+			host.setAttribute('data-hmi-field', 'host');
+			host.setAttribute('placeholder', 'server name or address');
+
+			var port = HmiDialogs.field(right, 'Port', source.port, function(v) { source.port = v.trim(); });
+			port.setAttribute('data-hmi-field', 'port');
+			port.setAttribute('placeholder', '' + HmiSql.DEFAULT_PORT);
+
+			var database = HmiDialogs.field(right, 'Database', source.database,
+				function(v) { source.database = v.trim(); });
+			database.setAttribute('data-hmi-field', 'database');
+
+			var user = HmiDialogs.field(right, 'User', source.user, function(v) { source.user = v.trim(); });
+			user.setAttribute('data-hmi-field', 'user');
+
+			// A password already held stays out of sight: the field starts
+			// empty and the stored one is kept unless something is typed
+			var stored = source.password;
+			var row = HmiDialogs.el('div', 'hmiFormRow');
+			row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', 'Password'));
+			var password = document.createElement('input');
+			password.className = 'hmiInput';
+			password.setAttribute('type', 'password');
+			password.setAttribute('data-hmi-field', 'password');
+			password.setAttribute('placeholder', (stored) ? '(kept — type to replace)' : '');
+			mxEvent.addListener(password, 'input', function()
+			{
+				// Emptying the field again means "leave it alone", not "throw
+				// it away": Clear is what throws it away
+				source.password = (password.value === '') ? stored : password.value;
+			});
+			row.appendChild(password);
+
+			if (stored)
+			{
+				var clear = HmiDialogs.button('Clear', function()
+				{
+					stored = '';
+					source.password = '';
+					renderEditor();
+				});
+				clear.setAttribute('title', 'Forget the stored password');
+				clear.setAttribute('data-hmi-field', 'clearPassword');
+				row.appendChild(clear);
+			}
+
+			right.appendChild(row);
+			right.appendChild(HmiDialogs.el('div', 'hmiHint',
+				'A password kept in the project is obfuscated, which keeps it out of plain sight and ' +
+				'no more: anyone with the project file and this product can read it back. Leave it ' +
+				'empty and give the computer that runs the application its own below.'));
+
+			right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Connection'));
+
+			var options = source.options || (source.options = {});
+			var encrypt = HmiDialogs.field(right, 'Encrypt the connection', options.encrypt === true,
+				function(v) { options.encrypt = v; }, 'checkbox');
+			encrypt.setAttribute('data-hmi-field', 'encrypt');
+
+			var trust = HmiDialogs.field(right, 'Accept any certificate',
+				options.trustServerCertificate !== false,
+				function(v) { options.trustServerCertificate = v; }, 'checkbox');
+			trust.setAttribute('data-hmi-field', 'trustServerCertificate');
+
+			var legacy = HmiDialogs.field(right, 'Allow older TLS versions', options.legacyTls === true,
+				function(v) { options.legacyTls = v; }, 'checkbox');
+			legacy.setAttribute('data-hmi-field', 'legacyTls');
+
+			var instance = HmiDialogs.field(right, 'Instance name', options.instanceName,
+				function(v) { options.instanceName = v.trim(); });
+			instance.setAttribute('data-hmi-field', 'instanceName');
+
+			var timeout = HmiDialogs.field(right, 'Timeout (ms)', source.timeoutMs,
+				function(v) { source.timeoutMs = v.trim(); });
+			timeout.setAttribute('data-hmi-field', 'timeoutMs');
+			timeout.setAttribute('placeholder', '' + HmiSql.DEFAULT_TIMEOUT_MS);
+
+			right.appendChild(HmiDialogs.el('div', 'hmiHint',
+				'An older server may offer only TLS versions this computer refuses by default. If a ' +
+				'connection fails over the protocol, allow older TLS versions or leave encryption off.'));
+		}
+
+		// This computer's own credentials, which win over the project's
+		if (store != null && HmiSql.available())
+		{
+			right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'On this computer'));
+
+			var here = null;
+
+			for (var i = 0; i < onThisPc.length; i++)
+			{
+				if (('' + onThisPc[i].name).toLowerCase() === ('' + source.name).toLowerCase())
+				{
+					here = onThisPc[i];
+				}
+			}
+
+			var state = HmiDialogs.el('div', 'hmiHint', (here != null) ?
+				('This computer uses its own ' + ((here.user) ? 'user "' + here.user + '" and ' : '') +
+					'password for "' + source.name + '", instead of the project’s.') :
+				'This computer uses the project’s own credentials. Set a password here to keep it ' +
+					'out of the project: it stays on this computer and is not published.');
+			state.setAttribute('data-hmi-field', 'pcState');
+			right.appendChild(state);
+
+			var pcRow = HmiDialogs.el('div', 'hmiFormRow');
+			pcRow.appendChild(HmiDialogs.el('label', 'hmiFormLabel', 'This computer'));
+			var pcUser = document.createElement('input');
+			pcUser.className = 'hmiInput';
+			pcUser.setAttribute('type', 'text');
+			pcUser.setAttribute('placeholder', 'user (optional)');
+			pcUser.setAttribute('data-hmi-field', 'pcUser');
+			pcUser.value = (here != null) ? here.user : '';
+			var pcPassword = document.createElement('input');
+			pcPassword.className = 'hmiInput';
+			pcPassword.setAttribute('type', 'password');
+			pcPassword.setAttribute('placeholder', (here != null && here.hasPassword) ?
+				'(set — type to replace)' : 'password');
+			pcPassword.setAttribute('data-hmi-field', 'pcPassword');
+			pcRow.appendChild(pcUser);
+			pcRow.appendChild(pcPassword);
+			right.appendChild(pcRow);
+
+			var pcButtons = HmiDialogs.el('div', 'hmiSqlButtons');
+			var set = HmiDialogs.button('Set on this computer', function()
+			{
+				if (source.name === '')
+				{
+					error.innerText = 'Name the data source first.';
+
+					return;
+				}
+
+				HmiSql.setOverride(store, source.name,
+					{user: pcUser.value.trim(), password: pcPassword.value}, function(list)
+					{
+						onThisPc = list;
+						error.innerText = '';
+						renderEditor();
+					}, function(e)
+					{
+						error.innerText = e.message;
+					});
+			});
+			set.setAttribute('data-hmi-field', 'setOverride');
+			pcButtons.appendChild(set);
+
+			if (here != null)
+			{
+				var forget = HmiDialogs.button('Use the project’s', function()
+				{
+					HmiSql.setOverride(store, source.name, null, function(list)
+					{
+						onThisPc = list;
+						renderEditor();
+					}, function(e)
+					{
+						error.innerText = e.message;
+					});
+				});
+				forget.setAttribute('data-hmi-field', 'clearOverride');
+				pcButtons.appendChild(forget);
+			}
+
+			right.appendChild(pcButtons);
+		}
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Test'));
+
+		var result = HmiDialogs.el('div', 'hmiHint', '');
+		result.setAttribute('data-hmi-field', 'testResult');
+
+		var testButtons = HmiDialogs.el('div', 'hmiSqlButtons');
+		var test = HmiDialogs.button('Test Connection', function()
+		{
+			var problem = HmiSql.dataSourceProblem(draft.dataSources, source);
+
+			if (problem != null)
+			{
+				result.innerText = problem;
+
+				return;
+			}
+
+			result.innerText = 'Connecting…';
+			// The spec carries whatever the password field holds, wrapped or
+			// just typed: the main process unwraps only what was wrapped
+			HmiSql.probe(source, function(res)
+			{
+				result.innerText = (res != null && res.ok) ?
+					('Connected in ' + Math.round(res.ms) + ' ms. ' + (res.version || '')) :
+					('Could not connect: ' + ((res != null) ? res.error : 'no answer'));
+			}, function(e)
+			{
+				result.innerText = 'Could not connect: ' + e.message;
+			});
+		});
+		test.setAttribute('data-hmi-field', 'testConnection');
+		testButtons.appendChild(test);
+		right.appendChild(testButtons);
+		right.appendChild(result);
+	};
+
+	var renderBindList = function(bindList)
+	{
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Bind list'));
+		nameField(right, bindList);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Tags and columns'));
+
+		var wrap = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable hmiSqlTable');
+		var head = HmiDialogs.el('thead');
+		var headRow = HmiDialogs.el('tr');
+
+		for (var h = 0; h < 5; h++)
+		{
+			headRow.appendChild(HmiDialogs.el('th', null,
+				['Tag', 'Dotfield', 'Column', 'Delimiter', ''][h]));
+		}
+
+		head.appendChild(headRow);
+		table.appendChild(head);
+
+		var tbody = HmiDialogs.el('tbody');
+		var items = bindList.items;
+
+		if (items.length === 0)
+		{
+			var empty = HmiDialogs.el('tr');
+			var cell = HmiDialogs.el('td', 'hmiEmpty', 'No tags yet.');
+			cell.setAttribute('colspan', '5');
+			empty.appendChild(cell);
+			tbody.appendChild(empty);
+		}
+
+		for (var i = 0; i < items.length; i++)
+		{
+			(function(item, index)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow');
+				row.setAttribute('data-hmi-row', '' + index);
+				row.appendChild(HmiDialogs.el('td')).appendChild(
+					tagInput(item.tag, function(v) { item.tag = v; }, 'rowTag'));
+				row.appendChild(HmiDialogs.el('td')).appendChild(
+					cellInput(item.field, function(v) { item.field = v.trim(); }, 'rowField', 'none'));
+				row.appendChild(HmiDialogs.el('td')).appendChild(
+					cellInput(item.column, function(v) { item.column = v.trim(); }, 'rowColumn', 'column name'));
+				row.appendChild(HmiDialogs.el('td')).appendChild(
+					cellInput(item.delim, function(v) { item.delim = v; }, 'rowDelim', 'none'));
+				row.appendChild(rowActions(items, index));
+				tbody.appendChild(row);
+			})(items[i], i);
+		}
+
+		table.appendChild(tbody);
+		wrap.appendChild(table);
+		right.appendChild(wrap);
+
+		var buttons = HmiDialogs.el('div', 'hmiSqlButtons');
+		var add = HmiDialogs.button('Add tag', function()
+		{
+			items.push(HmiSql.newBindItem());
+			renderEditor();
+		});
+		add.setAttribute('data-hmi-field', 'addRow');
+		buttons.appendChild(add);
+
+		var browse = HmiDialogs.button('Browse Tags...', function()
+		{
+			HmiDialogs.showTagBrowser(ui, project, function(name)
+			{
+				var item = HmiSql.newBindItem();
+				item.tag = name;
+				item.column = name;
+				items.push(item);
+				renderEditor();
+			});
+		});
+		browse.setAttribute('data-hmi-field', 'browseTags');
+		buttons.appendChild(browse);
+		right.appendChild(buttons);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'The order is the order the columns are written in. A dotfield reads something other than ' +
+			'the tag’s value, such as InAlarm. A delimiter wraps the value, for a database that ' +
+			'wants a date delimited.'));
+	};
+
+	var renderTemplate = function(template)
+	{
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Table template'));
+		nameField(right, template);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Columns'));
+
+		var wrap = HmiDialogs.el('div', 'hmiUserList');
+		var table = HmiDialogs.el('table', 'hmiUserTable hmiSqlTable');
+		var head = HmiDialogs.el('thead');
+		var headRow = HmiDialogs.el('tr');
+
+		for (var h = 0; h < 6; h++)
+		{
+			headRow.appendChild(HmiDialogs.el('th', null,
+				['Column', 'Type', 'Length', 'Index', 'Empty', ''][h]));
+		}
+
+		head.appendChild(headRow);
+		table.appendChild(head);
+
+		var tbody = HmiDialogs.el('tbody');
+		var columns = template.columns;
+
+		if (columns.length === 0)
+		{
+			var empty = HmiDialogs.el('tr');
+			var cell = HmiDialogs.el('td', 'hmiEmpty', 'No columns yet.');
+			cell.setAttribute('colspan', '6');
+			empty.appendChild(cell);
+			tbody.appendChild(empty);
+		}
+
+		for (var i = 0; i < columns.length; i++)
+		{
+			(function(column, index)
+			{
+				var row = HmiDialogs.el('tr', 'hmiUserRow');
+				row.setAttribute('data-hmi-row', '' + index);
+
+				var name = cellInput(column.name, function(v)
+				{
+					column.name = v.trim();
+					warn();
+				}, 'columnName', 'column name');
+				row.appendChild(HmiDialogs.el('td')).appendChild(name);
+
+				var typeCell = HmiDialogs.el('td');
+				var type = document.createElement('select');
+				type.className = 'hmiInput';
+				type.setAttribute('data-hmi-field', 'columnType');
+
+				for (var k = 0; k < HmiSql.COLUMN_TYPES.length; k++)
+				{
+					var opt = document.createElement('option');
+					opt.setAttribute('value', HmiSql.COLUMN_TYPES[k].value);
+					mxUtils.write(opt, HmiSql.COLUMN_TYPES[k].label);
+
+					if (HmiSql.COLUMN_TYPES[k].value === column.type)
+					{
+						opt.setAttribute('selected', 'selected');
+					}
+
+					type.appendChild(opt);
+				}
+
+				mxEvent.addListener(type, 'change', function()
+				{
+					column.type = type.value;
+					renderEditor();
+				});
+				typeCell.appendChild(type);
+				row.appendChild(typeCell);
+
+				var shape = HmiSql.columnType(column.type) || {};
+				var lengthCell = HmiDialogs.el('td');
+
+				if (shape.length)
+				{
+					lengthCell.appendChild(cellInput(column.length, function(v)
+					{
+						column.length = v.trim();
+					}, 'columnLength', shape.scale ? 'digits' : 'characters'));
+
+					if (shape.scale)
+					{
+						lengthCell.appendChild(cellInput(column.scale, function(v)
+						{
+							column.scale = v.trim();
+						}, 'columnScale', 'decimals'));
+					}
+				}
+
+				row.appendChild(lengthCell);
+
+				var indexCell = HmiDialogs.el('td');
+				var index2 = document.createElement('select');
+				index2.className = 'hmiInput';
+				index2.setAttribute('data-hmi-field', 'columnIndex');
+
+				for (var m = 0; m < HmiSql.INDEX_KINDS.length; m++)
+				{
+					var iopt = document.createElement('option');
+					iopt.setAttribute('value', HmiSql.INDEX_KINDS[m].value);
+					mxUtils.write(iopt, HmiSql.INDEX_KINDS[m].label);
+
+					if (HmiSql.INDEX_KINDS[m].value === HmiSql.normalizeIndex(column.index))
+					{
+						iopt.setAttribute('selected', 'selected');
+					}
+
+					index2.appendChild(iopt);
+				}
+
+				mxEvent.addListener(index2, 'change', function() { column.index = index2.value; });
+				indexCell.appendChild(index2);
+				row.appendChild(indexCell);
+
+				var nullCell = HmiDialogs.el('td');
+				var allowNull = document.createElement('input');
+				allowNull.className = 'hmiCheck';
+				allowNull.setAttribute('type', 'checkbox');
+				allowNull.setAttribute('data-hmi-field', 'columnAllowNull');
+				allowNull.setAttribute('title', 'Allow an empty value');
+
+				if (column.allowNull !== false)
+				{
+					allowNull.setAttribute('checked', 'checked');
+				}
+
+				mxEvent.addListener(allowNull, 'change', function()
+				{
+					column.allowNull = allowNull.checked;
+				});
+				nullCell.appendChild(allowNull);
+				row.appendChild(nullCell);
+
+				row.appendChild(rowActions(columns, index));
+				tbody.appendChild(row);
+			})(columns[i], i);
+		}
+
+		table.appendChild(tbody);
+		wrap.appendChild(table);
+		right.appendChild(wrap);
+
+		var buttons = HmiDialogs.el('div', 'hmiSqlButtons');
+		var add = HmiDialogs.button('Add column', function()
+		{
+			columns.push(HmiSql.newColumn());
+			renderEditor();
+		});
+		add.setAttribute('data-hmi-field', 'addRow');
+		buttons.appendChild(add);
+
+		var fromBind = HmiDialogs.button('From a bind list...', function()
+		{
+			HmiDialogs.showBindListPicker(ui, draft.bindLists, function(bindList)
+			{
+				for (var i = 0; i < bindList.items.length; i++)
+				{
+					var item = bindList.items[i];
+					var column = HmiSql.newColumn();
+					column.name = item.column;
+					column.type = HmiSql.typeForTag(project, item.tag, item.field);
+					columns.push(column);
+				}
+
+				renderEditor();
+			});
+		});
+		fromBind.setAttribute('data-hmi-field', 'columnsFromBindList');
+		buttons.appendChild(fromBind);
+		right.appendChild(buttons);
+
+		var warning = HmiDialogs.el('div', 'hmiHint', '');
+		warning.setAttribute('data-hmi-field', 'columnWarning');
+		right.appendChild(warning);
+
+		var warn = function()
+		{
+			var reserved = [];
+			var bracketed = [];
+
+			for (var i = 0; i < columns.length; i++)
+			{
+				var name = columns[i].name;
+
+				if (name === '')
+				{
+					continue;
+				}
+
+				if (HmiSql.isReservedColumn(name))
+				{
+					reserved.push(name);
+				}
+				else if (HmiSql.needsBrackets(name))
+				{
+					bracketed.push(name);
+				}
+			}
+
+			var notes = [];
+
+			if (reserved.length > 0)
+			{
+				notes.push(((reserved.length > 1) ? 'These are SQL keywords and some databases refuse ' +
+					'them as column names: ' : 'This is a SQL keyword and some databases refuse it as a ' +
+					'column name: ') + reserved.join(', ') + '. A slightly different name avoids it.');
+			}
+
+			if (bracketed.length > 0)
+			{
+				notes.push(((bracketed.length > 1) ? 'These need square brackets around them wherever a ' +
+					'script names them: ' : 'This needs square brackets around it wherever a script ' +
+					'names it: ') + bracketed.join(', ') + '.');
+			}
+
+			warning.innerText = notes.join(' ');
+		};
+
+		warn();
+	};
+
+	var renderQuery = function(query)
+	{
+		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Query'));
+		nameField(right, query);
+
+		var row = HmiDialogs.el('div', 'hmiFormRow hmiFormRowTop');
+		row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', 'Statement'));
+		var area = document.createElement('textarea');
+		area.className = 'hmiInput hmiScript';
+		area.setAttribute('rows', '12');
+		area.setAttribute('data-hmi-field', 'querySql');
+		area.setAttribute('placeholder', 'SELECT BatchName, Target FROM BatchLog WHERE Target > ?');
+		area.value = query.sql || '';
+		mxEvent.addListener(area, 'input', function() { query.sql = area.value; });
+		row.appendChild(area);
+		right.appendChild(row);
+
+		right.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'This is the database’s own language, not the studio’s, so it is not checked here: ' +
+			'the database reports what it does not like when the statement runs. A ? marks a parameter, ' +
+			'set with SQLSetParamChar and the others before SQLExecute runs the statement.'));
+	};
+
+	var renderEditor = function()
+	{
+		right.innerText = '';
+		var item = selected();
+
+		if (item == null)
+		{
+			right.appendChild(HmiDialogs.el('div', 'hmiEmpty', 'Add a ' + tab.one + ' to begin.'));
+
+			return;
+		}
+
+		if (tab.key === 'dataSources')
+		{
+			renderDataSource(item);
+		}
+		else if (tab.key === 'bindLists')
+		{
+			renderBindList(item);
+		}
+		else if (tab.key === 'tableTemplates')
+		{
+			renderTemplate(item);
+		}
+		else
+		{
+			renderQuery(item);
+		}
+	};
+
+	var render = function()
+	{
+		hint.innerText = HINTS[tab.key];
+		renderTabs();
+		renderList();
+		renderEditor();
+	};
+
+	// A footer of its own, because applying has to wrap any password typed
+	// here before the project is written, and that goes through the main
+	// process
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function()
+	{
+		ui.hideDialog();
+	}));
+
+	var ok = HmiDialogs.button(mxResources.get('ok'), function()
+	{
+		var problem = check();
+
+		if (problem != null)
+		{
+			error.innerText = problem;
+
+			return;
+		}
+
+		error.innerText = '';
+
+		var applyAndClose = function()
+		{
+			var changed = false;
+
+			for (var i = 0; i < TABS.length; i++)
+			{
+				var key = TABS[i].key;
+
+				if (JSON.stringify(draft[key]) !== JSON.stringify(project[key]))
+				{
+					project[key] = draft[key];
+					changed = true;
+				}
+			}
+
+			if (changed)
+			{
+				project.touch();
+				HmiFile.markModified(ui);
+			}
+
+			ui.hideDialog();
+		};
+
+		// Only a password typed here has to go to the main process to be
+		// wrapped; with nothing to wrap, OK applies straight away
+		if (!HmiSql.needsWrapping(draft.dataSources))
+		{
+			applyAndClose();
+
+			return;
+		}
+
+		HmiSql.wrapPasswords(draft.dataSources).then(applyAndClose)['catch'](function(e)
+		{
+			error.innerText = 'The password could not be stored: ' + e.message;
+		});
+	}, true);
+
+	ok.className += ' hmiOk';
+	footer.appendChild(ok);
+	div.appendChild(footer);
+
+	render();
+
+	if (store != null)
+	{
+		HmiSql.overrides(store, function(list)
+		{
+			onThisPc = list;
+			renderEditor();
+		}, function() {});
+	}
+
+	ui.showDialog(div, 880, 660, true, true);
+
+	// Returned so the self test can drive it without a host
+	return div;
+};
+
+/** Picks one of the project's bind lists, for building a table template. */
+HmiDialogs.showBindListPicker = function(ui, bindLists, onPick)
+{
+	var div = HmiDialogs.el('div', 'hmiDialog');
+	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle', 'Columns from a Bind List'));
+	div.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'Adds a column for every tag in the list, named as the list names it and typed after the tag.'));
+
+	var wrap = HmiDialogs.el('div', 'hmiUserList');
+	var table = HmiDialogs.el('table', 'hmiUserTable');
+	var tbody = HmiDialogs.el('tbody');
+
+	if (bindLists.length === 0)
+	{
+		tbody.appendChild(HmiDialogs.el('tr')).appendChild(
+			HmiDialogs.el('td', 'hmiEmpty', 'No bind lists yet.'));
+	}
+
+	for (var i = 0; i < bindLists.length; i++)
+	{
+		(function(bindList)
+		{
+			var row = HmiDialogs.el('tr', 'hmiUserRow');
+			row.style.cursor = 'pointer';
+			row.setAttribute('data-hmi-bindlist', bindList.name);
+			row.appendChild(HmiDialogs.el('td', 'hmiUserName', bindList.name));
+			row.appendChild(HmiDialogs.el('td', 'hmiQuickFnUsage',
+				bindList.items.length + ((bindList.items.length === 1) ? ' tag' : ' tags')));
+			mxEvent.addListener(row, 'click', function()
+			{
+				ui.hideDialog();
+				onPick(bindList);
+			});
+			tbody.appendChild(row);
+		})(bindLists[i]);
+	}
+
+	table.appendChild(tbody);
+	wrap.appendChild(table);
+	div.appendChild(wrap);
+
+	var footer = HmiDialogs.el('div', 'hmiDialogFooter');
+	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
+	footer.appendChild(HmiDialogs.button(mxResources.get('cancel'), function() { ui.hideDialog(); }));
+	div.appendChild(footer);
+
+	ui.showDialog(div, 420, 360, true, true);
+};
