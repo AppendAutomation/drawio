@@ -39,6 +39,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testExpressions();
 		HmiSelfTest.testSimulation();
 		HmiSelfTest.testConditionals();
+		HmiSelfTest.testLoops();
 		HmiSelfTest.testLocals();
 		HmiSelfTest.testQuickFunctions();
 		HmiSelfTest.testProjectRoundTrip();
@@ -4775,6 +4776,358 @@ HmiSelfTest.testConditionals = function()
 		(keywordish.errors[0] || {}).message || keywordish.deps.join(','));
 };
 
+/**
+ * FOR ... NEXT and WHILE ... ENDWHILE: the loops, their caps, and the words
+ * that are keywords only where a loop puts them.
+ */
+HmiSelfTest.testLoops = function()
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	project.addTag(HmiProject.createTag('Result', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Other', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Index', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Feed', 'MemoryDiscrete'));
+	// The words a plant project really does name a tag after, which is why
+	// the loop keywords are not word operators (HmiExpr.LOOP_WORDS)
+	project.addTag(HmiProject.createTag('Step', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Next', 'MemoryInteger'));
+	project.quickFunctions = [
+		{name: 'SumTo', args: [{name: 'N', type: 'Analog'}],
+			body: 'DIM i, total AS Analog;\nFOR i = 1 TO N total = total + i; NEXT;\nReturn total;'},
+		{name: 'FirstOver', args: [{name: 'Limit', type: 'Analog'}],
+			body: 'DIM i AS Analog;\nFOR i = 1 TO 100 IF i > Limit THEN Return i; ENDIF; NEXT;\nReturn 0;'}
+	];
+
+	var values = {};
+	var written = {};
+	var passes = {};
+
+	var reset = function()
+	{
+		values = {
+			'result': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'other': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'index': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'feed': {value: 1, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'step': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'next': {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 5},
+			'tank_level': {value: 60, quality: HmiTypes.QUALITY_GOOD, timestamp: 5}
+		};
+		written = {};
+		passes = {};
+	};
+
+	var ctx = {
+		read: function(name)
+		{
+			var v = values[name.toLowerCase()];
+
+			return (v != null) ? v :
+				{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+		},
+		write: function(name, value)
+		{
+			written[name] = value;
+			passes[name] = (passes[name] || 0) + 1;
+			values[name.toLowerCase()] = {value: value,
+				quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+		},
+		now: function() { return Date.now(); }
+	};
+
+	var run = function(src, mode)
+	{
+		reset();
+
+		return HmiExpr.compile(src, {project: project,
+			mode: (mode != null) ? mode : 'script'}).eval(ctx);
+	};
+
+	var errorsOf = function(src, mode)
+	{
+		var errors = HmiExpr.compile(src, {project: project, mode: mode}).errors;
+		var messages = [];
+
+		for (var i = 0; i < errors.length; i++)
+		{
+			messages.push(errors[i].message);
+		}
+
+		return messages.join(' | ');
+	};
+
+	// --- FOR ... NEXT -----------------------------------------------------
+
+	run('DIM i AS Analog; FOR i = 1 TO 5 Result = Result + i; NEXT;');
+	check('loop.forSums', written['Result'] === 15, 'Result ' + written['Result']);
+
+	run('DIM i AS Analog; FOR i = 1 TO 10 STEP 3 Result = Result + 1; NEXT;');
+	check('loop.forStep', written['Result'] === 4, 'passes ' + written['Result']);
+
+	run('DIM i AS Analog; FOR i = 5 TO 1 STEP -1 Result = Result + i; NEXT;');
+	check('loop.forCountsDown', written['Result'] === 15,
+		'Result ' + written['Result']);
+
+	run('DIM i AS Analog; FOR i = 1 TO 0 Result = 1; NEXT;');
+	check('loop.forEmptyRangeRunsNothing', written['Result'] === undefined,
+		JSON.stringify(written));
+
+	// The loop variable may be a tag, written every pass. The count itself is
+	// the evaluator's, so a value that has not come back from the driver yet
+	// cannot stall the loop.
+	run('FOR Index = 1 TO 3 Other = Index; NEXT;');
+	check('loop.forVariableCanBeATag',
+		written['Index'] === 4 && passes['Index'] === 4 && written['Other'] === 3,
+		JSON.stringify(written) + ' ' + JSON.stringify(passes));
+
+	var stale = {
+		read: function(name)
+		{
+			// A tag whose written value never comes back: a FOR over it still
+			// finishes, because the count does not depend on the read
+			return {value: 0, quality: HmiTypes.QUALITY_GOOD, timestamp: 1};
+		},
+		write: function(name, value) { written[name] = value; },
+		now: function() { return Date.now(); }
+	};
+
+	written = {};
+	HmiExpr.compile('FOR Index = 1 TO 3 Other = 7; NEXT;',
+		{project: project, mode: 'script'}).eval(stale);
+	check('loop.forIgnoresStaleReadBack', written['Index'] === 4,
+		'Index ' + written['Index']);
+
+	// --- WHILE ... ENDWHILE -----------------------------------------------
+
+	run('WHILE Result < 4 Result = Result + 1; ENDWHILE;');
+	check('loop.whileRuns', written['Result'] === 4, 'Result ' + written['Result']);
+
+	run('WHILE Result > 0 Result = Result + 1; ENDWHILE;');
+	check('loop.whileFalseAtOnce', written['Result'] === undefined,
+		JSON.stringify(written));
+
+	run('DIM i, j AS Analog; FOR i = 1 TO 3 FOR j = 1 TO 4 Result = Result + 1; NEXT; NEXT;');
+	check('loop.nested', written['Result'] === 12, 'Result ' + written['Result']);
+
+	run('DIM i AS Analog; FOR i = 1 TO 4 IF i > 2 THEN Result = Result + 1; ENDIF; NEXT;');
+	check('loop.ifInsideLoop', written['Result'] === 2, 'Result ' + written['Result']);
+
+	run('IF Tank_Level > 50 THEN WHILE Result < 3 Result = Result + 1; ENDWHILE; ENDIF;');
+	check('loop.loopInsideIf', written['Result'] === 3, 'Result ' + written['Result']);
+
+	// --- what the compile reports -----------------------------------------
+
+	var counted = HmiExpr.compile('FOR Index = 1 TO 3 Other = Index; NEXT;',
+		{project: project, mode: 'script'});
+
+	check('loop.variableCountsAsAWrite',
+		mxUtils.indexOf(counted.writes, 'Index') >= 0, counted.writes.join(','));
+
+	var pure = HmiExpr.compile(
+		'DIM i, n AS Analog; FOR i = 1 TO 3 n = n + 1; NEXT;',
+		{project: project, mode: 'script'});
+
+	check('loop.loopOverLocalsIsPure', pure.impure === false,
+		'impure ' + pure.impure);
+
+	// --- bad quality -------------------------------------------------------
+	// Nothing acts on a value nothing trusts, which is the rule eval_if sets.
+
+	reset();
+	values['tank_level'] = {value: 60, quality: HmiTypes.QUALITY_BAD, timestamp: 5};
+	HmiExpr.compile('DIM i AS Analog; FOR i = 1 TO Tank_Level Result = 1; NEXT;',
+		{project: project, mode: 'script'}).eval(ctx);
+	check('loop.badBoundTakesNoPass', written['Result'] === undefined,
+		JSON.stringify(written));
+
+	reset();
+	values['feed'] = {value: 1, quality: HmiTypes.QUALITY_BAD, timestamp: 5};
+	HmiExpr.compile('WHILE Feed Result = 1; ENDWHILE;',
+		{project: project, mode: 'script'}).eval(ctx);
+	check('loop.badConditionTakesNoPass', written['Result'] === undefined,
+		JSON.stringify(written));
+
+	// A link that dies mid-loop ends the loop rather than spinning on it
+	reset();
+	var reads = 0;
+	var failing = {
+		read: function(name)
+		{
+			if (name.toLowerCase() === 'feed')
+			{
+				reads++;
+
+				return {value: 1, quality: (reads > 3) ? HmiTypes.QUALITY_BAD :
+					HmiTypes.QUALITY_GOOD, timestamp: 5};
+			}
+
+			return ctx.read(name);
+		},
+		write: ctx.write,
+		now: ctx.now
+	};
+
+	HmiExpr.compile('WHILE Feed Result = Result + 1; ENDWHILE;',
+		{project: project, mode: 'script'}).eval(failing);
+	check('loop.conditionGoingBadEndsTheLoop', written['Result'] === 3,
+		'Result ' + written['Result'] + ' after ' + reads + ' reads');
+
+	// --- the caps ---------------------------------------------------------
+
+	var runaway = run('WHILE Result == 0 Other = 1; ENDWHILE;');
+
+	check('loop.capStopsARunaway',
+		runaway.error != null && runaway.error.indexOf('loop passes') > 0 &&
+		runaway.quality === HmiTypes.QUALITY_BAD, '' + runaway.error);
+
+	var zero = run('DIM i AS Analog; FOR i = 1 TO 3 STEP 0 Result = 1; NEXT;');
+
+	check('loop.stepZeroRefused',
+		zero.error != null && zero.error.indexOf('STEP 0') > 0, '' + zero.error);
+
+	var text = run('DIM i AS Analog; FOR i = 1 TO "many" Result = 1; NEXT;');
+
+	check('loop.boundMustBeANumber',
+		text.error != null && text.error.indexOf('not a number') === 0,
+		'' + text.error);
+
+	// --- errors -----------------------------------------------------------
+
+	check('loop.missingNext',
+		errorsOf('DIM i AS Analog; FOR i = 1 TO 3 Result = 1;', 'script')
+			.indexOf('expected NEXT') >= 0,
+		errorsOf('DIM i AS Analog; FOR i = 1 TO 3 Result = 1;', 'script'));
+	check('loop.missingEndwhile',
+		errorsOf('WHILE Feed Result = 1;', 'script').indexOf('expected ENDWHILE') >= 0,
+		errorsOf('WHILE Feed Result = 1;', 'script'));
+	check('loop.missingTo',
+		errorsOf('DIM i AS Analog; FOR i = 1 Result = 1; NEXT;', 'script')
+			.indexOf('expected TO') >= 0,
+		errorsOf('DIM i AS Analog; FOR i = 1 Result = 1; NEXT;', 'script'));
+	check('loop.strayNext',
+		errorsOf('NEXT;', 'script').indexOf('NEXT without FOR') >= 0,
+		errorsOf('NEXT;', 'script'));
+	check('loop.strayEndwhile',
+		errorsOf('ENDWHILE;', 'script').indexOf('ENDWHILE without WHILE') >= 0,
+		errorsOf('ENDWHILE;', 'script'));
+	// An unclosed IF reports itself at the loop's end instead of swallowing it
+	check('loop.unclosedIfInsideALoop',
+		errorsOf('WHILE Feed IF Feed THEN Result = 1; ENDWHILE;', 'script')
+			.indexOf('expected ENDIF') >= 0,
+		errorsOf('WHILE Feed IF Feed THEN Result = 1; ENDWHILE;', 'script'));
+	check('loop.dimRefusedInsideALoop',
+		errorsOf('DIM i AS Analog; FOR i = 1 TO 3 DIM j AS Analog; NEXT;', 'script')
+			.indexOf('FOR or WHILE') > 0,
+		errorsOf('DIM i AS Analog; FOR i = 1 TO 3 DIM j AS Analog; NEXT;', 'script'));
+	check('loop.pausingCallRefusedInACondition',
+		errorsOf('WHILE ShowRecipeSelect("Mix") == "" Result = 1; ENDWHILE;', 'script')
+			.indexOf('must be a statement') > 0,
+		errorsOf('WHILE ShowRecipeSelect("Mix") == "" Result = 1; ENDWHILE;', 'script'));
+	check('loop.refusedInAnAnimationLink',
+		errorsOf('WHILE Feed Result = 1; ENDWHILE', null).length > 0 &&
+		errorsOf('FOR Index = 1 TO 3 NEXT', null).length > 0);
+
+	// --- a pausing call in the body ---------------------------------------
+	// The loop's frame is its whole state, so a pass that waits for a dialog
+	// carries on where it left off.
+
+	reset();
+	var waiting = [];
+	var paused = {
+		read: ctx.read,
+		write: ctx.write,
+		now: ctx.now,
+		callAsync: function(name, args, done)
+		{
+			waiting.push(function() { done('picked'); });
+		}
+	};
+
+	HmiExpr.compile('WHILE Result < 3 Recipe_Name = ShowRecipeSelect("Mix"); ' +
+		'Result = Result + 1; ENDWHILE; Other = 9;',
+		{project: project, mode: 'script'}).eval(paused);
+
+	var startedPaused = (waiting.length === 1 && written['Result'] === undefined);
+
+	while (waiting.length > 0)
+	{
+		waiting.shift()();
+	}
+
+	check('loop.pausingCallInTheBodyResumes',
+		startedPaused && written['Result'] === 3 && written['Other'] === 9 &&
+		written['Recipe_Name'] === 'picked',
+		'paused ' + startedPaused + ' ' + JSON.stringify(written));
+
+	// --- QuickFunctions ---------------------------------------------------
+
+	check('loop.quickBodyLoops', run('SumTo(4)', null).value === 10,
+		JSON.stringify(run('SumTo(4)', null)));
+	// Return has to unwind the loop as well as the statement list
+	check('loop.returnLeavesTheLoop', run('FirstOver(3)', null).value === 4,
+		JSON.stringify(run('FirstOver(3)', null)));
+
+	// --- the words are keywords only where a loop puts them ---------------
+
+	var stepLink = HmiExpr.compile('Step + 1', {project: project});
+
+	check('loop.tagNamedStepStillCompiles',
+		stepLink.errors.length === 0 &&
+		mxUtils.indexOf(stepLink.deps, 'Step') >= 0,
+		(stepLink.errors[0] || {}).message || stepLink.deps.join(','));
+
+	run('Step = 3; Next = Step + 1; Result = Next;');
+	check('loop.tagsNamedStepAndNextAreAssignable',
+		written['Step'] === 3 && written['Next'] === 4 && written['Result'] === 4,
+		JSON.stringify(written));
+
+	// The header has no terminator, so the body's first assignment is what
+	// stops the search for a STEP clause
+	run('DIM i AS Analog; FOR i = 1 TO 4 Step = i; NEXT;');
+	check('loop.headerStopsAtTheBody', written['Step'] === 4,
+		'Step ' + written['Step']);
+
+	run('DIM i AS Analog; FOR i = 1 TO 5 STEP 2 Next = i; NEXT;');
+	check('loop.stepClauseAndATagNamedNext', written['Next'] === 5,
+		'Next ' + written['Next']);
+
+	check('loop.wordsInAConditionAreTags',
+		errorsOf('IF Next THEN Step = 1; ENDIF;', 'script') === '',
+		errorsOf('IF Next THEN Step = 1; ENDIF;', 'script'));
+
+	var words = HmiExpr.loopWords(new HmiExpr.Lexer(
+		'FOR Index = 1 TO Step STEP 2 Next = Index; NEXT;').run().tokens);
+	var kinds = [];
+
+	for (var at in words)
+	{
+		kinds.push(words[at]);
+	}
+
+	check('loop.classifierMarksOnlyTheKeywords',
+		kinds.join(',') === 'FOR,TO,STEP,NEXT', kinds.join(','));
+
+	// --- what a rename reaches --------------------------------------------
+
+	var src = 'DIM i AS Analog; FOR i = 1 TO Step STEP 2 Next = Next + i; ' +
+		'NEXT; WHILE Next < 10 Next = Next + 1; ENDWHILE;';
+	var found = [];
+
+	HmiTagRefs.namesIn(src, 'script', function(name) { found.push(name); });
+
+	check('loop.keywordsAreNotTagReferences',
+		found.join(',') === 'Step,Next,Next,Next,Next,Next', found.join(','));
+
+	var renamed = HmiTagRefs.rewriteText(src, {'next': 'Following'}, 'script');
+
+	check('loop.renameLeavesTheKeywords',
+		renamed.count === 5 && renamed.text.indexOf('NEXT;') > 0 &&
+		renamed.text.indexOf('STEP 2') > 0 &&
+		renamed.text.indexOf('Following = Following + i') > 0,
+		renamed.text);
+};
+
 /** Copy / Paste / Delete Animation, and the on-screen keypad. */
 HmiSelfTest.testAnimationClipboard = function(ui)
 {
@@ -7466,17 +7819,33 @@ HmiSelfTest.testSqlFunctions = function()
 	check('sqlMgr.getRecordOutOfRange',
 		manager.call('SQLGetRecord', [1, 9]) === HmiSql.CODES.NO_MORE_ROWS);
 
-	// A null column warns and leaves the tag empty rather than failing
+	// A null column leaves the tag empty and the fetch still succeeds, so a
+	// WHILE SQLNext(id) == 0 walk gets to the end of a selection whatever is
+	// null in it. It goes to the runtime log, once, instead.
 	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
-		rows: [[null, null, null]]});
+		rows: [[null, null, null], [null, null, null]]});
 	errors = [];
 	callAsync('SQLSelect', [1, 'BatchLog', 'BatchRow', '', '']);
 	writes = {};
-	check('sqlMgr.nullIsAWarning', manager.call('SQLFirst', [1]) === HmiSql.CODES.NULL_VALUE,
-		'' + manager.call('SQLFirst', [1]));
+	delete HmiLog.seen['sql:null:BatchRow:1'];
+	var ringAt = HmiLog.ring.length;
+	var nullFirst = manager.call('SQLFirst', [1]);
+	var nullNext = manager.call('SQLNext', [1]);
+
+	check('sqlMgr.nullStillFetches',
+		nullFirst === HmiSql.CODES.OK && nullNext === HmiSql.CODES.OK,
+		nullFirst + ', ' + nullNext);
 	check('sqlMgr.nullBecomesEmpty', writes.Tank_Level === 0 && writes.Recipe_Name === '',
 		JSON.stringify(writes));
 	check('sqlMgr.nullIsNotReported', errors.length === 0, errors.join(' | '));
+	check('sqlMgr.nullIsLoggedOnce',
+		HmiLog.ring.length === ringAt + 1 &&
+		HmiLog.ring[ringAt].msg.indexOf('sql:null:BatchRow') === 0,
+		(HmiLog.ring.length - ringAt) + ': ' +
+		HmiLog.ring.slice(ringAt).map(function(r) { return r.msg; }).join(' | '));
+	check('sqlMgr.nullCodeStillHasWords',
+		HmiSql.message(HmiSql.CODES.NULL_VALUE).length > 0,
+		HmiSql.message(HmiSql.CODES.NULL_VALUE));
 
 	// SQLEnd lets the rows go; the cursor functions then say so
 	check('sqlMgr.end', manager.call('SQLEnd', [1]) === 0);

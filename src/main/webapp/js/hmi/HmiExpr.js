@@ -33,6 +33,43 @@ HmiExpr.T = {
 HmiExpr.WORD_OPS = {AND: 'AND', OR: 'OR', NOT: 'NOT', MOD: 'MOD',
 	IF: 'IF', THEN: 'THEN', ELSE: 'ELSE', ENDIF: 'ENDIF'};
 
+/**
+ * The loop keywords, which are deliberately NOT word operators.
+ *
+ *     FOR <tag or variable> = <start> TO <end> [STEP <by>] ... NEXT
+ *     WHILE <condition> ... ENDWHILE
+ *
+ * Step and Next are names a plant project really does give a tag -- a batch
+ * step, a Next button -- and a word operator would stop such a tag compiling
+ * anywhere in the project, animation links included. So these words are
+ * recognized by position instead, the way DIM and Return are: HmiExpr.loopWords
+ * classifies the tokens once, and both the parser and the tag rename scanner
+ * (HmiTagRefs.scanText) read that one answer, so they cannot disagree about
+ * which STEP is a keyword and which is a tag.
+ */
+HmiExpr.LOOP_WORDS = {FOR: 'FOR', TO: 'TO', STEP: 'STEP', NEXT: 'NEXT',
+	WHILE: 'WHILE', ENDWHILE: 'ENDWHILE'};
+
+/**
+ * Operators after which a value has to come, so a loop word standing there is
+ * a tag of that name and nothing else. THEN is not one of them: a statement
+ * begins after it, which is where a loop may.
+ */
+HmiExpr.VALUE_WANTED = {'=': 1, '+': 1, '-': 1, '*': 1, '/': 1, '**': 1,
+	'==': 1, '<>': 1, '<=': 1, '>=': 1, '<': 1, '>': 1, '(': 1, ',': 1,
+	'.': 1, ':': 1, 'AND': 1, 'OR': 1, 'NOT': 1, 'MOD': 1, 'IF': 1};
+
+/**
+ * How many passes all the loops in one run of a script may take together.
+ *
+ * A single number bounds the whole run, so nested loops cannot multiply their
+ * way into a hang; the Run reports a script error instead, the way the
+ * QuickFunction depth and call caps do. It has to clear the largest result set
+ * a SELECT can return (HmiSql.maxRows), since walking one with
+ * WHILE SQLNext(...) == 0 is exactly what loops are here for.
+ */
+HmiExpr.MAX_ITERATIONS = 100000;
+
 /** Tag names are limited to 63 characters, as in InTouch. */
 HmiExpr.MAX_NAME = 63;
 
@@ -496,6 +533,190 @@ HmiExpr.Lexer.prototype.readOperator = function(start)
 	this.pos++;
 };
 
+// ------------------------------------------------------- the loop keywords
+
+/**
+ * Whether a token begins an expression, which is what has to follow WHILE.
+ * Unlike startsValue, which answers the same question for Return, the end of
+ * the source and a `;` are not expressions: a WHILE always has a condition.
+ */
+HmiExpr.startsExpr = function(t)
+{
+	if (t == null)
+	{
+		return false;
+	}
+
+	if (t.type === HmiExpr.T.NUMBER || t.type === HmiExpr.T.STRING ||
+		t.type === HmiExpr.T.IDENT)
+	{
+		return true;
+	}
+
+	return t.type === HmiExpr.T.OP && (t.value === '(' || t.value === '-' ||
+		t.value === '+' || t.value === 'NOT');
+};
+
+/** Whether a value has to come after this token, which a keyword never is. */
+HmiExpr.wantsValue = function(t, words, i)
+{
+	if (t == null)
+	{
+		return false;
+	}
+
+	if (t.type === HmiExpr.T.OP)
+	{
+		return HmiExpr.VALUE_WANTED[t.value] === 1;
+	}
+
+	// TO, STEP and WHILE are followed by a value too, and they are words of
+	// this same contextual kind, so the classification so far decides
+	var word = (words != null) ? words[i] : null;
+
+	return word === 'TO' || word === 'STEP' || word === 'WHILE';
+};
+
+/** Whether a NEXT or an ENDWHILE could be the one this token follows. */
+HmiExpr.endsStatement = function(t)
+{
+	if (t == null || t.type === HmiExpr.T.END || t.type === HmiExpr.T.IDENT)
+	{
+		return true;
+	}
+
+	return t.type === HmiExpr.T.OP && (t.value === ';' || t.value === 'ELSE' ||
+		t.value === 'ENDIF');
+};
+
+/**
+ * TO and then STEP, in the header of the FOR whose `=` is at `start`.
+ *
+ * The header has no terminator of its own -- the body simply begins where the
+ * last bound ends -- so the scan stops at the `;`, at a block word, or at an
+ * assignment, which a header never holds after its own. That last test is what
+ * keeps `FOR i = 1 TO 10 Step = i;` reading as a loop over a tag named Step.
+ */
+HmiExpr.markForHeader = function(tokens, start, words)
+{
+	var to = -1;
+
+	for (var j = start; j < tokens.length; j++)
+	{
+		var t = tokens[j];
+		var next = tokens[j + 1];
+
+		if (t.type === HmiExpr.T.END ||
+			(t.type === HmiExpr.T.OP && (t.value === ';' || t.value === 'THEN' ||
+				t.value === 'ELSE' || t.value === 'ENDIF')))
+		{
+			return;
+		}
+
+		if (t.type !== HmiExpr.T.IDENT)
+		{
+			continue;
+		}
+
+		// The body's first statement
+		if (next != null && next.type === HmiExpr.T.OP && next.value === '=')
+		{
+			return;
+		}
+
+		var upper = t.value.toUpperCase();
+		// A bound is an expression, so the word right after TO or an operator
+		// is a tag of that name: FOR i = 1 TO Step STEP 2 loops to the tag
+		// Step, by two
+		var value = HmiExpr.wantsValue(tokens[j - 1], words, j - 1);
+
+		if (to < 0 && upper === 'TO' && !value)
+		{
+			words[j] = 'TO';
+			to = j;
+		}
+		else if (to >= 0 && upper === 'STEP' && !value)
+		{
+			words[j] = 'STEP';
+
+			return;
+		}
+		else if (upper === 'FOR' || upper === 'WHILE' || upper === 'NEXT' ||
+			upper === 'ENDWHILE')
+		{
+			return;
+		}
+	}
+};
+
+/**
+ * Which tokens are loop keywords rather than tags of the same name:
+ * {index: 'FOR' | 'TO' | 'STEP' | 'NEXT' | 'WHILE' | 'ENDWHILE'}.
+ *
+ * Each word is told apart by what stands next to it. FOR needs a name and an
+ * assignment after it, which no reading of a tag called For can have; WHILE
+ * needs a value after it; NEXT and ENDWHILE end a statement and are never
+ * where a value is wanted. TO and STEP are marked only inside a header a FOR
+ * has already been found for.
+ */
+HmiExpr.loopWords = function(tokens)
+{
+	var words = {};
+
+	for (var i = 0; i < tokens.length; i++)
+	{
+		var t = tokens[i];
+
+		if (t.type !== HmiExpr.T.IDENT)
+		{
+			continue;
+		}
+
+		var upper = t.value.toUpperCase();
+
+		if (HmiExpr.LOOP_WORDS[upper] == null || upper === 'TO' ||
+			upper === 'STEP')
+		{
+			continue;
+		}
+
+		var prev = (i > 0) ? tokens[i - 1] : null;
+		var next = tokens[i + 1];
+		var after = tokens[i + 2];
+
+		if (upper === 'FOR')
+		{
+			if (next != null && next.type === HmiExpr.T.IDENT &&
+				after != null && after.type === HmiExpr.T.OP && after.value === '=')
+			{
+				words[i] = 'FOR';
+				HmiExpr.markForHeader(tokens, i + 3, words);
+			}
+		}
+		else if (upper === 'WHILE')
+		{
+			if (!HmiExpr.wantsValue(prev, words, i - 1) && HmiExpr.startsExpr(next))
+			{
+				words[i] = 'WHILE';
+			}
+		}
+		else if (!HmiExpr.wantsValue(prev, words, i - 1) &&
+			HmiExpr.endsStatement(next))
+		{
+			words[i] = upper;
+		}
+	}
+
+	return words;
+};
+
+/** Whether a statement is a block, which needs no `;` to close it. */
+HmiExpr.isBlock = function(statement)
+{
+	return statement != null && (statement.type === 'if' ||
+		statement.type === 'for' || statement.type === 'while');
+};
+
 // ----------------------------------------------------------------- parser
 
 HmiExpr.Parser = function(tokens, opts)
@@ -509,8 +730,16 @@ HmiExpr.Parser = function(tokens, opts)
 	this.writes = [];
 	// Local variables declared so far (DIM), by lower-case name
 	this.locals = {};
-	// How many IFs the parser is inside: DIM is allowed only outside them
+	// How many blocks the parser is inside: DIM is allowed only outside them
 	this.depth = 0;
+	// The loop keywords, by token index. An animation link holds one
+	// expression and no loops, so there a tag named While or Next is only
+	// ever a tag.
+	this.loopWords = (HmiExpr.isStatements(this.opts.mode)) ?
+		HmiExpr.loopWords(tokens) : {};
+	// The terminators of the loops this statement is inside, so an unclosed
+	// IF reports itself at the NEXT rather than swallowing it
+	this.blockStops = [];
 	// Whether this source writes a tag or calls a function that acts: a
 	// QuickFunction built from those can only be called from a script
 	this.callsAction = false;
@@ -575,6 +804,24 @@ HmiExpr.Parser.prototype.eatOp = function(op)
 	return false;
 };
 
+/** Whether the token here is being used as this loop keyword. */
+HmiExpr.Parser.prototype.atLoopWord = function(word)
+{
+	return this.loopWords[this.i] === word;
+};
+
+HmiExpr.Parser.prototype.eatLoopWord = function(word)
+{
+	if (this.atLoopWord(word))
+	{
+		this.i++;
+
+		return true;
+	}
+
+	return false;
+};
+
 HmiExpr.Parser.prototype.error = function(message, token)
 {
 	token = token || this.peek();
@@ -606,10 +853,10 @@ HmiExpr.Parser.prototype.parseScript = function()
 		var statement = this.parseStatement();
 		statements.push(statement);
 
-		// "ENDIF;" is the InTouch spelling, but a bare ENDIF is unambiguous
-		// so it is not worth rejecting.
+		// "ENDIF;" is the usual spelling, but a bare ENDIF is unambiguous so
+		// it is not worth rejecting. The same goes for NEXT and ENDWHILE.
 		if (!this.eatOp(';') && this.peek().type !== HmiExpr.T.END &&
-			statement.type !== 'if')
+			!HmiExpr.isBlock(statement))
 		{
 			this.error('expected ;');
 		}
@@ -636,6 +883,26 @@ HmiExpr.Parser.prototype.parseStatement = function()
 		return this.parseIf();
 	}
 
+	if (this.atLoopWord('FOR'))
+	{
+		return this.parseFor();
+	}
+
+	if (this.atLoopWord('WHILE'))
+	{
+		return this.parseWhile();
+	}
+
+	if (this.atLoopWord('NEXT') || this.atLoopWord('ENDWHILE'))
+	{
+		var stray = this.next();
+
+		this.error(stray.value.toUpperCase() + ' without ' +
+			((stray.value.toUpperCase() === 'NEXT') ? 'FOR' : 'WHILE'), stray);
+
+		return {type: 'expr', value: {type: 'literal', value: 0}};
+	}
+
 	if (this.atDim())
 	{
 		return this.parseDim();
@@ -647,31 +914,7 @@ HmiExpr.Parser.prototype.parseStatement = function()
 	if (this.atOp('='))
 	{
 		this.next();
-
-		var system = (node.type === 'ref') ? HmiTypes.SYSTEM_TAGS[node.name] : null;
-
-		if (node.type === 'local')
-		{
-			// A local variable is assigned in the script, not written to a tag
-		}
-		else if (node.type !== 'ref')
-		{
-			this.error('only a tag or a local variable can be assigned to', this.tokens[start]);
-		}
-		// Writing 1 to .Acked acknowledges the tag's alarm; no other field
-		// can be written
-		else if (node.field != null && node.field !== 'Value' && node.field !== 'Acked')
-		{
-			this.error('cannot assign to .' + node.field, this.tokens[start]);
-		}
-		else if (system != null && system.readOnly)
-		{
-			this.error(node.name + ' is read-only', this.tokens[start]);
-		}
-		else if (mxUtils.indexOf(this.writes, node.name) < 0)
-		{
-			this.writes.push(node.name);
-		}
+		this.checkAssignTarget(node, this.tokens[start]);
 
 		var valueStart = this.i;
 		var assign = {type: 'assign', target: node, value: this.parseOr()};
@@ -684,6 +927,39 @@ HmiExpr.Parser.prototype.parseStatement = function()
 	this.checkAsync(statement, this.tokens[start]);
 
 	return statement;
+};
+
+/**
+ * What a value can be stored in: a local variable, or a tag, which counts as
+ * a write. Shared by an assignment and by a FOR, whose loop variable is
+ * assigned every pass.
+ */
+HmiExpr.Parser.prototype.checkAssignTarget = function(node, token)
+{
+	var system = (node.type === 'ref') ? HmiTypes.SYSTEM_TAGS[node.name] : null;
+
+	if (node.type === 'local')
+	{
+		// A local variable is assigned in the script, not written to a tag
+	}
+	else if (node.type !== 'ref')
+	{
+		this.error('only a tag or a local variable can be assigned to', token);
+	}
+	// Writing 1 to .Acked acknowledges the tag's alarm; no other field
+	// can be written
+	else if (node.field != null && node.field !== 'Value' && node.field !== 'Acked')
+	{
+		this.error('cannot assign to .' + node.field, token);
+	}
+	else if (system != null && system.readOnly)
+	{
+		this.error(node.name + ' is read-only', token);
+	}
+	else if (mxUtils.indexOf(this.writes, node.name) < 0)
+	{
+		this.writes.push(node.name);
+	}
 };
 
 /** DIM, then a name: a declaration (a tag named Dim is assigned or read with = or an operator). */
@@ -772,7 +1048,7 @@ HmiExpr.Parser.prototype.parseDim = function()
 
 	if (this.depth > 0)
 	{
-		this.error('DIM cannot be inside IF: declare variables at the top level of the script', dim);
+		this.error('DIM cannot be inside IF, FOR or WHILE: declare variables at the top level of the script', dim);
 	}
 
 	do
@@ -947,11 +1223,115 @@ HmiExpr.Parser.prototype.parseIf = function()
 	return {type: 'if', condition: condition, then: then, otherwise: otherwise};
 };
 
-HmiExpr.Parser.prototype.atAnyOp = function(ops)
+/**
+ * FOR <tag or variable> = <start> TO <end> [STEP <by>]
+ *     statements
+ * NEXT
+ *
+ * The bounds are read once, as the loop is entered, and the count is kept by
+ * the evaluator rather than read back from the loop variable: a tag's value
+ * comes back from the driver, which may not have it yet, and a loop that
+ * waited for that would never finish. Prefer a DIM variable for a counter --
+ * a tag is written on every pass.
+ */
+HmiExpr.Parser.prototype.parseFor = function()
 {
-	for (var i = 0; i < ops.length; i++)
+	this.next();
+	this.depth++;
+	this.blockStops.push('NEXT');
+
+	var start = this.i;
+	var target = this.parseOr();
+	this.checkAssignTarget(target, this.tokens[start]);
+
+	if (!this.eatOp('='))
 	{
-		if (this.atOp(ops[i]))
+		this.error('expected = after the FOR variable');
+	}
+
+	var from = this.parseLoopValue();
+
+	if (!this.eatLoopWord('TO'))
+	{
+		this.error('expected TO');
+	}
+
+	var to = this.parseLoopValue();
+	var step = (this.eatLoopWord('STEP')) ? this.parseLoopValue() : null;
+	var body = this.parseStatementsUntil(['NEXT']);
+
+	if (!this.eatLoopWord('NEXT'))
+	{
+		this.error('expected NEXT');
+	}
+
+	this.blockStops.pop();
+	this.depth--;
+
+	return {type: 'for', target: target, from: from, to: to, step: step,
+		body: body};
+};
+
+/**
+ * WHILE <condition>
+ *     statements
+ * ENDWHILE
+ *
+ * The condition is evaluated again before every pass. Bad quality ends the
+ * loop, for the reason eval_if gives: nothing acts on a value nothing trusts.
+ */
+HmiExpr.Parser.prototype.parseWhile = function()
+{
+	this.next();
+	this.depth++;
+	this.blockStops.push('ENDWHILE');
+
+	var condition = this.parseLoopValue();
+	var body = this.parseStatementsUntil(['ENDWHILE']);
+
+	if (!this.eatLoopWord('ENDWHILE'))
+	{
+		this.error('expected ENDWHILE');
+	}
+
+	this.blockStops.pop();
+	this.depth--;
+
+	return {type: 'while', condition: condition, body: body};
+};
+
+/** A loop's condition or bound: an expression that cannot pause. */
+HmiExpr.Parser.prototype.parseLoopValue = function()
+{
+	var start = this.i;
+	var node = this.parseOr();
+
+	if (HmiExpr.hasAsync(node))
+	{
+		this.asyncError(node, this.tokens[start]);
+	}
+
+	return node;
+};
+
+/**
+ * Whether the token here closes a block: one of this list, or a terminator of
+ * a loop the statement is inside, which is what makes a missing ENDIF report
+ * itself at the NEXT instead of running on to the end of the script.
+ */
+HmiExpr.Parser.prototype.atAnyStop = function(stops)
+{
+	for (var i = 0; i < stops.length; i++)
+	{
+		if (this.atOp(stops[i]) || this.atLoopWord(stops[i]))
+		{
+			return true;
+		}
+	}
+
+	for (var j = 0; j < this.blockStops.length; j++)
+	{
+		if (this.atLoopWord(this.blockStops[j]))
 		{
 			return true;
 		}
@@ -964,16 +1344,17 @@ HmiExpr.Parser.prototype.parseStatementsUntil = function(stops)
 {
 	var body = [];
 
-	while (this.peek().type !== HmiExpr.T.END && !this.atAnyOp(stops))
+	while (this.peek().type !== HmiExpr.T.END && !this.atAnyStop(stops))
 	{
 		var before = this.i;
 		var statement = this.parseStatement();
 		body.push(statement);
 
-		// A branch's statements end in ';', but the last one before ELSE or
-		// ENDIF may omit it, and a nested IF needs none after its ENDIF.
-		if (!this.eatOp(';') && !this.atAnyOp(stops) &&
-			this.peek().type !== HmiExpr.T.END && statement.type !== 'if')
+		// A block's statements end in ';', but the last one before ELSE,
+		// ENDIF, NEXT or ENDWHILE may omit it, and a nested block needs none
+		// after its own end.
+		if (!this.eatOp(';') && !this.atAnyStop(stops) &&
+			this.peek().type !== HmiExpr.T.END && !HmiExpr.isBlock(statement))
 		{
 			this.error('expected ;');
 		}
@@ -2015,6 +2396,154 @@ HmiExpr.Evaluator.prototype.eval_if = function(node)
 	return last;
 };
 
+/** Whether a FOR has reached its end, counting up or counting down. */
+HmiExpr.forGoes = function(frame)
+{
+	return (frame.step > 0) ? frame.value <= frame.to : frame.value >= frame.to;
+};
+
+/**
+ * Counts one pass of a loop against the cap for the whole run.
+ *
+ * Without it a condition that never comes false would hang the window it runs
+ * in: a script is synchronous, so nothing else in the Run would get a turn,
+ * including whatever would have made the condition false.
+ */
+HmiExpr.Evaluator.prototype.countPass = function()
+{
+	this.iterations = (this.iterations || 0) + 1;
+
+	if (this.iterations > HmiExpr.MAX_ITERATIONS)
+	{
+		throw new HmiExpr.RuntimeError('more than ' + HmiExpr.MAX_ITERATIONS +
+			' loop passes in one run of a script: check the loop\'s condition');
+	}
+};
+
+/**
+ * Enters a loop: {frame, last}. A null frame means the body never runs, which
+ * is an empty range, a condition that starts false, or bad quality -- in that
+ * last case the statement reports it, as an IF does.
+ */
+HmiExpr.Evaluator.prototype.loopEntry = function(node)
+{
+	var frame = {loop: node, body: node.body, i: 0};
+	var last;
+
+	if (node.type === 'for')
+	{
+		var from = this.run(node.from);
+		var to = this.run(node.to);
+		var step = (node.step != null) ? this.run(node.step) : null;
+		var quality = Math.min(from.quality, to.quality,
+			(step != null) ? step.quality : HmiTypes.QUALITY_GOOD);
+		var when = Math.max(from.timestamp, to.timestamp,
+			(step != null) ? step.timestamp : 0);
+
+		last = {value: null, quality: quality, timestamp: when};
+
+		if (quality <= HmiTypes.QUALITY_BAD)
+		{
+			return {frame: null, last: last};
+		}
+
+		frame.value = HmiExpr.num(from.value);
+		frame.to = HmiExpr.num(to.value);
+		frame.step = (step != null) ? HmiExpr.num(step.value) : 1;
+
+		if (frame.step === 0)
+		{
+			throw new HmiExpr.RuntimeError('FOR ... STEP 0 would never finish');
+		}
+
+		// The loop variable follows the count, not the other way round
+		this.assign(node.target, {value: frame.value, quality: quality,
+			timestamp: Date.now()});
+
+		if (!HmiExpr.forGoes(frame))
+		{
+			return {frame: null, last: last};
+		}
+	}
+	else
+	{
+		var cond = this.run(node.condition);
+
+		last = {value: null, quality: cond.quality, timestamp: cond.timestamp};
+
+		if (cond.quality <= HmiTypes.QUALITY_BAD || !HmiExpr.truthy(cond.value))
+		{
+			return {frame: null, last: last};
+		}
+	}
+
+	this.countPass();
+
+	return {frame: frame, last: last};
+};
+
+/** Whether a loop whose body has just finished takes another pass. */
+HmiExpr.Evaluator.prototype.loopAgain = function(frame)
+{
+	var node = frame.loop;
+
+	if (node.type === 'for')
+	{
+		frame.value += frame.step;
+		this.assign(node.target, {value: frame.value,
+			quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()});
+
+		if (!HmiExpr.forGoes(frame))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		var cond = this.run(node.condition);
+
+		if (cond.quality <= HmiTypes.QUALITY_BAD || !HmiExpr.truthy(cond.value))
+		{
+			return false;
+		}
+	}
+
+	this.countPass();
+
+	return true;
+};
+
+/**
+ * WHILE and FOR where a statement is run on its own rather than from the
+ * frame stack, which is resume's job and the path a script actually takes.
+ * The two share loopEntry and loopAgain, so the semantics are written once.
+ */
+HmiExpr.Evaluator.prototype.eval_while = function(node)
+{
+	var entry = this.loopEntry(node);
+	var last = entry.last;
+
+	while (entry.frame != null)
+	{
+		for (var i = 0; i < node.body.length; i++)
+		{
+			last = this.run(node.body[i]);
+		}
+
+		if (!this.loopAgain(entry.frame))
+		{
+			break;
+		}
+	}
+
+	return last;
+};
+
+HmiExpr.Evaluator.prototype.eval_for = function(node)
+{
+	return this.eval_while(node);
+};
+
 HmiExpr.Evaluator.prototype.eval_expr = function(node)
 {
 	return this.run(node.value);
@@ -2029,6 +2558,11 @@ HmiExpr.Evaluator.prototype.eval_expr = function(node)
  */
 HmiExpr.Evaluator.prototype.eval_script = function(node)
 {
+	// The loop cap is for this run of the script and everything it calls, so
+	// it is reset where a run begins and not in runBody, which a
+	// QuickFunction's body goes through as well
+	this.iterations = 0;
+
 	return this.runBody(node.body, {});
 };
 
@@ -2061,11 +2595,32 @@ HmiExpr.Evaluator.prototype.resume = function(last)
 
 		if (frame.i >= frame.body.length)
 		{
+			// A loop's frame is the whole of its state, so a pass that paused
+			// at an asynchronous call carries on here as any other would
+			if (frame.loop != null && this.loopAgain(frame))
+			{
+				frame.i = 0;
+				continue;
+			}
+
 			frames.pop();
 			continue;
 		}
 
 		var statement = frame.body[frame.i++];
+
+		if (statement.type === 'while' || statement.type === 'for')
+		{
+			var entry = this.loopEntry(statement);
+			last = entry.last;
+
+			if (entry.frame != null)
+			{
+				frames.push(entry.frame);
+			}
+
+			continue;
+		}
 
 		if (statement.type === 'if')
 		{

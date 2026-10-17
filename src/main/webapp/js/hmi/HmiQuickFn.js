@@ -332,8 +332,8 @@ HmiQuickFn.checkName = function(project, name, what)
 
 	var upper = name.toUpperCase();
 
-	if (HmiExpr.WORD_OPS[upper] != null || upper === 'DIM' || upper === 'AS' ||
-		upper === 'RETURN')
+	if (HmiExpr.WORD_OPS[upper] != null || HmiExpr.LOOP_WORDS[upper] != null ||
+		upper === 'DIM' || upper === 'AS' || upper === 'RETURN')
 	{
 		return '"' + name + '" is a keyword.';
 	}

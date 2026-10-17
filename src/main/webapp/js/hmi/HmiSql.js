@@ -1384,9 +1384,22 @@ HmiSqlManager.prototype.fetch = function(call, connection)
 		this.driver.write(writes);
 	}
 
-	// A null column is a warning, not a failure: the tag gets 0 or no text,
-	// and the script carries on
-	return (nulls > 0) ? HmiSql.CODES.NULL_VALUE : HmiSql.CODES.OK;
+	// A null column is not a result. The row was delivered -- the tag holds 0
+	// or no text -- so the fetch succeeded, and a
+	// WHILE SQLNext(id) == 0 ... ENDWHILE walk reaches the end of the
+	// selection. Returning -4 here stopped such a walk at the first row with
+	// a null in it, which a live walk of three batches showed: a plant
+	// table's columns are nullable far too often for that. The null goes to
+	// the runtime log instead, once per bind list so a long walk cannot flood
+	// it, and SQLErrorMsg(-4) still has the words for a script that asks.
+	if (nulls > 0)
+	{
+		HmiLog.once('sql:null:' + bindList.name + ':' + connection.id,
+			'sql: ' + ((call != null) ? call + ': ' : '') +
+			HmiSql.message(HmiSql.CODES.NULL_VALUE));
+	}
+
+	return HmiSql.CODES.OK;
 };
 
 HmiSqlManager.prototype.writeTag = function(name, value)

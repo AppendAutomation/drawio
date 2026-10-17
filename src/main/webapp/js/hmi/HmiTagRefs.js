@@ -493,6 +493,21 @@ HmiTagRefs.scanText = function(src, mode, shield)
 	var dim = (mode === 'script') ? HmiTagRefs.scanDim(tokens) :
 		{locals: {}, skip: {}};
 
+	// FOR, TO, STEP, NEXT, WHILE and ENDWHILE are keywords by their position
+	// rather than by the lexer (HmiExpr.LOOP_WORDS says why), so the one
+	// classifier the parser uses says which of them are keywords here. Without
+	// this, renaming a tag named Step would rewrite the keyword, and
+	// Find/Replace would list the keywords as names.
+	if (mode === 'script')
+	{
+		var words = HmiExpr.loopWords(tokens);
+
+		for (var at in words)
+		{
+			dim.skip[at] = true;
+		}
+	}
+
 	// A QuickFunction's arguments are local variables that no DIM declares,
 	// so the caller names them and they are skipped like any other local.
 	for (var name in (shield || {}))
