@@ -196,6 +196,38 @@ HmiExpr.FUNCTIONS = {
 	'SQLCreateTable': {arity: 3, action: true, async: true},
 	'SQLDropTable': {arity: 2, action: true, async: true},
 
+	// A statement a script builds for itself, and the prepared form of one.
+	// Building it, preparing it and filling in its parameters all happen
+	// here, so only running it reaches a database; the statement number
+	// SQLPrepareStatement and SQLInsertPrepare hand back goes into a tag, as
+	// SQLConnect's connection number does.
+	//
+	// The advisory arguments of the legacy call forms -- a character
+	// parameter's MaxLength, a decimal's Precision and Scale -- are accepted
+	// and may be left off, because a bound parameter needs none of them.
+	'SQLSetStatement': {arity: 2, action: true},
+	'SQLAppendStatement': {arity: 2, action: true},
+	'SQLLoadStatement': {arity: 2, action: true},
+	'SQLPrepareStatement': {arity: 2, action: true, tagArgs: [1]},
+	'SQLSetParamChar': {minArity: 3, maxArity: 4, action: true},
+	'SQLSetParamDate': {arity: 3, action: true},
+	'SQLSetParamDateTime': {minArity: 3, maxArity: 4, action: true},
+	'SQLSetParamDecimal': {minArity: 3, maxArity: 5, action: true},
+	'SQLSetParamFloat': {arity: 3, action: true},
+	'SQLSetParamInt': {arity: 3, action: true},
+	'SQLSetParamLong': {arity: 3, action: true},
+	'SQLSetParamNull': {minArity: 3, maxArity: 5, action: true},
+	'SQLSetParamTime': {arity: 3, action: true},
+	'SQLClearParam': {arity: 2, action: true},
+	'SQLExecute': {arity: 3, action: true, async: true},
+	'SQLClearStatement': {arity: 2, action: true},
+	'SQLInsertPrepare': {arity: 4, action: true, tagArgs: [3]},
+	'SQLInsertExecute': {arity: 3, action: true, async: true},
+	'SQLInsertEnd': {arity: 2, action: true},
+	'SQLTransact': {arity: 1, action: true, async: true},
+	'SQLCommit': {arity: 1, action: true, async: true},
+	'SQLRollback': {arity: 1, action: true, async: true},
+
 	// Trends (HmiTrend.js), by the trend's name; TrendSetPen also takes the
 	// pen's tag name. Names are text: literals or message tags
 	'TrendSetPen': {arity: 2, action: true},

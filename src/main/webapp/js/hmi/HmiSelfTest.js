@@ -7614,6 +7614,7 @@ HmiSelfTest.testSqlFunctions = function()
 	project.addTag(HmiProject.createTag('RowCount', 'MemoryInteger'));
 	project.addTag(HmiProject.createTag('Result', 'MemoryInteger'));
 	project.addTag(HmiProject.createTag('ErrText', 'MemoryMessage'));
+	project.addTag(HmiProject.createTag('StmtId', 'MemoryInteger'));
 
 	var compile = function(src, mode)
 	{
@@ -7696,6 +7697,60 @@ HmiSelfTest.testSqlFunctions = function()
 		compile('Result = SQLFirst(ConnId);\nWHILE Result == 0\n' +
 			' Result = SQLUpdateCurrent(ConnId);\n Result = SQLNext(ConnId);\nENDWHILE;')
 			.errors.length === 0);
+
+	// Statements a script builds, prepares and fills in
+	check('sqlFn.statementCallsCompile',
+		compile('Result = SQLSetStatement(ConnId, "SELECT 1");').errors.length === 0 &&
+		compile('Result = SQLAppendStatement(ConnId, " FROM T");').errors.length === 0 &&
+		compile('Result = SQLLoadStatement(ConnId, "Recent");').errors.length === 0 &&
+		compile('Result = SQLPrepareStatement(ConnId, StmtId);').errors.length === 0 &&
+		compile('Result = SQLExecute(ConnId, "BatchRow", StmtId);').errors.length === 0 &&
+		compile('Result = SQLClearStatement(ConnId, StmtId);').errors.length === 0 &&
+		compile('Result = SQLInsertPrepare(ConnId, "BatchLog", "BatchRow", StmtId);').errors.length === 0 &&
+		compile('Result = SQLInsertExecute(ConnId, "BatchRow", StmtId);').errors.length === 0 &&
+		compile('Result = SQLInsertEnd(ConnId, StmtId);').errors.length === 0 &&
+		compile('Result = SQLTransact(ConnId);').errors.length === 0 &&
+		compile('Result = SQLCommit(ConnId);').errors.length === 0 &&
+		compile('Result = SQLRollback(ConnId);').errors.length === 0,
+		compile('Result = SQLPrepareStatement(ConnId, StmtId);').errors.join(','));
+
+	// The statement number comes back in a tag, as the connection number does
+	var prepared = compile('Result = SQLPrepareStatement(ConnId, StmtId);');
+	check('sqlFn.statementNumberIsAWrite',
+		mxUtils.indexOf(prepared.writes, 'StmtId') >= 0, prepared.writes.join(','));
+	check('sqlFn.statementNumberMustBeATag',
+		compile('Result = SQLPrepareStatement(ConnId, 3);').errors.length > 0 &&
+		compile('Result = SQLInsertPrepare(ConnId, "T", "BatchRow", 3);').errors.length > 0);
+	check('sqlFn.insertPrepareNumberIsAWrite',
+		mxUtils.indexOf(compile('Result = SQLInsertPrepare(ConnId, "T", "BatchRow", StmtId);').writes,
+			'StmtId') >= 0);
+
+	// The parameter family, whose advisory arguments may be left off
+	check('sqlFn.paramCallsCompile',
+		compile('SQLSetParamChar(StmtId, 1, "A");').errors.length === 0 &&
+		compile('SQLSetParamChar(StmtId, 1, "A", 80);').errors.length === 0 &&
+		compile('SQLSetParamDate(StmtId, 1, "2026-10-17");').errors.length === 0 &&
+		compile('SQLSetParamDateTime(StmtId, 1, "2026-10-17 08:00");').errors.length === 0 &&
+		compile('SQLSetParamDateTime(StmtId, 1, "2026-10-17 08:00", 19);').errors.length === 0 &&
+		compile('SQLSetParamDecimal(StmtId, 1, "123.456");').errors.length === 0 &&
+		compile('SQLSetParamDecimal(StmtId, 1, "123.456", 10, 3);').errors.length === 0 &&
+		compile('SQLSetParamFloat(StmtId, 1, 1.5);').errors.length === 0 &&
+		compile('SQLSetParamInt(StmtId, 1, 5);').errors.length === 0 &&
+		compile('SQLSetParamLong(StmtId, 1, 5);').errors.length === 0 &&
+		compile('SQLSetParamNull(StmtId, 1, 0);').errors.length === 0 &&
+		compile('SQLSetParamTime(StmtId, 1, "10:00:00");').errors.length === 0 &&
+		compile('SQLClearParam(StmtId, 1);').errors.length === 0,
+		compile('SQLSetParamNull(StmtId, 1, 0);').errors.join(','));
+
+	// Only running a statement reaches a database, so only that one pauses
+	check('sqlFn.executePauses',
+		compile('Result = SQLNumRows(ConnId) + SQLExecute(ConnId, "", 0);').errors.length > 0 &&
+		compile('Result = SQLExecute(ConnId, "", 0);', 'quick').errors.length > 0 &&
+		compile('Result = SQLTransact(ConnId);', 'quick').errors.length > 0);
+	check('sqlFn.buildingAStatementDoesNotPause',
+		compile('Result = SQLSetStatement(ConnId, "SELECT 1");', 'quick').errors.length === 0 &&
+		compile('SQLSetParamInt(StmtId, 1, 5);', 'quick').errors.length === 0,
+		compile('SQLSetParamInt(StmtId, 1, 5);', 'quick').errors.join(','));
 
 	// --- the messages -------------------------------------------------
 
@@ -8128,6 +8183,445 @@ HmiSelfTest.testSqlFunctions = function()
 		HmiSql.columnAt(project.bindLists[0], '[Recipe]') === 1 &&
 		HmiSql.columnAt(project.bindLists[0], 'Nope') < 0,
 		'' + HmiSql.columnAt(project.bindLists[0], '[Recipe]'));
+
+	// --- statements a script builds -----------------------------------
+	// The statement buffer, the prepared form of one, its parameters, and the
+	// transaction a set of them is committed in.
+
+	errors = [];
+	answers.length = 0;
+
+	check('sqlStmt.setStatement',
+		manager.call('SQLSetStatement', [1, 'SELECT Level, Recipe, InAlarm FROM BatchLog']) === 0);
+	check('sqlStmt.appendStatement',
+		manager.call('SQLAppendStatement', [1, ' WHERE Level > 0']) === 0 &&
+		manager.connections[1].statement ===
+			'SELECT Level, Recipe, InAlarm FROM BatchLog WHERE Level > 0',
+		manager.connections[1].statement);
+	check('sqlStmt.appendAddsNothingBetweenThePieces', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT ']);
+		manager.call('SQLAppendStatement', [1, 'Level']);
+
+		return manager.connections[1].statement === 'SELECT Level';
+	})(), manager.connections[1].statement);
+	check('sqlStmt.statementHasALimit', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT ']);
+		var code = manager.call('SQLAppendStatement', [1, new Array(HmiSql.MAX_STATEMENT + 2).join('x')]);
+
+		return code === HmiSql.CODES.OUT_OF_MEMORY;
+	})());
+	check('sqlStmt.statementNeedsAConnection',
+		manager.call('SQLSetStatement', [99, 'SELECT 1']) === HmiSql.CODES.INVALID_CONNECTION);
+
+	// A query in the project, rather than a path on one machine's disk
+	check('sqlStmt.loadStatement',
+		manager.call('SQLLoadStatement', [1, 'Recent']) === 0 &&
+		manager.connections[1].statement === HmiSql.query(project, 'Recent').sql,
+		manager.connections[1].statement);
+	check('sqlStmt.unknownQuery',
+		manager.call('SQLLoadStatement', [1, 'Nope']) === HmiSql.CODES.NO_QUERY);
+
+	// Statement 0 is the buffer, run as it stands and emptied afterwards
+	manager.call('SQLSetStatement', [1, 'SELECT Level, Recipe, InAlarm FROM BatchLog']);
+	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
+		rows: [[4.5, 'D', 0]]});
+	writes = {};
+
+	check('sqlStmt.execute', callAsync('SQLExecute', [1, 'BatchRow', 0]) === 0, '' + last);
+	check('sqlStmt.executeSendsTheBuffer',
+		lastSent().sql === 'SELECT Level, Recipe, InAlarm FROM BatchLog', lastSent().sql);
+	check('sqlStmt.executeFillsTheResults',
+		manager.call('SQLNumRows', [1]) === 1 && manager.call('SQLFirst', [1]) === 0 &&
+		writes.Recipe_Name === 'D', JSON.stringify(writes));
+	check('sqlStmt.unpreparedStatementRunsOnce',
+		callAsync('SQLExecute', [1, 'BatchRow', 0]) === HmiSql.CODES.EMPTY_STATEMENT, '' + last);
+
+	// The rows of a statement are not written back to: SQLUpdateCurrent
+	// needs the table a SQLSelect named
+	check('sqlStmt.updateCurrentNeedsASelect',
+		callAsync('SQLUpdateCurrent', [1]) === HmiSql.CODES.NO_ROWS_SELECTED, '' + last);
+	check('sqlStmt.updateCurrentSaysWhy',
+		errors.length > 0 && errors[errors.length - 1].indexOf('statement of the script') > 0,
+		errors.join(' | '));
+
+	// A zero-length bind list says the rows are not for tags
+	manager.call('SQLSetStatement', [1, 'SELECT COUNT(*) FROM BatchLog']);
+	answers.push({code: 0, columns: [{name: 'n'}], rows: [[12]]});
+	writes = {};
+	errors = [];
+
+	check('sqlStmt.executeWithoutABindList', callAsync('SQLExecute', [1, '', 0]) === 0, '' + last);
+	check('sqlStmt.rowsAreStillCounted', manager.call('SQLNumRows', [1]) === 1);
+	check('sqlStmt.noBindListWritesNoTags',
+		manager.call('SQLFirst', [1]) === 0 && Object.keys(writes).length === 0,
+		JSON.stringify(writes));
+	check('sqlStmt.unknownBindList',
+		callAsync('SQLExecute', [1, 'Nope', 0]) === HmiSql.CODES.NO_BIND_LIST, '' + last);
+
+	// A statement of the script's own may return columns that do not line up
+	// with the bind list, and the tags past the end of the row would quietly
+	// be emptied. The rows are still worth having, so it is noted in the log
+	check('sqlStmt.aBindListThatDoesNotLineUpIsNoted', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT Recipe FROM BatchLog']);
+		answers.push({code: 0, columns: [{name: 'Recipe'}], rows: [['Short']]});
+		callAsync('SQLExecute', [1, 'BatchRow', 0]);
+		delete HmiLog.seen['sql:columns:BatchRow:1'];
+		var at = HmiLog.ring.length;
+		var code = manager.call('SQLFirst', [1]);
+
+		return code === HmiSql.CODES.OK && HmiLog.ring.length > at &&
+			HmiLog.ring[at].msg.indexOf('are not all written') > 0;
+	})(), HmiLog.ring[HmiLog.ring.length - 1].msg);
+
+	// A statement that returns nothing leaves a selection in hand alone
+	manager.call('SQLSetStatement', [1, 'SET IDENTITY_INSERT BatchLog ON']);
+	answers.push({code: 0, columns: [], rows: []});
+	check('sqlStmt.aStatementWithNoRowsKeepsTheSelection',
+		callAsync('SQLExecute', [1, '', 0]) === 0 && manager.call('SQLNumRows', [1]) === 1,
+		'' + manager.call('SQLNumRows', [1]));
+
+	// Parameters need a prepared statement: the marks of an unprepared one
+	// have nothing to fill them
+	manager.call('SQLSetStatement', [1, 'SELECT Level FROM BatchLog WHERE Recipe = ?']);
+	check('sqlStmt.marksNeedAPreparedStatement',
+		callAsync('SQLExecute', [1, '', 0]) === HmiSql.CODES.INVALID_PARAM_LIST, '' + last);
+
+	// --- a prepared statement and its parameters ----------------------
+
+	manager.call('SQLSetStatement',
+		[1, 'SELECT Level, Recipe, InAlarm FROM BatchLog WHERE Recipe = ? AND Level > ?']);
+	writes = {};
+
+	check('sqlStmt.prepare', manager.call('SQLPrepareStatement', [1, 'StmtId']) === 0);
+	check('sqlStmt.prepareWritesTheNumber', writes.StmtId > 0, '' + writes.StmtId);
+
+	var stmt = writes.StmtId;
+
+	check('sqlStmt.prepareCountsTheParameters', manager.statements[stmt].count === 2,
+		'' + manager.statements[stmt].count);
+	check('sqlStmt.prepareNeedsAStatement', (function()
+	{
+		manager.call('SQLSetStatement', [1, '   ']);
+
+		return manager.call('SQLPrepareStatement', [1, 'StmtId']) === HmiSql.CODES.EMPTY_STATEMENT;
+	})());
+
+	check('sqlStmt.unknownStatementNumber',
+		manager.call('SQLSetParamInt', [999, 1, 5]) === HmiSql.CODES.NO_STATEMENT);
+	check('sqlStmt.parameterNumberOutOfRange',
+		manager.call('SQLSetParamInt', [stmt, 3, 5]) === HmiSql.CODES.INVALID_PARAM_ID &&
+		manager.call('SQLSetParamInt', [stmt, 0, 5]) === HmiSql.CODES.INVALID_PARAM_ID);
+
+	// A character parameter set again adds to what is there, which is how a
+	// value longer than one call's worth is assembled
+	check('sqlStmt.charConcatenates',
+		manager.call('SQLSetParamChar', [stmt, 1, 'Bl']) === 0 &&
+		manager.call('SQLSetParamChar', [stmt, 1, 'end', 80]) === 0 &&
+		manager.statements[stmt].params[1].value === 'Blend',
+		manager.statements[stmt].params[1].value);
+	check('sqlStmt.typeCannotChange',
+		manager.call('SQLSetParamInt', [stmt, 1, 5]) === HmiSql.CODES.PARAM_TYPE_CHANGED);
+	check('sqlStmt.clearParamForgetsTheType',
+		manager.call('SQLClearParam', [stmt, 1]) === 0 &&
+		manager.call('SQLSetParamInt', [stmt, 1, 5]) === 0 &&
+		manager.statements[stmt].params[1].type === 'int',
+		manager.statements[stmt].params[1].type);
+
+	// Every mark has to have a value before the statement runs
+	check('sqlStmt.executeNeedsEveryParameter',
+		callAsync('SQLExecute', [1, 'BatchRow', stmt]) === HmiSql.CODES.INVALID_PARAM_LIST, '' + last);
+
+	manager.call('SQLClearParam', [stmt, 1]);
+	manager.call('SQLSetParamChar', [stmt, 1, 'Blend']);
+	manager.call('SQLSetParamFloat', [stmt, 2, 3.5]);
+	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
+		rows: [[5.5, 'Blend', 0]]});
+
+	check('sqlStmt.executePrepared', callAsync('SQLExecute', [1, 'BatchRow', stmt]) === 0, '' + last);
+	check('sqlStmt.executeSendsTheParameters',
+		JSON.stringify(lastSent().params) ===
+		JSON.stringify([{type: 'varchar', value: 'Blend'}, {type: 'double', value: 3.5}]),
+		JSON.stringify(lastSent().params));
+	check('sqlStmt.preparedStatementRunsAgain', (function()
+	{
+		answers.push({code: 0, columns: [{name: 'Level'}], rows: [[1]]});
+
+		return callAsync('SQLExecute', [1, 'BatchRow', stmt]) === 0;
+	})(), '' + last);
+	check('sqlStmt.charStartsAfreshAfterARun',
+		manager.call('SQLSetParamChar', [stmt, 1, 'Mix']) === 0 &&
+		manager.statements[stmt].params[1].value === 'Mix',
+		manager.statements[stmt].params[1].value);
+	check('sqlStmt.noNewParameterAfterARun', (function()
+	{
+		manager.call('SQLClearParam', [stmt, 2]);
+
+		return manager.call('SQLSetParamFloat', [stmt, 2, 1]) === HmiSql.CODES.PARAM_AFTER_EXECUTE;
+	})());
+
+	// How each kind of value is bound
+	check('sqlStmt.dateParamHasNoTimeOfDay', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT 1 WHERE Stamp = ?']);
+		manager.call('SQLPrepareStatement', [1, 'StmtId']);
+		var id = writes.StmtId;
+		manager.call('SQLSetParamDate', [id, 1, '2026-10-17 14:05:09']);
+		var d = manager.statements[id].params[1].value;
+
+		return manager.statements[id].params[1].type === 'date' && d.getHours() === 0 &&
+			d.getDate() === 17 && d.getMonth() === 9;
+	})(), JSON.stringify(manager.statements[writes.StmtId].params[1] || {}));
+	check('sqlStmt.dateTimePrecisionCutsTheText', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+		manager.call('SQLSetParamDateTime', [id, 1, '2026-10-17 14:05:09.270', 16]);
+		var d = manager.statements[id].params[1].value;
+
+		return d.getMinutes() === 5 && d.getSeconds() === 0 && d.getMilliseconds() === 0;
+	})());
+	check('sqlStmt.dateTimeTakesAMillisecondNumber', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+		manager.call('SQLSetParamDateTime', [id, 1, 1797000000000]);
+
+		return manager.statements[id].params[1].value.getTime() === 1797000000000;
+	})());
+	check('sqlStmt.aTimeTakesTodayAsItsDate', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+		manager.call('SQLSetParamTime', [id, 1, '10:30:00 PM']);
+		var d = manager.statements[id].params[1].value;
+		var today = new Date();
+
+		return manager.statements[id].params[1].type === 'time' && d.getHours() === 22 &&
+			d.getMinutes() === 30 && d.getDate() === today.getDate();
+	})(), JSON.stringify(manager.statements[writes.StmtId].params[1] || {}));
+	check('sqlStmt.aBadDateIsRefused', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+
+		return manager.call('SQLSetParamDate', [id, 1, 'not a date']) === HmiSql.CODES.INVALID_DATETIME;
+	})());
+	check('sqlStmt.decimalKeepsItsOwnDigits', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLSetParamDecimal', [id, 1, '123.456']);
+		var param = manager.statements[id].params[1];
+
+		return param.type === 'decimal' && param.scale === 3 && param.precision === 18;
+	})(), JSON.stringify(manager.statements[writes.StmtId].params[1] || {}));
+	check('sqlStmt.decimalCanBeDeclared', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+		manager.call('SQLSetParamDecimal', [id, 1, 1.5, 10, 4]);
+		var param = manager.statements[id].params[1];
+
+		return param.precision === 10 && param.scale === 4;
+	})());
+	check('sqlStmt.decimalRefusesNonsense', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+
+		return manager.call('SQLSetParamDecimal', [id, 1, 'fifty']) === HmiSql.CODES.INVALID_DECIMAL;
+	})());
+	check('sqlStmt.aNullStatesWhatItStandsFor', (function()
+	{
+		var id = writes.StmtId;
+		var types = [];
+
+		for (var k = 0; k < HmiSql.NULL_PARAM_TYPES.length; k++)
+		{
+			manager.call('SQLClearParam', [id, 1]);
+			manager.call('SQLSetParamNull', [id, 1, k, 10, 2]);
+			types.push(manager.statements[id].params[1].nullType);
+		}
+
+		return types.join(',') === HmiSql.NULL_PARAM_TYPES.join(',');
+	})());
+	check('sqlStmt.anUnknownNullTypeIsRefused', (function()
+	{
+		var id = writes.StmtId;
+		manager.call('SQLClearParam', [id, 1]);
+
+		return manager.call('SQLSetParamNull', [id, 1, 9]) === HmiSql.CODES.INVALID_NULL_TYPE;
+	})());
+
+	// Letting a statement go
+	check('sqlStmt.clearStatement', (function()
+	{
+		var id = writes.StmtId;
+
+		return manager.call('SQLClearStatement', [1, id]) === 0 &&
+			manager.statements[id] == null &&
+			manager.call('SQLSetParamInt', [id, 1, 1]) === HmiSql.CODES.NO_STATEMENT;
+	})());
+	check('sqlStmt.clearStatementZeroEmptiesTheBuffer', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT 1']);
+
+		return manager.call('SQLClearStatement', [1, 0]) === 0 &&
+			manager.connections[1].statement === '';
+	})());
+
+	// --- a prepared insert --------------------------------------------
+
+	deliver(3.25, 'Prepared');
+	writes = {};
+
+	check('sqlStmt.insertPrepare',
+		manager.call('SQLInsertPrepare', [1, 'BatchLog', 'BatchRow', 'StmtId']) === 0);
+
+	var ins = writes.StmtId;
+
+	check('sqlStmt.insertPrepareBuildsTheStatement',
+		manager.statements[ins].sql ===
+			'INSERT INTO BatchLog (Level, Recipe, InAlarm) VALUES (?, ?, ?)',
+		manager.statements[ins].sql);
+	check('sqlStmt.insertPrepareSendsNothingYet',
+		sent[sent.length - 1].action !== 'hmiSql.exec' ||
+		sent[sent.length - 1].args.sql.indexOf('INSERT') !== 0,
+		sent[sent.length - 1].action);
+
+	check('sqlStmt.insertExecute', callAsync('SQLInsertExecute', [1, 'BatchRow', ins]) === 0, '' + last);
+	check('sqlStmt.insertExecuteSendsTheTagValues',
+		lastSent().sql === 'INSERT INTO BatchLog (Level, Recipe, InAlarm) VALUES (?, ?, ?)' &&
+		lastSent().params[1].value === 'Prepared',
+		JSON.stringify(lastSent().params));
+	check('sqlStmt.insertExecuteAgain', (function()
+	{
+		deliver(4.25, 'Again');
+
+		return callAsync('SQLInsertExecute', [1, '', ins]) === 0 &&
+			lastSent().params[1].value === 'Again';
+	})(), JSON.stringify(lastSent().params));
+	check('sqlStmt.insertExecuteKeepsItsOwnBindList',
+		callAsync('SQLInsertExecute', [1, 'Stamped', ins]) ===
+			HmiSql.CODES.INVALID_STATEMENT_TYPE, '' + last);
+	check('sqlStmt.executeDoesNotRunAPreparedInsert',
+		callAsync('SQLExecute', [1, '', ins]) === HmiSql.CODES.INVALID_STATEMENT_TYPE, '' + last);
+	check('sqlStmt.paramsDoNotSuitAPreparedInsert',
+		manager.call('SQLSetParamInt', [ins, 1, 5]) === HmiSql.CODES.INVALID_STATEMENT_TYPE);
+	check('sqlStmt.insertEnd',
+		manager.call('SQLInsertEnd', [1, ins]) === 0 && manager.statements[ins] == null);
+	check('sqlStmt.insertEndNeedsAnInsert', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT 1']);
+		manager.call('SQLPrepareStatement', [1, 'StmtId']);
+		var plain = writes.StmtId;
+		var code = manager.call('SQLInsertEnd', [1, plain]);
+		manager.call('SQLClearStatement', [1, plain]);
+
+		return code === HmiSql.CODES.INVALID_STATEMENT_TYPE;
+	})());
+
+	// A statement belongs to the connection that prepared it
+	check('sqlStmt.statementBelongsToItsConnection', (function()
+	{
+		manager.call('SQLSetStatement', [1, 'SELECT 1']);
+		manager.call('SQLPrepareStatement', [1, 'StmtId']);
+		var mine = writes.StmtId;
+
+		return callAsync('SQLExecute', [2, '', mine]) === HmiSql.CODES.INVALID_CONNECTION;
+	})(), '' + last);
+	check('sqlStmt.aStatementOfAnotherConnectionIsNotRunByMistake',
+		errors.length > 0 && errors[errors.length - 1].indexOf('another connection') > 0,
+		errors.join(' | '));
+	check('sqlStmt.tooManyStatements', (function()
+	{
+		var code = 0;
+
+		for (var k = 0; k < HmiSql.MAX_STATEMENTS + 2 && code === 0; k++)
+		{
+			manager.call('SQLSetStatement', [1, 'SELECT ' + k]);
+			code = manager.call('SQLPrepareStatement', [1, 'StmtId']);
+		}
+
+		return code === HmiSql.CODES.OUT_OF_MEMORY;
+	})());
+
+	// --- transactions -------------------------------------------------
+
+	errors = [];
+
+	check('sqlStmt.transact', callAsync('SQLTransact', [1]) === 0 &&
+		sent[sent.length - 1].action === 'hmiSql.begin', sent[sent.length - 1].action);
+	check('sqlStmt.oneTransactionAtATime',
+		callAsync('SQLTransact', [1]) === HmiSql.CODES.TRANSACTION_STATE, '' + last);
+	check('sqlStmt.commit', callAsync('SQLCommit', [1]) === 0 &&
+		sent[sent.length - 1].action === 'hmiSql.commit', sent[sent.length - 1].action);
+	check('sqlStmt.commitWithNothingOpen',
+		callAsync('SQLCommit', [1]) === HmiSql.CODES.TRANSACTION_STATE, '' + last);
+	check('sqlStmt.rollback', (function()
+	{
+		callAsync('SQLTransact', [1]);
+
+		return callAsync('SQLRollback', [1]) === 0 &&
+			sent[sent.length - 1].action === 'hmiSql.rollback' &&
+			manager.connections[1].inTransaction === false;
+	})(), sent[sent.length - 1].action);
+	check('sqlStmt.aRefusedBeginLeavesTheStateAlone', (function()
+	{
+		answers.push({code: HmiSql.CODES.PROVIDER_ERROR, message: 'no'});
+
+		return callAsync('SQLTransact', [1]) === HmiSql.CODES.PROVIDER_ERROR &&
+			manager.connections[1].inTransaction === false;
+	})(), '' + last);
+
+	// --- what counts as a parameter mark ------------------------------
+
+	check('sqlStmt.countsOnlyRealMarks',
+		HmiSql.countPlaceholders('SELECT ? FROM T WHERE N = ?') === 2 &&
+		HmiSql.countPlaceholders("SELECT '?' FROM T") === 0 &&
+		HmiSql.countPlaceholders('SELECT [a?b] FROM T') === 0 &&
+		HmiSql.countPlaceholders('SELECT 1 -- ?\nFROM T') === 0 &&
+		HmiSql.countPlaceholders('SELECT 1 /* ? */ FROM T WHERE N = ?') === 1 &&
+		HmiSql.countPlaceholders("SELECT 'it''s ?' FROM T WHERE N = ?") === 1,
+		'' + HmiSql.countPlaceholders("SELECT 'it''s ?' FROM T WHERE N = ?"));
+	check('sqlStmt.datesAreReadAsPlantLocalTime', (function()
+	{
+		// An ISO date alone is midnight UTC by the standard, which west of
+		// Greenwich is the day before
+		var d = HmiSql.parseDateTime('2026-10-17');
+
+		return d.getDate() === 17 && d.getHours() === 0 &&
+			HmiSql.parseDateTime('2026-10-17 14:05:09.270').getMilliseconds() === 270 &&
+			HmiSql.parseDateTime('nonsense') == null;
+	})(), '' + HmiSql.parseDateTime('2026-10-17'));
+	check('sqlStmt.precisionFallsBackToAFieldBoundary', (function()
+	{
+		var d = new Date(2026, 9, 17, 14, 5, 9, 270);
+
+		return HmiSql.dateText(d) === '2026-10-17 14:05:09.270' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 10)) === '2026-10-17 00:00:00.000' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 12)) === '2026-10-17 00:00:00.000' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 13)) === '2026-10-17 14:00:00.000' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 19)) === '2026-10-17 14:05:09.000' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 23)) === '2026-10-17 14:05:09.270' &&
+			HmiSql.dateText(HmiSql.datePrecision(d, 0)) === '2026-10-17 14:05:09.270';
+	})(), HmiSql.dateText(HmiSql.datePrecision(new Date(2026, 9, 17, 14, 5, 9, 270), 13)));
+
+	// Everything a connection had prepared goes when the connection does
+	check('sqlStmt.statementsGoWithTheirConnection', (function()
+	{
+		manager.statements = {};
+		answers.push({code: 0, connectionId: 5, provider: 'mssql'});
+		callAsync('SQLConnect', ['ConnId', 'Plant']);
+		manager.call('SQLSetStatement', [5, 'SELECT 1']);
+		manager.call('SQLPrepareStatement', [5, 'StmtId']);
+		var theirs = writes.StmtId;
+		callAsync('SQLDisconnect', [5]);
+
+		return theirs > 0 && manager.statements[theirs] == null;
+	})());
 
 	// Disconnect, and the Run ending
 	check('sqlMgr.disconnect', callAsync('SQLDisconnect', [1]) === 0, '' + last);

@@ -786,7 +786,8 @@ HmiSql.CODES = {
 	NO_QUERY: -1105,
 	TRANSACTION_STATE: -1106,
 	FILE_NOT_ALLOWED: -1107,
-	ROW_GONE: -1108
+	ROW_GONE: -1108,
+	NO_STATEMENT: -1109
 };
 
 HmiSql.MESSAGES = {
@@ -796,7 +797,7 @@ HmiSql.MESSAGES = {
 	'-4': 'The value read was null',
 	'-5': 'There are no more rows to fetch',
 	'-7': 'That parameter number is not valid',
-	'-8': 'The statement has a gap in its parameter numbers',
+	'-8': "The statement's parameters have not all been set",
 	'-9': 'That type cannot be used for a null parameter',
 	'-10': "A parameter's type cannot be changed once it is set",
 	'-11': 'A parameter cannot be added after the statement has run',
@@ -823,7 +824,8 @@ HmiSql.MESSAGES = {
 	'-1105': 'There is no query of that name',
 	'-1106': 'That does not suit the current transaction',
 	'-1107': 'A database file must be in Documents or the application data folder',
-	'-1108': 'The row the cursor is on is no longer in the table'
+	'-1108': 'The row the cursor is on is no longer in the table',
+	'-1109': 'There is no prepared statement of that number'
 };
 
 /**
@@ -863,12 +865,24 @@ HmiSql.message = function(code)
 HmiSql.FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect', 'SQLFirst', 'SQLNext',
 	'SQLPrev', 'SQLLast', 'SQLGetRecord', 'SQLNumRows', 'SQLEnd', 'SQLErrorMsg',
 	'SQLInsert', 'SQLUpdate', 'SQLUpdateCurrent', 'SQLDelete', 'SQLClearTable',
-	'SQLCreateTable', 'SQLDropTable'];
+	'SQLCreateTable', 'SQLDropTable',
+	'SQLSetStatement', 'SQLAppendStatement', 'SQLLoadStatement', 'SQLPrepareStatement',
+	'SQLSetParamChar', 'SQLSetParamDate', 'SQLSetParamDateTime', 'SQLSetParamDecimal',
+	'SQLSetParamFloat', 'SQLSetParamInt', 'SQLSetParamLong', 'SQLSetParamNull',
+	'SQLSetParamTime', 'SQLClearParam', 'SQLExecute', 'SQLClearStatement',
+	'SQLInsertPrepare', 'SQLInsertExecute', 'SQLInsertEnd',
+	'SQLTransact', 'SQLCommit', 'SQLRollback'];
 
 /** The ones that reach a database and so pause the script. */
 HmiSql.ASYNC_FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect',
 	'SQLInsert', 'SQLUpdate', 'SQLUpdateCurrent', 'SQLDelete', 'SQLClearTable',
-	'SQLCreateTable', 'SQLDropTable'];
+	'SQLCreateTable', 'SQLDropTable', 'SQLExecute', 'SQLInsertExecute',
+	'SQLTransact', 'SQLCommit', 'SQLRollback'];
+
+/** The SQLSetParam* family, which addresses a statement and not a connection. */
+HmiSql.PARAM_FUNCTIONS = ['SQLSetParamChar', 'SQLSetParamDate', 'SQLSetParamDateTime',
+	'SQLSetParamDecimal', 'SQLSetParamFloat', 'SQLSetParamInt', 'SQLSetParamLong',
+	'SQLSetParamNull', 'SQLSetParamTime'];
 
 HmiSql.isFunction = function(name)
 {
@@ -966,6 +980,12 @@ HmiSqlManager = function(project, driver, options)
 	this.driver = driver;
 	this.options = options || {};
 	this.connections = {};
+
+	// Prepared statements by the number SQLPrepareStatement and
+	// SQLInsertPrepare hand back. They are the Run's, not one connection's,
+	// because the SQLSetParam* family names a statement and nothing else.
+	this.statements = {};
+	this.nextStatement = 1;
 	this.running = false;
 
 	// SQLErrorMsg(-1) gives the database's own words for the last failure
@@ -1038,12 +1058,16 @@ HmiSqlManager.prototype.stop = function()
 		this.onChange = null;
 	}
 
+	// Closing a connection rolls back whatever transaction was open on it:
+	// the main process does that as it lets it go, and the database would do
+	// it anyway for a connection that simply dropped
 	for (var id in this.connections)
 	{
 		this.request('hmiSql.close', {connectionId: Number(id)}, function() {}, function() {});
 	}
 
 	this.connections = {};
+	this.statements = {};
 };
 
 /**
@@ -1243,6 +1267,27 @@ HmiSqlManager.prototype.call = function(name, args)
 			return this.getRecord(call, args[0], args[1]);
 		case 'SQLEnd':
 			return this.end(call, args[0]);
+		case 'SQLSetStatement':
+			return this.setStatement(call, args[0], args[1], false);
+		case 'SQLAppendStatement':
+			return this.setStatement(call, args[0], args[1], true);
+		case 'SQLLoadStatement':
+			return this.loadStatement(call, args[0], args[1]);
+		case 'SQLPrepareStatement':
+			return this.prepareStatement(call, args[0], args[1]);
+		case 'SQLClearStatement':
+			return this.clearStatement(call, args[0], args[1]);
+		case 'SQLInsertPrepare':
+			return this.insertPrepare(call, args);
+		case 'SQLInsertEnd':
+			return this.insertEnd(call, args[0], args[1]);
+		case 'SQLClearParam':
+			return this.clearParam(call, args);
+	}
+
+	if (mxUtils.indexOf(HmiSql.PARAM_FUNCTIONS, name) >= 0)
+	{
+		return this.setParam(call, name, args);
 	}
 
 	return null;
@@ -1302,6 +1347,26 @@ HmiSqlManager.prototype.callAsync = function(name, args, done)
 			this.dropTable(call, args, done);
 
 			return;
+		case 'SQLExecute':
+			this.execute(call, args, done);
+
+			return;
+		case 'SQLInsertExecute':
+			this.insertExecute(call, args, done);
+
+			return;
+		case 'SQLTransact':
+			this.transact(call, args[0], 'begin', done);
+
+			return;
+		case 'SQLCommit':
+			this.transact(call, args[0], 'commit', done);
+
+			return;
+		case 'SQLRollback':
+			this.transact(call, args[0], 'rollback', done);
+
+			return;
 	}
 
 	done(HmiSql.CODES.INTERNAL);
@@ -1357,7 +1422,8 @@ HmiSqlManager.prototype.connect = function(call, tagName, which, done)
 			}
 
 			that.connections[res.connectionId] = {id: res.connectionId, source: source.name,
-				provider: res.provider, results: null, cursor: -1, bindList: ''};
+				provider: res.provider, results: null, cursor: -1, bindList: '',
+				statement: '', inTransaction: false};
 			that.writeTag(tagName, res.connectionId);
 			done(HmiSql.CODES.OK);
 		},
@@ -1380,6 +1446,7 @@ HmiSqlManager.prototype.disconnect = function(call, id, done)
 	}
 
 	delete this.connections[connection.id];
+	this.dropStatements(connection.id);
 
 	this.request('hmiSql.close', {connectionId: connection.id}, function()
 	{
@@ -1686,7 +1753,10 @@ HmiSqlManager.prototype.updateCurrent = function(call, id, done)
 
 	if (connection.results == null || !connection.table)
 	{
-		done(this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED));
+		done(this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED,
+			(connection.results != null) ?
+			'SQLUpdateCurrent writes back to the table SQLSelect named, and these rows came ' +
+			'from a statement of the script\'s own.' : null));
 
 		return;
 	}
@@ -1882,6 +1952,843 @@ HmiSqlManager.prototype.dropTable = function(call, args, done)
 	this.exec(call, to.connection, 'DROP TABLE ' + HmiSql.quoteColumn(to.table), [], done);
 };
 
+// ------------------------------------------- statements a script builds
+
+/**
+ * SQLSetStatement(ConnectionID, SQLStatement) starts the statement buffer the
+ * connection carries, and SQLAppendStatement(ConnectionID, SQLStatement)
+ * continues it. There is one buffer per connection.
+ *
+ * Nothing is put between the pieces: a statement is as often continued in the
+ * middle of a name or a quoted value as between words, so the spaces are the
+ * script's to place.
+ */
+HmiSqlManager.prototype.setStatement = function(call, id, text, append)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	var next = (append ? (connection.statement || '') : '') +
+		('' + (text == null ? '' : text));
+
+	if (next.length > HmiSql.MAX_STATEMENT)
+	{
+		return this.fail(call, HmiSql.CODES.OUT_OF_MEMORY,
+			'A statement may be up to ' + HmiSql.MAX_STATEMENT + ' characters long.');
+	}
+
+	connection.statement = next;
+
+	return HmiSql.CODES.OK;
+};
+
+/**
+ * SQLLoadStatement(ConnectionID, QueryName): the statement buffer from one of
+ * the project's named queries.
+ *
+ * A query lives in the project rather than in a file beside the application:
+ * a path names one machine's disk, and a published application runs on
+ * another PC under another account. The Queries tab of the Database dialog is
+ * where the statement is written, and it travels with the project.
+ */
+HmiSqlManager.prototype.loadStatement = function(call, id, which)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	var name = '' + (which == null ? '' : which);
+	var query = HmiSql.query(this.project, name);
+
+	if (query == null)
+	{
+		return this.fail(call, HmiSql.CODES.NO_QUERY,
+			'There is no query named "' + name + '".');
+	}
+
+	connection.statement = '' + (query.sql || '');
+
+	return HmiSql.CODES.OK;
+};
+
+/** How many statements this Run holds prepared. */
+HmiSqlManager.prototype.countStatements = function()
+{
+	var n = 0;
+
+	for (var id in this.statements)
+	{
+		n++;
+	}
+
+	return n;
+};
+
+/** Everything a connection had prepared goes when the connection does. */
+HmiSqlManager.prototype.dropStatements = function(connectionId)
+{
+	for (var id in this.statements)
+	{
+		if (this.statements[id].connectionId === connectionId)
+		{
+			delete this.statements[id];
+		}
+	}
+};
+
+/**
+ * A statement number for this Run, with the number of parameters the
+ * statement wants. The numbers count up and are not used again, as the
+ * connection numbers do.
+ */
+HmiSqlManager.prototype.newStatement = function(call, connection, sql, kind, bindList)
+{
+	if (this.countStatements() >= HmiSql.MAX_STATEMENTS)
+	{
+		return {code: this.fail(call, HmiSql.CODES.OUT_OF_MEMORY,
+			'More than ' + HmiSql.MAX_STATEMENTS + ' statements are prepared at once. ' +
+			'SQLClearStatement and SQLInsertEnd let one go.')};
+	}
+
+	var count = HmiSql.countPlaceholders(sql);
+
+	if (count > HmiSql.MAX_PARAMS)
+	{
+		return {code: this.fail(call, HmiSql.CODES.INVALID_PARAM_ID,
+			'A statement may have up to ' + HmiSql.MAX_PARAMS + ' parameters; this one has ' +
+			count + '.')};
+	}
+
+	var statement = {id: this.nextStatement++, connectionId: connection.id, sql: sql,
+		kind: kind, bindList: bindList || '', count: count, params: {}, executed: false};
+	this.statements[statement.id] = statement;
+
+	return {statement: statement};
+};
+
+/**
+ * SQLPrepareStatement(ConnectionID, StatementID): the buffer becomes a
+ * statement with a number of its own, so its parameters can be set and it can
+ * be run more than once. The number goes into the named tag, as the
+ * connection number does.
+ *
+ * Nothing is sent to the database here. Every execution travels as a
+ * parameterized statement, which is the form the driver itself prepares;
+ * what this call provides is the identity the SQLSetParam* family addresses,
+ * and the parameter count to check what it is given against.
+ */
+HmiSqlManager.prototype.prepareStatement = function(call, id, tagName)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	var sql = (connection.statement || '').trim();
+
+	if (sql === '')
+	{
+		return this.fail(call, HmiSql.CODES.EMPTY_STATEMENT,
+			'SQLPrepareStatement needs a statement: SQLSetStatement or SQLLoadStatement makes one.');
+	}
+
+	var made = this.newStatement(call, connection, sql, 'statement', '');
+
+	if (made.statement == null)
+	{
+		return made.code;
+	}
+
+	this.writeTag(tagName, made.statement.id);
+
+	return HmiSql.CODES.OK;
+};
+
+/**
+ * A prepared statement by its number, or the failure that stops the call.
+ * `kind` asks for one sort of statement: an insert prepared by
+ * SQLInsertPrepare takes its values from its bind list, so the parameter
+ * family has nothing to say to it, and SQLExecute does not run it.
+ */
+HmiSqlManager.prototype.statementOf = function(call, which, name, kind)
+{
+	var n = Math.round(Number(which));
+	var statement = (isFinite(n) && n > 0) ? this.statements[n] : null;
+
+	if (statement == null)
+	{
+		return {code: this.fail(call, HmiSql.CODES.NO_STATEMENT,
+			name + ' needs the statement number its prepare call gave it.')};
+	}
+
+	if (kind != null && statement.kind !== kind)
+	{
+		return {code: this.fail(call, HmiSql.CODES.INVALID_STATEMENT_TYPE,
+			(statement.kind === 'insert') ?
+			'Statement ' + statement.id + ' is an insert prepared with SQLInsertPrepare: ' +
+			'SQLInsertExecute runs it, from the values of its bind list.' :
+			'Statement ' + statement.id + ' is not an insert prepared with SQLInsertPrepare.')};
+	}
+
+	return {statement: statement};
+};
+
+/**
+ * The SQLSetParam* family: SQLSetParamChar(StatementID, ParameterNumber,
+ * Value[, MaxLength]) and its relatives, filling in the ? marks of a prepared
+ * statement one at a time.
+ *
+ * A parameter keeps the type it was first given. The statement was prepared
+ * for a shape, and a column that took a number last time round does not want
+ * text this time; SQLClearParam forgets a parameter, so a different type may
+ * then be set. Character values are the exception and concatenate, which is
+ * how a value longer than a script's own text handling is assembled.
+ */
+HmiSqlManager.prototype.setParam = function(call, name, args)
+{
+	var found = this.statementOf(call, args[0], name, 'statement');
+
+	if (found.statement == null)
+	{
+		return found.code;
+	}
+
+	var statement = found.statement;
+	var number = this.paramNumber(call, statement, args[1], name);
+
+	if (number < 0)
+	{
+		return HmiSql.CODES.INVALID_PARAM_ID;
+	}
+
+	var made = this.paramOfCall(call, name, args);
+
+	if (made.param == null)
+	{
+		return made.code;
+	}
+
+	var param = made.param;
+	var already = statement.params[number];
+
+	// Once the statement has run, setting a parameter again starts its value
+	// afresh: a loop running a prepared statement a row at a time sets the
+	// same parameters each pass, and adding to what the last pass used is
+	// nobody's intention
+	var afterRun = statement.executed;
+
+	// A statement that has run can be run again with other values, but a
+	// parameter it never had cannot appear now: the marks are in the
+	// statement, and the number of them does not change
+	if (already == null && statement.executed)
+	{
+		return this.fail(call, HmiSql.CODES.PARAM_AFTER_EXECUTE,
+			'Parameter ' + number + ' was not set before statement ' + statement.id +
+			' ran, so it cannot be added now.');
+	}
+
+	if (already != null && already.type !== param.type)
+	{
+		return this.fail(call, HmiSql.CODES.PARAM_TYPE_CHANGED,
+			'Parameter ' + number + ' of statement ' + statement.id + ' was set as ' +
+			already.type + ', so it cannot now be set as ' + param.type +
+			'. SQLClearParam forgets it.');
+	}
+
+	// A character parameter set again adds to what is there, and a piece of
+	// no length adds nothing
+	if (name === 'SQLSetParamChar' && already != null && !afterRun)
+	{
+		param.value = already.value + param.value;
+	}
+
+	statement.params[number] = param;
+
+	return HmiSql.CODES.OK;
+};
+
+/** The parameter number a call names, or -1 with the failure reported. */
+HmiSqlManager.prototype.paramNumber = function(call, statement, which, name)
+{
+	var number = Math.round(Number(which));
+
+	if (!isFinite(number) || number < 1 || number > statement.count)
+	{
+		this.fail(call, HmiSql.CODES.INVALID_PARAM_ID,
+			'Statement ' + statement.id + ' has ' + statement.count + ' parameter' +
+			((statement.count === 1) ? '' : 's') + ', so ' + which + ' is not one of them.');
+
+		return -1;
+	}
+
+	return number;
+};
+
+/** The bound value one of the SQLSetParam* calls asks for. */
+HmiSqlManager.prototype.paramOfCall = function(call, name, args)
+{
+	var value = args[2];
+	var number = function(that, type)
+	{
+		var n = Number(value);
+
+		if (!isFinite(n))
+		{
+			return {code: that.fail(call, HmiSql.CODES.INVALID_DECIMAL,
+				'"' + value + '" is not a number.')};
+		}
+
+		return {param: {type: type, value: (type === 'double') ? n : Math.round(n)}};
+	};
+
+	var when = function(that, type, precision)
+	{
+		var d = HmiSql.parseDateTime(value);
+
+		if (d == null)
+		{
+			return {code: that.fail(call, HmiSql.CODES.INVALID_DATETIME,
+				'"' + value + '" is not a date or a time.')};
+		}
+
+		if (type === 'date')
+		{
+			// A date parameter carries no time of day, as the call form says
+			d = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+		}
+		else if (precision != null)
+		{
+			d = HmiSql.datePrecision(d, precision);
+		}
+
+		return {param: {type: type, value: d}};
+	};
+
+	switch (name)
+	{
+		case 'SQLSetParamChar':
+			// MaxLength told the legacy driver which of two character types
+			// to use; a bound parameter needs no such choice, so it is
+			// accepted and ignored
+			return {param: {type: 'varchar', value: '' + (value == null ? '' : value)}};
+
+		case 'SQLSetParamDate':
+			return when(this, 'date');
+
+		case 'SQLSetParamDateTime':
+			return when(this, 'datetime', args[3]);
+
+		case 'SQLSetParamTime':
+			return when(this, 'time');
+
+		case 'SQLSetParamFloat':
+			return number(this, 'double');
+
+		case 'SQLSetParamInt':
+			return number(this, 'int');
+
+		case 'SQLSetParamLong':
+			return number(this, 'long');
+
+		case 'SQLSetParamDecimal':
+			if (!isFinite(Number(value)))
+			{
+				return {code: this.fail(call, HmiSql.CODES.INVALID_DECIMAL,
+					'"' + value + '" is not a decimal number.')};
+			}
+
+			return {param: HmiSql.decimalParam(value, args[3], args[4])};
+
+		case 'SQLSetParamNull':
+			var kind = HmiSql.NULL_PARAM_TYPES[Math.round(Number(value))];
+
+			if (kind == null)
+			{
+				return {code: this.fail(call, HmiSql.CODES.INVALID_NULL_TYPE,
+					'A null parameter is 0 text, 1 a date and time, 2 a whole number, ' +
+					'3 a floating point number or 4 a decimal, not "' + value + '".')};
+			}
+
+			var nullParam = {type: 'null', nullType: kind};
+
+			if (kind === 'decimal')
+			{
+				var declared = HmiSql.decimalParam(0, args[3], args[4]);
+				nullParam.precision = declared.precision;
+				nullParam.scale = declared.scale;
+			}
+
+			return {param: nullParam};
+	}
+
+	return {code: this.fail(call, HmiSql.CODES.INTERNAL)};
+};
+
+/**
+ * SQLClearParam(StatementID, ParameterNumber): the parameter is unset, so it
+ * must be given a value again -- of whatever type this time -- before the
+ * statement runs.
+ */
+HmiSqlManager.prototype.clearParam = function(call, args)
+{
+	var found = this.statementOf(call, args[0], 'SQLClearParam', 'statement');
+
+	if (found.statement == null)
+	{
+		return found.code;
+	}
+
+	var number = this.paramNumber(call, found.statement, args[1], 'SQLClearParam');
+
+	if (number < 0)
+	{
+		return HmiSql.CODES.INVALID_PARAM_ID;
+	}
+
+	delete found.statement.params[number];
+
+	return HmiSql.CODES.OK;
+};
+
+/**
+ * SQLClearStatement(ConnectionID, StatementID): the statement and its
+ * parameters are let go. Statement 0 is the connection's own buffer, which is
+ * emptied.
+ */
+HmiSqlManager.prototype.clearStatement = function(call, id, which)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	if (Math.round(Number(which)) === 0)
+	{
+		connection.statement = '';
+
+		return HmiSql.CODES.OK;
+	}
+
+	var found = this.statementOf(call, which, 'SQLClearStatement');
+
+	if (found.statement == null)
+	{
+		return found.code;
+	}
+
+	delete this.statements[found.statement.id];
+
+	return HmiSql.CODES.OK;
+};
+
+/**
+ * The parameters of a prepared statement in the order the statement wants
+ * them, or the failure that stops it: every ? has to have been given a
+ * value.
+ */
+HmiSqlManager.prototype.paramsOf = function(call, statement)
+{
+	var params = [];
+
+	for (var i = 1; i <= statement.count; i++)
+	{
+		if (statement.params[i] == null)
+		{
+			return {code: this.fail(call, HmiSql.CODES.INVALID_PARAM_LIST,
+				'Parameter ' + i + ' of statement ' + statement.id + ' has not been set.')};
+		}
+
+		params.push(statement.params[i]);
+	}
+
+	return {params: params};
+};
+
+/**
+ * SQLExecute(ConnectionID, BindList, StatementID): runs a statement the
+ * script built. Statement 0 is the connection's buffer, run as it stands and
+ * emptied afterwards; any other number is a prepared statement, which can be
+ * run again with other parameter values.
+ *
+ * A statement that returns rows fills the results table, to be walked with
+ * SQLFirst and the rest through the bind list named here. A zero-length bind
+ * list is the documented way of saying the statement returns nothing of
+ * interest, or that its rows are not for tags; the rows are still counted by
+ * SQLNumRows.
+ *
+ * A statement that returns no rows at all -- an INSERT, or SET
+ * IDENTITY_INSERT -- leaves a selection already in hand alone, so a script
+ * can run one in the middle of walking another's rows.
+ */
+HmiSqlManager.prototype.execute = function(call, args, done)
+{
+	var that = this;
+	var connection = this.connectionOf(args[0]);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	var bindName = '' + (args[1] == null ? '' : args[1]);
+	var bindList = null;
+
+	if (bindName !== '')
+	{
+		bindList = HmiSql.bindList(this.project, bindName);
+
+		if (bindList == null)
+		{
+			done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+				'There is no bind list named "' + bindName + '".'));
+
+			return;
+		}
+	}
+
+	var which = Math.round(Number(args[2]));
+	var statement = null;
+	var sql = '';
+	var params = [];
+
+	if (!isFinite(which) || which === 0)
+	{
+		sql = (connection.statement || '').trim();
+
+		if (sql === '')
+		{
+			done(this.fail(call, HmiSql.CODES.EMPTY_STATEMENT,
+				'SQLExecute was given statement 0, and the connection has no statement in it. ' +
+				'SQLSetStatement or SQLLoadStatement makes one.'));
+
+			return;
+		}
+
+		// Parameters belong to a prepared statement: the marks of an
+		// unprepared one have nothing to fill them
+		if (HmiSql.countPlaceholders(sql) > 0)
+		{
+			done(this.fail(call, HmiSql.CODES.INVALID_PARAM_LIST,
+				'The statement has parameters in it, so it must be prepared with ' +
+				'SQLPrepareStatement and filled in before it runs.'));
+
+			return;
+		}
+	}
+	else
+	{
+		var found = this.statementOf(call, which, 'SQLExecute', 'statement');
+
+		if (found.statement == null)
+		{
+			done(found.code);
+
+			return;
+		}
+
+		statement = found.statement;
+
+		if (statement.connectionId !== connection.id)
+		{
+			done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION,
+				'Statement ' + statement.id + ' was prepared on another connection.'));
+
+			return;
+		}
+
+		var gathered = this.paramsOf(call, statement);
+
+		if (gathered.params == null)
+		{
+			done(gathered.code);
+
+			return;
+		}
+
+		sql = statement.sql;
+		params = gathered.params;
+	}
+
+	this.exec(call, connection, sql, params, done, function(res)
+	{
+		if (statement != null)
+		{
+			statement.executed = true;
+		}
+		else
+		{
+			// An unprepared statement runs once, as its call form says: the
+			// buffer is consumed, and a second SQLExecute has nothing to run
+			connection.statement = '';
+		}
+
+		if ((res.columns || []).length > 0)
+		{
+			connection.results = {columns: res.columns, rows: res.rows || []};
+			connection.cursor = -1;
+			connection.bindList = (bindList != null) ? bindList.name : '';
+			// SQLUpdateCurrent writes back to the table a SQLSelect named,
+			// and a statement of a script's own does not name one
+			connection.table = '';
+
+			if (res.truncated)
+			{
+				that.report(call, HmiSql.message(HmiSql.CODES.TOO_MANY_ROWS) + ' (' +
+					connection.results.rows.length + ' kept).');
+			}
+		}
+
+		done(HmiSql.CODES.OK);
+	});
+};
+
+/**
+ * SQLInsertPrepare(ConnectionID, TableName, BindList, StatementID): the
+ * insert a bind list describes, built once and kept by number, so a loop
+ * writing a row per pass does not build it again each time.
+ *
+ * As with SQLPrepareStatement, nothing is sent to the database here; it is
+ * SQLInsertExecute that reads the tags and writes the row.
+ */
+HmiSqlManager.prototype.insertPrepare = function(call, args)
+{
+	var to = this.target(call, args[0], args[1], args[2], 'SQLInsertPrepare');
+
+	if (to.connection == null)
+	{
+		return to.code;
+	}
+
+	var columns = this.bindColumns(to.bindList);
+
+	if (columns.error != null)
+	{
+		return this.fail(call, columns.code, columns.error);
+	}
+
+	var marks = columns.columns.map(function() { return '?'; });
+	var sql = 'INSERT INTO ' + HmiSql.quoteColumn(to.table) + ' (' +
+		columns.columns.join(', ') + ') VALUES (' + marks.join(', ') + ')';
+	var made = this.newStatement(call, to.connection, sql, 'insert', to.bindList.name);
+
+	if (made.statement == null)
+	{
+		return made.code;
+	}
+
+	this.writeTag(args[3], made.statement.id);
+
+	return HmiSql.CODES.OK;
+};
+
+/**
+ * SQLInsertExecute(ConnectionID, BindList, StatementID): one row from the
+ * current values of the prepared insert's bind list.
+ *
+ * The columns are the ones the statement was prepared with, so the bind list
+ * named here must be that same list -- or nothing at all, which means the
+ * same thing. Another list would have other columns, and the statement
+ * cannot take them.
+ */
+HmiSqlManager.prototype.insertExecute = function(call, args, done)
+{
+	var connection = this.connectionOf(args[0]);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	var found = this.statementOf(call, args[2], 'SQLInsertExecute', 'insert');
+
+	if (found.statement == null)
+	{
+		done(found.code);
+
+		return;
+	}
+
+	var statement = found.statement;
+
+	if (statement.connectionId !== connection.id)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION,
+			'Statement ' + statement.id + ' was prepared on another connection.'));
+
+		return;
+	}
+
+	var bindName = '' + (args[1] == null ? '' : args[1]);
+
+	if (bindName !== '' && bindName.toLowerCase() !== statement.bindList.toLowerCase())
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_STATEMENT_TYPE,
+			'Statement ' + statement.id + ' was prepared for bind list "' + statement.bindList +
+			'", so it cannot insert from "' + bindName + '".'));
+
+		return;
+	}
+
+	var bindList = HmiSql.bindList(this.project, statement.bindList);
+
+	if (bindList == null)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'There is no bind list named "' + statement.bindList + '".'));
+
+		return;
+	}
+
+	var bound = this.bindParams(bindList);
+
+	if (bound.error != null)
+	{
+		done(this.fail(call, bound.code, bound.error));
+
+		return;
+	}
+
+	if (bound.columns.length !== statement.count)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_STATEMENT_TYPE,
+			'Bind list "' + bindList.name + '" no longer has the ' + statement.count +
+			' columns statement ' + statement.id + ' was prepared for.'));
+
+		return;
+	}
+
+	this.exec(call, connection, statement.sql, bound.params, done, function()
+	{
+		statement.executed = true;
+		done(HmiSql.CODES.OK);
+	});
+};
+
+/** SQLInsertEnd(ConnectionID, StatementID): the prepared insert is let go. */
+HmiSqlManager.prototype.insertEnd = function(call, id, which)
+{
+	if (this.connectionOf(id) == null)
+	{
+		return this.fail(call, HmiSql.CODES.INVALID_CONNECTION);
+	}
+
+	var found = this.statementOf(call, which, 'SQLInsertEnd', 'insert');
+
+	if (found.statement == null)
+	{
+		return found.code;
+	}
+
+	delete this.statements[found.statement.id];
+
+	return HmiSql.CODES.OK;
+};
+
+/** The columns of a bind list, with nothing read from its tags. */
+HmiSqlManager.prototype.bindColumns = function(bindList)
+{
+	var columns = [];
+	var items = bindList.items || [];
+
+	for (var i = 0; i < items.length; i++)
+	{
+		if (items[i].tag && this.project.getTag(items[i].tag) == null)
+		{
+			return {code: HmiSql.CODES.INTERNAL, error: 'Bind list "' + bindList.name +
+				'" names the tag "' + items[i].tag + '", which does not exist.'};
+		}
+
+		if (!items[i].column)
+		{
+			return {code: HmiSql.CODES.NO_BIND_LIST, error: 'Bind list "' + bindList.name +
+				'" has no column for the tag "' + items[i].tag + '".'};
+		}
+
+		columns.push(HmiSql.quoteColumn(items[i].column));
+	}
+
+	if (columns.length === 0)
+	{
+		return {code: HmiSql.CODES.NO_BIND_LIST,
+			error: 'Bind list "' + bindList.name + '" has no tags in it.'};
+	}
+
+	return {columns: columns};
+};
+
+/**
+ * SQLTransact(ConnectionID), SQLCommit(ConnectionID) and
+ * SQLRollback(ConnectionID): everything a script writes between the first and
+ * the second reaches the table together, or not at all.
+ *
+ * The state is kept here as well as in the main process, so that a script
+ * that commits twice is told what is wrong rather than getting the
+ * database's own words for it. A Run that ends with a transaction open rolls
+ * it back, because closing the connection does.
+ */
+HmiSqlManager.prototype.transact = function(call, id, what, done)
+{
+	var that = this;
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	if (what === 'begin' && connection.inTransaction)
+	{
+		done(this.fail(call, HmiSql.CODES.TRANSACTION_STATE,
+			'A transaction is already open on connection ' + connection.id +
+			': SQLCommit or SQLRollback ends it.'));
+
+		return;
+	}
+
+	if (what !== 'begin' && !connection.inTransaction)
+	{
+		done(this.fail(call, HmiSql.CODES.TRANSACTION_STATE,
+			'No transaction is open on connection ' + connection.id + ': SQLTransact starts one.'));
+
+		return;
+	}
+
+	this.request('hmiSql.' + what, {connectionId: connection.id}, function(res)
+	{
+		if (res == null || res.code !== HmiSql.CODES.OK)
+		{
+			done(that.fail(call, (res != null) ? res.code : HmiSql.CODES.INTERNAL,
+				(res != null) ? res.message : null));
+
+			return;
+		}
+
+		connection.inTransaction = (what === 'begin');
+		done(HmiSql.CODES.OK);
+	},
+	function(e)
+	{
+		done(that.fail(call, HmiSql.CODES.PROVIDER_ERROR, e.message));
+	});
+};
+
 /** SQLNumRows: how many rows the last selection found. */
 HmiSqlManager.prototype.numRows = function(call, id)
 {
@@ -1979,6 +2886,13 @@ HmiSqlManager.prototype.end = function(call, id)
 /** Writes the row the cursor is on into the bind list's tags. */
 HmiSqlManager.prototype.fetch = function(call, connection)
 {
+	// SQLExecute may be given a zero-length bind list, which says the rows
+	// are not for tags: the cursor still moves and SQLNumRows still counts
+	if (connection.bindList === '')
+	{
+		return HmiSql.CODES.OK;
+	}
+
 	var bindList = HmiSql.bindList(this.project, connection.bindList);
 
 	if (bindList == null)
@@ -1989,6 +2903,20 @@ HmiSqlManager.prototype.fetch = function(call, connection)
 	var row = connection.results.rows[connection.cursor] || [];
 	var writes = {};
 	var nulls = 0;
+
+	// A SQLSelect builds its statement from the bind list, so the columns
+	// always line up; a statement the script wrote itself may not, and the
+	// tags past the end of the row would quietly be emptied. The rows that
+	// did come back are still worth having, so this is a note in the log
+	// rather than a refusal.
+	if ((connection.results.columns || []).length !== bindList.items.length)
+	{
+		HmiLog.once('sql:columns:' + bindList.name + ':' + connection.id,
+			'sql: ' + ((call != null) ? call + ': ' : '') + 'the statement returned ' +
+			(connection.results.columns || []).length + ' columns and bind list "' +
+			bindList.name + '" has ' + bindList.items.length + ' items, so they are not ' +
+			'all written');
+	}
 
 	for (var i = 0; i < bindList.items.length; i++)
 	{
@@ -2160,6 +3088,253 @@ HmiSql.paramOf = function(value)
 
 	return {type: 'varchar', value: '' + value};
 };
+
+// ---------------------------------------------- statements and parameters
+
+/**
+ * How long a statement a script may build, how many of them one Run may hold
+ * prepared, and how many parameters one statement may carry. The main
+ * process has its own limits; these are the friendly ones, so that a loop
+ * appending to a statement for ever is stopped with words a script can act
+ * on rather than by a rejected request.
+ */
+HmiSql.MAX_STATEMENT = 100000;
+HmiSql.MAX_STATEMENTS = 32;
+HmiSql.MAX_PARAMS = 200;
+
+/**
+ * How many parameters a statement wants: the ? marks in it, counting none of
+ * those inside a string, a quoted or bracketed name or a comment. The main
+ * process skips exactly the same places when it rewrites the marks for SQL
+ * Server, so the two counts agree.
+ */
+HmiSql.countPlaceholders = function(sql)
+{
+	var text = '' + (sql == null ? '' : sql);
+	var i = 0;
+	var found = 0;
+
+	while (i < text.length)
+	{
+		var c = text.charAt(i);
+
+		if (c === "'" || c === '"')
+		{
+			var j = i + 1;
+
+			while (j < text.length)
+			{
+				if (text.charAt(j) === c)
+				{
+					// A doubled quote is one inside the string
+					if (text.charAt(j + 1) === c)
+					{
+						j += 2;
+
+						continue;
+					}
+
+					break;
+				}
+
+				j++;
+			}
+
+			i = j + 1;
+		}
+		else if (c === '[')
+		{
+			var close = text.indexOf(']', i + 1);
+			i = (close < 0) ? text.length : close + 1;
+		}
+		else if (c === '-' && text.charAt(i + 1) === '-')
+		{
+			var line = text.indexOf('\n', i);
+			i = (line < 0) ? text.length : line;
+		}
+		else if (c === '/' && text.charAt(i + 1) === '*')
+		{
+			var end = text.indexOf('*/', i + 2);
+			i = (end < 0) ? text.length : end + 2;
+		}
+		else
+		{
+			if (c === '?')
+			{
+				found++;
+			}
+
+			i++;
+		}
+	}
+
+	return found;
+};
+
+/** A date and time as text, in the form both databases read back. */
+HmiSql.dateText = function(d)
+{
+	var pad = function(n, w)
+	{
+		var text = '' + n;
+
+		while (text.length < (w || 2))
+		{
+			text = '0' + text;
+		}
+
+		return text;
+	};
+
+	return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+		' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
+		'.' + pad(d.getMilliseconds(), 3);
+};
+
+HmiSql.DATE_TEXT = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d{1,3}))?)?\s*$/;
+HmiSql.TIME_TEXT = /^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d{1,3}))?\s*(am|pm|AM|PM)?\s*$/;
+
+/**
+ * A date and time from whatever a script has to hand: the millisecond number
+ * a .TimeDate dotfield reads, or text.
+ *
+ * Text that looks like a date is read as plant-local time, field by field,
+ * rather than handed to the browser: "2026-10-17" alone is read as UTC
+ * midnight by the ISO rules, which in a plant west of Greenwich is the day
+ * before. Anything else is left to the browser, which understands the forms
+ * an operator types ("10/17/2026 2:05 PM").
+ */
+HmiSql.parseDateTime = function(value)
+{
+	if (value instanceof Date)
+	{
+		return isFinite(value.getTime()) ? value : null;
+	}
+
+	if (typeof value === 'number')
+	{
+		return isFinite(value) ? new Date(value) : null;
+	}
+
+	var text = ('' + (value == null ? '' : value)).trim();
+
+	if (text === '')
+	{
+		return null;
+	}
+
+	var parts = HmiSql.DATE_TEXT.exec(text);
+
+	if (parts != null)
+	{
+		var d = new Date(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]),
+			Number(parts[4] || 0), Number(parts[5] || 0), Number(parts[6] || 0),
+			Number(parts[7] || 0));
+
+		return isFinite(d.getTime()) ? d : null;
+	}
+
+	var time = HmiSql.TIME_TEXT.exec(text);
+
+	if (time != null)
+	{
+		// A time alone takes the date of the computer running it, which is
+		// what a parameter set from an operator's entry wants
+		var hour = Number(time[1]) % 24;
+		var half = (time[5] || '').toLowerCase();
+
+		if (half === 'pm' && hour < 12)
+		{
+			hour += 12;
+		}
+		else if (half === 'am' && hour === 12)
+		{
+			hour = 0;
+		}
+
+		var today = new Date();
+
+		return new Date(today.getFullYear(), today.getMonth(), today.getDate(), hour,
+			Number(time[2] || 0), Number(time[3] || 0), Number(time[4] || 0));
+	}
+
+	var loose = new Date(text);
+
+	return isFinite(loose.getTime()) ? loose : null;
+};
+
+/**
+ * Where a date and time can be cut short: the end of the year, the month, the
+ * day, the hour, the minute, the second and the milliseconds in
+ * "2026-10-17 14:05:09.270".
+ */
+HmiSql.DATE_FIELDS = [4, 7, 10, 13, 16, 19, 23];
+
+/**
+ * A date and time kept to a number of characters of its text form, which is
+ * what a date-time parameter's precision asks for: 10 is the date alone, 16
+ * to the minute, 19 to the second, 23 with the milliseconds. A length that
+ * falls inside a field keeps the fields before it, so nothing is ever cut
+ * through the middle of a number.
+ */
+HmiSql.datePrecision = function(d, precision)
+{
+	var want = Math.round(Number(precision));
+
+	if (!isFinite(want) || want < 1 || want >= 23)
+	{
+		return d;
+	}
+
+	var keep = HmiSql.DATE_FIELDS[0];
+
+	for (var i = 0; i < HmiSql.DATE_FIELDS.length; i++)
+	{
+		if (HmiSql.DATE_FIELDS[i] <= want)
+		{
+			keep = HmiSql.DATE_FIELDS[i];
+		}
+	}
+
+	var full = HmiSql.dateText(d);
+	var text = full.substring(0, keep) + '0001-01-01 00:00:00.000'.substring(keep);
+
+	return HmiSql.parseDateTime(text) || d;
+};
+
+/**
+ * What a decimal parameter is declared as. Scale matters: a driver that is
+ * told nothing assumes none, and 123.456 reaches the column as 123. A
+ * statement that says nothing gets the digits its own value has.
+ */
+HmiSql.decimalParam = function(value, precision, scale)
+{
+	var n = Number(value);
+	var text = ('' + value).trim();
+	var dot = text.indexOf('.');
+	var own = (dot < 0) ? 0 : Math.min(text.length - dot - 1, 38);
+	var s = Math.round(Number(scale));
+	var p = Math.round(Number(precision));
+
+	if (!isFinite(s) || s < 0 || s > 38)
+	{
+		s = own;
+	}
+
+	if (!isFinite(p) || p < 1 || p > 38)
+	{
+		p = Math.max(18, s);
+	}
+
+	return {type: 'decimal', value: n, precision: p, scale: Math.min(s, p)};
+};
+
+/**
+ * The types a null parameter can be declared as, by the numbers the call
+ * form uses: 0 text, 1 a date and time, 2 a whole number, 3 a floating point
+ * number, 4 a decimal.
+ */
+HmiSql.NULL_PARAM_TYPES = ['varchar', 'datetime', 'int', 'double', 'decimal'];
 
 /**
  * CREATE TABLE for a table template, then one CREATE INDEX per indexed
