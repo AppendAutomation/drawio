@@ -7673,6 +7673,30 @@ HmiSelfTest.testSqlFunctions = function()
 		arity.errors[0].message.indexOf('takes 5 arguments') >= 0,
 		arity.errors.length > 0 ? arity.errors[0].message : 'no error');
 
+	// The calls that write to a table: the same rules, and the same form
+	check('sqlFn.writingCallsCompile',
+		compile('Result = SQLInsert(ConnId, "BatchLog", "BatchRow");').errors.length === 0 &&
+		compile('Result = SQLUpdate(ConnId, "BatchLog", "BatchRow", "Done = 1");').errors.length === 0 &&
+		compile('Result = SQLUpdateCurrent(ConnId);').errors.length === 0 &&
+		compile('Result = SQLDelete(ConnId, "BatchLog", "Done = 1");').errors.length === 0 &&
+		compile('Result = SQLClearTable(ConnId, "BatchLog");').errors.length === 0 &&
+		compile('Result = SQLCreateTable(ConnId, "BatchLog", "BatchLog");').errors.length === 0 &&
+		compile('Result = SQLDropTable(ConnId, "BatchLog");').errors.length === 0,
+		compile('Result = SQLInsert(ConnId, "BatchLog", "BatchRow");').errors.join(','));
+	check('sqlFn.insertArity',
+		compile('Result = SQLInsert(ConnId, "BatchLog");').errors.length > 0 &&
+		compile('Result = SQLUpdate(ConnId, "T", "BatchRow");').errors.length > 0);
+	check('sqlFn.insertIsNotAnExpression',
+		HmiExpr.compile('SQLInsert(ConnId, "BatchLog", "BatchRow")',
+			{project: project}).errors.length > 0);
+	check('sqlFn.insertRefusedInQuickFunction',
+		compile('Result = SQLInsert(ConnId, "BatchLog", "BatchRow");', 'quick').errors.length > 0);
+	// A loop over a selection updating each row is the shape S3a made possible
+	check('sqlFn.writingCallsLoop',
+		compile('Result = SQLFirst(ConnId);\nWHILE Result == 0\n' +
+			' Result = SQLUpdateCurrent(ConnId);\n Result = SQLNext(ConnId);\nENDWHILE;')
+			.errors.length === 0);
+
 	// --- the messages -------------------------------------------------
 
 	check('sqlFn.messagesCoverEveryCode', (function()
@@ -7697,9 +7721,27 @@ HmiSelfTest.testSqlFunctions = function()
 	var writes = {};
 	var errors = [];
 
-	var manager = new HmiSqlManager(project, {
-			write: function(w) { for (var k in w) { writes[k] = w[k]; } }
-		}, {
+	var hub = {
+		subscribed: [],
+		listeners: [],
+		write: function(w) { for (var k in w) { writes[k] = w[k]; } },
+		on: function(event, cb) { if (event === 'change') { this.listeners.push(cb); } },
+		off: function(event, cb)
+		{
+			var at = mxUtils.indexOf(this.listeners, cb);
+
+			if (at >= 0) { this.listeners.splice(at, 1); }
+		},
+		subscribe: function(names, rateMs) { this.subscribed = names.slice(); this.rateMs = rateMs; },
+		current: {},
+		get: function(name) { return this.current[name] || null; },
+		deliver: function(batch)
+		{
+			for (var i = 0; i < this.listeners.length; i++) { this.listeners[i](batch); }
+		}
+	};
+
+	var manager = new HmiSqlManager(project, hub, {
 			report: function(call, message) { errors.push(call + ' :: ' + message); },
 			request: function(action, args, fn, error)
 			{
@@ -7862,6 +7904,230 @@ HmiSelfTest.testSqlFunctions = function()
 	})(), '' + last);
 	check('sqlMgr.selectNeedsATable',
 		callAsync('SQLSelect', [1, '', 'BatchRow', '', '']) === HmiSql.CODES.EMPTY_STATEMENT);
+
+	// --- bind lists at run time ---------------------------------------
+	// The manager watches every bind-list tag on its own hub client, because
+	// an insert sends the tags' current values and those tags may be on no
+	// window at all.
+
+	answers.length = 0;
+	errors = [];
+
+	check('sqlBind.subscribesEveryBindListTag',
+		hub.subscribed.length === 2 &&
+		mxUtils.indexOf(hub.subscribed, 'Tank_Level') >= 0 &&
+		mxUtils.indexOf(hub.subscribed, 'Recipe_Name') >= 0 &&
+		hub.rateMs === HmiSql.BIND_RATE_MS,
+		hub.subscribed.join(',') + ' at ' + hub.rateMs);
+
+	var deliver = function(level, recipe, quality)
+	{
+		hub.deliver({
+			'Tank_Level': {value: level,
+				quality: (quality != null) ? quality : HmiTypes.QUALITY_GOOD, timestamp: 11},
+			'Recipe_Name': {value: recipe, quality: HmiTypes.QUALITY_GOOD, timestamp: 11}});
+	};
+
+	var lastSent = function() { return sent[sent.length - 1].args; };
+
+	deliver(7.5, 'Mix');
+
+	check('sqlBind.insert', callAsync('SQLInsert', [1, 'BatchLog', 'BatchRow']) === 0, '' + last);
+	check('sqlBind.insertStatement',
+		lastSent().sql === 'INSERT INTO BatchLog (Level, Recipe, InAlarm) VALUES (?, ?, ?)',
+		lastSent().sql);
+	check('sqlBind.insertSendsTheTagValues',
+		JSON.stringify(lastSent().params) ===
+		JSON.stringify([{type: 'double', value: 7.5}, {type: 'varchar', value: 'Mix'},
+			{type: 'int', value: 0}]),
+		JSON.stringify(lastSent().params));
+
+	// Bad quality is a null in the row, not a refusal: one tag of twenty may
+	// be on a link that is down, and the record still says what was known
+	delete HmiLog.seen['sql:bad:BatchRow:Tank_Level'];
+	var ringBefore = HmiLog.ring.length;
+	deliver(7.5, 'Mix', HmiTypes.QUALITY_BAD);
+	callAsync('SQLInsert', [1, 'BatchLog', 'BatchRow']);
+
+	check('sqlBind.badQualityIsWrittenAsNull',
+		JSON.stringify(lastSent().params[0]) === JSON.stringify({type: 'null', nullType: 'float'}),
+		JSON.stringify(lastSent().params[0]));
+	check('sqlBind.badQualityIsLogged',
+		HmiLog.ring.length > ringBefore &&
+		HmiLog.ring[ringBefore].msg.indexOf('bad quality') > 0,
+		HmiLog.ring.slice(ringBefore).map(function(r) { return r.msg; }).join(' | '));
+	check('sqlBind.badQualityIsNotReported', errors.length === 0, errors.join(' | '));
+
+	deliver(7.5, 'Mix');
+
+	check('sqlBind.insertNeedsATable',
+		callAsync('SQLInsert', [1, '', 'BatchRow']) === HmiSql.CODES.EMPTY_STATEMENT, '' + last);
+	check('sqlBind.insertNeedsABindList',
+		callAsync('SQLInsert', [1, 'BatchLog', 'Nope']) === HmiSql.CODES.NO_BIND_LIST, '' + last);
+
+	// --- update -------------------------------------------------------
+
+	check('sqlBind.update',
+		callAsync('SQLUpdate', [1, 'BatchLog', 'BatchRow', 'Done = 1']) === 0, '' + last);
+	check('sqlBind.updateStatement',
+		lastSent().sql === 'UPDATE BatchLog SET Level = ?, Recipe = ?, InAlarm = ? WHERE Done = 1',
+		lastSent().sql);
+	check('sqlBind.updateNeedsAWhere',
+		callAsync('SQLUpdate', [1, 'BatchLog', 'BatchRow', '  ']) === HmiSql.CODES.NO_WHERE_CLAUSE,
+		'' + last);
+	check('sqlBind.updateWhereRefusalSaysWhy',
+		errors.length > 0 && errors[errors.length - 1].indexOf('every row') > 0,
+		errors.join(' | '));
+
+	// --- deleting -----------------------------------------------------
+
+	check('sqlBind.delete', callAsync('SQLDelete', [1, 'BatchLog', 'Level > 9']) === 0, '' + last);
+	check('sqlBind.deleteStatement',
+		lastSent().sql === 'DELETE FROM BatchLog WHERE Level > 9', lastSent().sql);
+	check('sqlBind.deleteNeedsAWhere',
+		callAsync('SQLDelete', [1, 'BatchLog', '']) === HmiSql.CODES.NO_WHERE_CLAUSE, '' + last);
+	check('sqlBind.clearTable', callAsync('SQLClearTable', [1, 'BatchLog']) === 0, '' + last);
+	check('sqlBind.clearTableStatement',
+		lastSent().sql === 'DELETE FROM BatchLog', lastSent().sql);
+	check('sqlBind.dropTable', callAsync('SQLDropTable', [1, 'BatchLog']) === 0, '' + last);
+	check('sqlBind.dropTableStatement',
+		lastSent().sql === 'DROP TABLE BatchLog', lastSent().sql);
+
+	// --- a table from a template --------------------------------------
+
+	var before = sent.length;
+	check('sqlBind.createTable',
+		callAsync('SQLCreateTable', [1, 'BatchLog', 'BatchLog']) === 0, '' + last);
+	check('sqlBind.createTableStatement',
+		sent[before].args.sql === 'CREATE TABLE BatchLog (Recipe NVARCHAR(80) NOT NULL, ' +
+			'Level FLOAT, Amount DECIMAL(10, 3))',
+		sent[before].args.sql);
+	check('sqlBind.createTableIndexes',
+		sent.length === before + 2 &&
+		sent[before + 1].args.sql === 'CREATE INDEX BatchLog_Recipe_idx ON BatchLog (Recipe)',
+		(sent.length - before) + ': ' + (sent[before + 1] || {args: {}}).args.sql);
+	check('sqlBind.createTableNeedsATemplate',
+		callAsync('SQLCreateTable', [1, 'BatchLog', 'Nope']) === HmiSql.CODES.NO_TEMPLATE, '' + last);
+
+	// SQLite has no date type of its own and its types are affinities
+	var sqlite = HmiSql.tableSql('sqlite', 'BatchLog', (function()
+	{
+		var t = HmiSql.newTemplate('T');
+		t.columns.push({name: 'Stamp', type: 'datetime', length: '', scale: '',
+			index: 'unique', allowNull: false});
+		t.columns.push({name: 'Recipe', type: 'text', length: '40', scale: '', index: 'none',
+			allowNull: true});
+
+		return t;
+	})());
+
+	check('sqlBind.sqliteTypes',
+		sqlite[0] === 'CREATE TABLE BatchLog (Stamp TEXT NOT NULL, Recipe TEXT)',
+		sqlite[0]);
+	check('sqlBind.sqliteUniqueIndex',
+		sqlite[1] === 'CREATE UNIQUE INDEX BatchLog_Stamp_idx ON BatchLog (Stamp)', sqlite[1]);
+
+	// --- the row the cursor is on -------------------------------------
+
+	answers.push({code: 0, columns: [{name: 'Level'}, {name: 'Recipe'}, {name: 'InAlarm'}],
+		rows: [[1.5, 'A', 0], [2.5, null, 1]]});
+	callAsync('SQLSelect', [1, 'BatchLog', 'BatchRow', '', '']);
+
+	check('sqlBind.updateCurrentNeedsARow',
+		callAsync('SQLUpdateCurrent', [1]) === HmiSql.CODES.NO_MORE_ROWS, '' + last);
+
+	manager.call('SQLFirst', [1]);
+	deliver(9.25, 'Blend');
+	answers.push({code: 0, rowsAffected: 1});
+
+	check('sqlBind.updateCurrent', callAsync('SQLUpdateCurrent', [1]) === 0, '' + last);
+	check('sqlBind.updateCurrentStatement',
+		lastSent().sql === 'UPDATE BatchLog SET Level = ?, Recipe = ?, InAlarm = ? ' +
+			'WHERE Level = ? AND Recipe = ? AND InAlarm = ?',
+		lastSent().sql);
+	check('sqlBind.updateCurrentMatchesTheFetchedRow',
+		lastSent().params.length === 6 &&
+		JSON.stringify(lastSent().params.slice(3)) ===
+		JSON.stringify([{type: 'double', value: 1.5}, {type: 'varchar', value: 'A'},
+			{type: 'int', value: 0}]),
+		JSON.stringify(lastSent().params));
+	// The row held here follows what was written, so a second call finds it
+	check('sqlBind.updateCurrentKeepsTheLocalRowInStep',
+		JSON.stringify(manager.connections[1].results.rows[0]) ===
+		JSON.stringify([9.25, 'Blend', 0]),
+		JSON.stringify(manager.connections[1].results.rows[0]));
+
+	// A null in the fetched row is matched with IS NULL, not with a parameter
+	manager.call('SQLNext', [1]);
+	answers.push({code: 0, rowsAffected: 1});
+	callAsync('SQLUpdateCurrent', [1]);
+
+	check('sqlBind.updateCurrentMatchesANull',
+		lastSent().sql.indexOf('WHERE Level = ? AND Recipe IS NULL AND InAlarm = ?') > 0 &&
+		lastSent().params.length === 5,
+		lastSent().sql);
+
+	// The row is gone, or something else changed it: the script is told
+	manager.call('SQLFirst', [1]);
+	answers.push({code: 0, rowsAffected: 0});
+
+	check('sqlBind.updateCurrentRowGone',
+		callAsync('SQLUpdateCurrent', [1]) === HmiSql.CODES.ROW_GONE, '' + last);
+
+	manager.call('SQLEnd', [1]);
+	check('sqlBind.updateCurrentNeedsASelection',
+		callAsync('SQLUpdateCurrent', [1]) === HmiSql.CODES.NO_ROWS_SELECTED, '' + last);
+
+	// --- how a value is bound -----------------------------------------
+
+	check('sqlBind.paramTypes',
+		HmiSql.paramOf('text').type === 'varchar' &&
+		HmiSql.paramOf(5).type === 'int' &&
+		HmiSql.paramOf(5.5).type === 'double' &&
+		HmiSql.paramOf(true).value === 1 &&
+		HmiSql.paramOf(null).type === 'null' &&
+		HmiSql.paramOf(new Date(2026, 0, 2)).type === 'datetime',
+		JSON.stringify([HmiSql.paramOf(5), HmiSql.paramOf(5.5)]));
+	// A millisecond timestamp does not fit a 32-bit integer
+	check('sqlBind.bigWholeNumbersAreNotIntegers',
+		HmiSql.paramOf(1797000000000).type === 'double',
+		HmiSql.paramOf(1797000000000).type);
+	// .TimeDate stamps a date column, so it goes as a time and not as the
+	// millisecond number it is
+	check('sqlBind.timeDateIsBoundAsATime', (function()
+	{
+		var stamped = HmiSql.newBindList('Stamped');
+		stamped.items.push({tag: 'Tank_Level', field: 'TimeDate', column: 'Stamp', delim: ''});
+		project.bindLists.push(stamped);
+		hub.current['Tank_Level'] = {value: 1, quality: HmiTypes.QUALITY_GOOD,
+			timestamp: 1797000000000};
+		callAsync('SQLInsert', [1, 'BatchLog', 'Stamped']);
+		project.bindLists.pop();
+		hub.current = {};
+		var param = lastSent().params[0];
+
+		return param.type === 'datetime' && param.value instanceof Date &&
+			param.value.getTime() === 1797000000000;
+	})(), JSON.stringify(lastSent().params));
+
+	// What the driver holds wins over the last batch delivered here: a script
+	// sets its tags and inserts in the same pass
+	hub.current['Recipe_Name'] = {value: 'JustWritten', quality: HmiTypes.QUALITY_GOOD,
+		timestamp: 99};
+	deliver(1, 'Stale');
+	callAsync('SQLInsert', [1, 'BatchLog', 'BatchRow']);
+
+	check('sqlBind.insertSendsWhatWasJustWritten',
+		lastSent().params[1].value === 'JustWritten',
+		JSON.stringify(lastSent().params[1]));
+
+	hub.current = {};
+
+	check('sqlBind.columnNamesMatchThroughBrackets',
+		HmiSql.columnAt(project.bindLists[0], 'Level') === 0 &&
+		HmiSql.columnAt(project.bindLists[0], '[Recipe]') === 1 &&
+		HmiSql.columnAt(project.bindLists[0], 'Nope') < 0,
+		'' + HmiSql.columnAt(project.bindLists[0], '[Recipe]'));
 
 	// Disconnect, and the Run ending
 	check('sqlMgr.disconnect', callAsync('SQLDisconnect', [1]) === 0, '' + last);

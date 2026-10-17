@@ -730,10 +730,7 @@ HmiRuntime.prototype.readField = function(name, field)
 	var inAlarm = (this.alarms != null) ? this.alarms.isActive(tag.name) : this.inAlarm(tag.name);
 	var acked = (this.alarms != null) ? this.alarms.isAcked(tag.name) : true;
 
-	var map = {Name: tag.name, MinEU: tag.minEU, MaxEU: tag.maxEU,
-		MinRaw: tag.minRaw, MaxRaw: tag.maxRaw, EngUnits: tag.engUnits,
-		Comment: tag.comment, InAlarm: inAlarm ? 1 : 0, AlarmMostUrgentInAlarm: inAlarm ? 1 : 0,
-		Acked: acked ? 1 : 0};
+	var map = HmiTypes.describe(tag, inAlarm, acked);
 
 	if (map[field] !== undefined)
 	{

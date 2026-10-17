@@ -369,8 +369,11 @@ HmiWindowManager = function(ui, project, driver, options)
 
 	// Databases: the connections belong to the Run, not to a window, so a
 	// connection one window's script opened is the one another addresses
+	// A bind list may carry a tag's dotfields, and .InAlarm and .Acked are
+	// the alarm manager's to answer
 	this.sql = new HmiSqlManager(project, this.hub.client(), {ui: ui,
-		store: (options != null) ? options.retentiveStore : null});
+		store: (options != null) ? options.retentiveStore : null,
+		alarms: this.alarms});
 };
 
 HmiWindowManager.prototype.start = function()

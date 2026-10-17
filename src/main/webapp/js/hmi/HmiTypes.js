@@ -92,6 +92,23 @@ HmiTypes.DOTFIELDS = {
 	'InAlarm': true, 'AlarmMostUrgentInAlarm': true, 'Acked': true
 };
 
+/**
+ * What the dotfields that describe a tag, rather than carry its value, say
+ * about it. Value, Quality and TimeDate are not here: they are the reading
+ * itself, and only the caller holds that.
+ *
+ * One definition, because two places read these: a runtime (HmiRuntime's
+ * readField) and the database manager, which puts a bind list's dotfields
+ * into an insert.
+ */
+HmiTypes.describe = function(tag, inAlarm, acked)
+{
+	return {Name: tag.name, MinEU: tag.minEU, MaxEU: tag.maxEU,
+		MinRaw: tag.minRaw, MaxRaw: tag.maxRaw, EngUnits: tag.engUnits,
+		Comment: tag.comment, InAlarm: inAlarm ? 1 : 0,
+		AlarmMostUrgentInAlarm: inAlarm ? 1 : 0, Acked: acked ? 1 : 0};
+};
+
 // ------------------------------------------------------------ system tags
 // Supplied by the runtime rather than the dictionary. The names are reserved:
 // no dictionary tag may take one.

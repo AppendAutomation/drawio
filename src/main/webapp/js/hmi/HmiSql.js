@@ -277,6 +277,34 @@ HmiSql.query = function(project, name)
 	return (project != null) ? HmiSql.find(project.queries, name) : null;
 };
 
+/**
+ * Which item of a bind list writes a column, or -1. The names are compared
+ * as the database gives them back, so a bracketed column in the bind list
+ * still matches.
+ */
+HmiSql.columnAt = function(bindList, column)
+{
+	var want = HmiSql.bareColumn(column);
+	var items = (bindList != null) ? (bindList.items || []) : [];
+
+	for (var i = 0; i < items.length; i++)
+	{
+		if (HmiSql.bareColumn(items[i].column) === want)
+		{
+			return i;
+		}
+	}
+
+	return -1;
+};
+
+/** A column name without its brackets or quotes, lower case. */
+HmiSql.bareColumn = function(name)
+{
+	return ('' + (name == null ? '' : name)).trim()
+		.replace(/^[\[\"`]/, '').replace(/[\]\"`]$/, '').toLowerCase();
+};
+
 // ------------------------------------------------------------------ the rules
 
 /**
@@ -757,7 +785,8 @@ HmiSql.CODES = {
 	PROVIDER_UNAVAILABLE: -1104,
 	NO_QUERY: -1105,
 	TRANSACTION_STATE: -1106,
-	FILE_NOT_ALLOWED: -1107
+	FILE_NOT_ALLOWED: -1107,
+	ROW_GONE: -1108
 };
 
 HmiSql.MESSAGES = {
@@ -793,7 +822,8 @@ HmiSql.MESSAGES = {
 	'-1104': 'That kind of database is not supported',
 	'-1105': 'There is no query of that name',
 	'-1106': 'That does not suit the current transaction',
-	'-1107': 'A database file must be in Documents or the application data folder'
+	'-1107': 'A database file must be in Documents or the application data folder',
+	'-1108': 'The row the cursor is on is no longer in the table'
 };
 
 /**
@@ -831,10 +861,14 @@ HmiSql.message = function(code)
 
 /** Every SQL* script function this release provides. */
 HmiSql.FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect', 'SQLFirst', 'SQLNext',
-	'SQLPrev', 'SQLLast', 'SQLGetRecord', 'SQLNumRows', 'SQLEnd', 'SQLErrorMsg'];
+	'SQLPrev', 'SQLLast', 'SQLGetRecord', 'SQLNumRows', 'SQLEnd', 'SQLErrorMsg',
+	'SQLInsert', 'SQLUpdate', 'SQLUpdateCurrent', 'SQLDelete', 'SQLClearTable',
+	'SQLCreateTable', 'SQLDropTable'];
 
 /** The ones that reach a database and so pause the script. */
-HmiSql.ASYNC_FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect'];
+HmiSql.ASYNC_FUNCTIONS = ['SQLConnect', 'SQLDisconnect', 'SQLSelect',
+	'SQLInsert', 'SQLUpdate', 'SQLUpdateCurrent', 'SQLDelete', 'SQLClearTable',
+	'SQLCreateTable', 'SQLDropTable'];
 
 HmiSql.isFunction = function(name)
 {
@@ -938,9 +972,59 @@ HmiSqlManager = function(project, driver, options)
 	this.lastProviderMessage = '';
 };
 
+/**
+ * Every tag a bind list names, which is what the manager subscribes to.
+ *
+ * SQLInsert and SQLUpdate send the tags' current values, and those tags may
+ * be on no window at all -- a batch log writes points nobody is watching. The
+ * subscription is what makes the driver hold a value for them, which is where
+ * read() looks; without it an insert would find nothing to send. The recipe
+ * manager watches a book's tags for the same reason.
+ */
+HmiSqlManager.prototype.tagNames = function()
+{
+	var names = [];
+	var lists = this.project.bindLists || [];
+
+	for (var i = 0; i < lists.length; i++)
+	{
+		var items = lists[i].items || [];
+
+		for (var j = 0; j < items.length; j++)
+		{
+			var name = items[j].tag;
+
+			if (name && this.project.getTag(name) != null &&
+				mxUtils.indexOf(names, name) < 0)
+			{
+				names.push(name);
+			}
+		}
+	}
+
+	return names;
+};
+
 HmiSqlManager.prototype.start = function()
 {
+	var that = this;
 	this.running = true;
+	this.values = {};
+	this.onChange = function(batch)
+	{
+		for (var name in batch)
+		{
+			that.values[name.toLowerCase()] = batch[name];
+		}
+	};
+	this.driver.on('change', this.onChange);
+
+	var names = this.tagNames();
+
+	if (names.length > 0)
+	{
+		this.driver.subscribe(names, HmiSql.BIND_RATE_MS);
+	}
 };
 
 /** Closes every connection as the Run ends. */
@@ -948,12 +1032,130 @@ HmiSqlManager.prototype.stop = function()
 {
 	this.running = false;
 
+	if (this.onChange != null)
+	{
+		this.driver.off('change', this.onChange);
+		this.onChange = null;
+	}
+
 	for (var id in this.connections)
 	{
 		this.request('hmiSql.close', {connectionId: Number(id)}, function() {}, function() {});
 	}
 
 	this.connections = {};
+};
+
+/**
+ * A bind-list tag's current value.
+ *
+ * The driver's own value comes first, and the last batch delivered here is
+ * only the fallback. A script sets the tags and inserts in the same pass --
+ *
+ *     Batch_Recipe = "Blend A"; Res = SQLInsert(ConnId, "Log", "Row");
+ *
+ * -- and a batch arrives on the subscription's own schedule, so reading the
+ * cache first would write the values from a quarter of a second ago.
+ */
+HmiSqlManager.prototype.read = function(name)
+{
+	var v = (this.driver != null && this.driver.get != null) ?
+		this.driver.get(name) : null;
+
+	if (v == null && this.values != null)
+	{
+		v = this.values[('' + name).toLowerCase()];
+	}
+
+	return (v != null) ? v :
+		{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+};
+
+/**
+ * What one bind list item contributes: the tag's value, or what one of its
+ * dotfields says about the tag.
+ */
+HmiSqlManager.prototype.bindValue = function(tag, field)
+{
+	var live = this.read(tag.name);
+
+	if (!field || field === 'Value')
+	{
+		return live;
+	}
+
+	var good = {quality: HmiTypes.QUALITY_GOOD, timestamp: Date.now()};
+
+	// Metadata describes the point, not its current reading, so it is good
+	// quality even when the value is not
+	if (field === 'Quality')
+	{
+		return {value: live.quality, quality: good.quality, timestamp: good.timestamp};
+	}
+
+	if (field === 'TimeDate')
+	{
+		return {value: live.timestamp, quality: good.quality, timestamp: good.timestamp};
+	}
+
+	var alarms = this.options.alarms;
+	var described = HmiTypes.describe(tag,
+		(alarms != null) ? alarms.isActive(tag.name) : false,
+		(alarms != null) ? alarms.isAcked(tag.name) : true);
+
+	return (described[field] !== undefined) ?
+		{value: described[field], quality: good.quality, timestamp: good.timestamp} :
+		{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+};
+
+/**
+ * The columns and the bound values of a bind list, for an insert or the SET
+ * of an update. Values are bound as parameters, never pasted into the
+ * statement: a tag holding a quotation mark would otherwise rewrite it.
+ *
+ * @returns {Object} {columns, params} or {code, error}
+ */
+HmiSqlManager.prototype.bindParams = function(bindList)
+{
+	var columns = [];
+	var params = [];
+	var items = bindList.items || [];
+
+	for (var i = 0; i < items.length; i++)
+	{
+		var item = items[i];
+		var tag = (item.tag) ? this.project.getTag(item.tag) : null;
+
+		if (tag == null)
+		{
+			return {code: HmiSql.CODES.INTERNAL, error: 'Bind list "' + bindList.name +
+				'" names the tag "' + item.tag + '", which does not exist.'};
+		}
+
+		if (!item.column)
+		{
+			return {code: HmiSql.CODES.NO_BIND_LIST, error: 'Bind list "' + bindList.name +
+				'" has no column for the tag "' + item.tag + '".'};
+		}
+
+		var v = this.bindValue(tag, item.field);
+
+		// Bad quality is written as a null rather than stopping the insert:
+		// one tag of twenty may be on a link that is down, and a record with
+		// a null in it still says what was known. A NOT NULL column makes the
+		// database refuse it, which is the schema's decision to make.
+		if (v.quality <= HmiTypes.QUALITY_BAD)
+		{
+			HmiLog.once('sql:bad:' + bindList.name + ':' + tag.name,
+				'sql: the value of "' + tag.name + '" is bad quality, so "' +
+				item.column + '" is written as null');
+		}
+
+		columns.push(HmiSql.quoteColumn(item.column));
+		params.push(HmiSql.paramFor(tag, item.field, v));
+	}
+
+	return {columns: columns, params: params};
 };
 
 HmiSqlManager.prototype.request = function(action, args, fn, error)
@@ -1070,6 +1272,34 @@ HmiSqlManager.prototype.callAsync = function(name, args, done)
 			return;
 		case 'SQLSelect':
 			this.select(call, args, done);
+
+			return;
+		case 'SQLInsert':
+			this.insert(call, args, done);
+
+			return;
+		case 'SQLUpdate':
+			this.update(call, args, done);
+
+			return;
+		case 'SQLUpdateCurrent':
+			this.updateCurrent(call, args[0], done);
+
+			return;
+		case 'SQLDelete':
+			this.remove(call, args, done);
+
+			return;
+		case 'SQLClearTable':
+			this.clearTable(call, args, done);
+
+			return;
+		case 'SQLCreateTable':
+			this.createTable(call, args, done);
+
+			return;
+		case 'SQLDropTable':
+			this.dropTable(call, args, done);
 
 			return;
 	}
@@ -1226,6 +1456,8 @@ HmiSqlManager.prototype.select = function(call, args, done)
 			connection.results = {columns: res.columns || [], rows: res.rows || []};
 			connection.cursor = -1;
 			connection.bindList = bindList.name;
+			// SQLUpdateCurrent writes back to the table this came from
+			connection.table = table;
 
 			if (res.truncated)
 			{
@@ -1241,6 +1473,413 @@ HmiSqlManager.prototype.select = function(call, args, done)
 		{
 			done(that.fail(call, HmiSql.CODES.PROVIDER_ERROR, e.message));
 		});
+};
+
+/**
+ * Runs one statement and hands the script a result code. `then` sees the
+ * answer where "it worked" is not enough -- how many rows an update touched,
+ * say.
+ */
+HmiSqlManager.prototype.exec = function(call, connection, sql, params, done, then)
+{
+	var that = this;
+
+	this.request('hmiSql.exec', {connectionId: connection.id, sql: sql,
+		params: params || [], maxRows: HmiSql.maxRows()},
+		function(res)
+		{
+			if (res == null || res.code !== HmiSql.CODES.OK)
+			{
+				done(that.fail(call, (res != null) ? res.code : HmiSql.CODES.INTERNAL,
+					(res != null) ? res.message : null));
+
+				return;
+			}
+
+			if (then != null)
+			{
+				then(res);
+
+				return;
+			}
+
+			done(HmiSql.CODES.OK);
+		},
+		function(e)
+		{
+			done(that.fail(call, HmiSql.CODES.PROVIDER_ERROR, e.message));
+		});
+};
+
+/** Runs statements one after another, stopping at the first failure. */
+HmiSqlManager.prototype.execAll = function(call, connection, list, done)
+{
+	var that = this;
+	var at = 0;
+
+	var next = function()
+	{
+		if (at >= list.length)
+		{
+			done(HmiSql.CODES.OK);
+
+			return;
+		}
+
+		that.exec(call, connection, list[at++], [], done, function() { next(); });
+	};
+
+	next();
+};
+
+/**
+ * The connection, the table name and the bind list a statement needs, or the
+ * failure that stops it. Four of the calls begin exactly this way.
+ */
+HmiSqlManager.prototype.target = function(call, id, tableArg, bindArg, what)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		return {code: this.fail(call, HmiSql.CODES.INVALID_CONNECTION)};
+	}
+
+	var table = ('' + (tableArg == null ? '' : tableArg)).trim();
+
+	if (table === '')
+	{
+		return {code: this.fail(call, HmiSql.CODES.EMPTY_STATEMENT,
+			what + ' needs the name of a table.')};
+	}
+
+	if (bindArg === undefined)
+	{
+		return {connection: connection, table: table};
+	}
+
+	var name = '' + (bindArg == null ? '' : bindArg);
+	var bindList = HmiSql.bindList(this.project, name);
+
+	if (bindList == null)
+	{
+		return {code: this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'There is no bind list named "' + name + '".')};
+	}
+
+	return {connection: connection, table: table, bindList: bindList};
+};
+
+/**
+ * SQLInsert(ConnectionID, TableName, BindList): one new row from the current
+ * values of the bind list's tags.
+ */
+HmiSqlManager.prototype.insert = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], args[2], 'SQLInsert');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	var bound = this.bindParams(to.bindList);
+
+	if (bound.error != null)
+	{
+		done(this.fail(call, bound.code, bound.error));
+
+		return;
+	}
+
+	if (bound.columns.length === 0)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'Bind list "' + to.bindList.name + '" has no tags in it.'));
+
+		return;
+	}
+
+	var marks = bound.columns.map(function() { return '?'; });
+	var sql = 'INSERT INTO ' + HmiSql.quoteColumn(to.table) + ' (' +
+		bound.columns.join(', ') + ') VALUES (' + marks.join(', ') + ')';
+
+	this.exec(call, to.connection, sql, bound.params, done);
+};
+
+/**
+ * SQLUpdate(ConnectionID, TableName, BindList, WhereExpr): the current tag
+ * values into every row the where expression matches.
+ *
+ * An empty where expression is refused. In a statement built by hand it is a
+ * syntax error; here it would quietly rewrite every row in the table, and
+ * nothing a script can pass should do that by accident.
+ */
+HmiSqlManager.prototype.update = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], args[2], 'SQLUpdate');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	var where = ('' + (args[3] == null ? '' : args[3])).trim();
+
+	if (where === '')
+	{
+		done(this.fail(call, HmiSql.CODES.NO_WHERE_CLAUSE,
+			'SQLUpdate needs a where expression, so that it cannot change every row at once.'));
+
+		return;
+	}
+
+	var bound = this.bindParams(to.bindList);
+
+	if (bound.error != null)
+	{
+		done(this.fail(call, bound.code, bound.error));
+
+		return;
+	}
+
+	if (bound.columns.length === 0)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'Bind list "' + to.bindList.name + '" has no tags in it.'));
+
+		return;
+	}
+
+	var sets = bound.columns.map(function(column) { return column + ' = ?'; });
+	var sql = 'UPDATE ' + HmiSql.quoteColumn(to.table) + ' SET ' + sets.join(', ') +
+		' WHERE ' + where;
+
+	this.exec(call, to.connection, sql, bound.params, done);
+};
+
+/**
+ * SQLUpdateCurrent(ConnectionID): the current tag values into the row the
+ * cursor is on, in the table and through the bind list the selection used.
+ *
+ * There is no row identity to work from -- a selection is columns and values,
+ * not keys -- so the row is found again by matching every column it was
+ * fetched with. Rows identical to it are therefore updated too, and a table
+ * meant for this should carry a key column in its bind list. The local copy
+ * of the row is updated with what was written, so a second call still finds
+ * it.
+ */
+HmiSqlManager.prototype.updateCurrent = function(call, id, done)
+{
+	var connection = this.connectionOf(id);
+
+	if (connection == null)
+	{
+		done(this.fail(call, HmiSql.CODES.INVALID_CONNECTION));
+
+		return;
+	}
+
+	if (connection.results == null || !connection.table)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_ROWS_SELECTED));
+
+		return;
+	}
+
+	var row = connection.results.rows[connection.cursor];
+
+	if (row == null)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_MORE_ROWS,
+			'SQLUpdateCurrent needs the cursor to be on a row: call SQLFirst first.'));
+
+		return;
+	}
+
+	var bindList = HmiSql.bindList(this.project, connection.bindList);
+
+	if (bindList == null)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST));
+
+		return;
+	}
+
+	var bound = this.bindParams(bindList);
+
+	if (bound.error != null)
+	{
+		done(this.fail(call, bound.code, bound.error));
+
+		return;
+	}
+
+	var columns = connection.results.columns || [];
+	var tests = [];
+	var params = bound.params.slice();
+
+	for (var i = 0; i < columns.length && i < row.length; i++)
+	{
+		var column = HmiSql.quoteColumn(columns[i].name);
+
+		if (row[i] == null)
+		{
+			tests.push(column + ' IS NULL');
+		}
+		else
+		{
+			tests.push(column + ' = ?');
+			params.push(HmiSql.paramOf(row[i]));
+		}
+	}
+
+	if (tests.length === 0 || bound.columns.length === 0)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_BIND_LIST,
+			'Bind list "' + bindList.name + '" has no tags in it.'));
+
+		return;
+	}
+
+	var sets = bound.columns.map(function(column) { return column + ' = ?'; });
+	var sql = 'UPDATE ' + HmiSql.quoteColumn(connection.table) + ' SET ' +
+		sets.join(', ') + ' WHERE ' + tests.join(' AND ');
+	var that = this;
+
+	this.exec(call, connection, sql, params, done, function(res)
+	{
+		if (!(res.rowsAffected > 0))
+		{
+			done(that.fail(call, HmiSql.CODES.ROW_GONE));
+
+			return;
+		}
+
+		// Keep the row that is held here in step with the table, so walking
+		// on and coming back shows what was written
+		for (var c = 0; c < columns.length && c < row.length; c++)
+		{
+			var at = HmiSql.columnAt(bindList, columns[c].name);
+
+			if (at >= 0)
+			{
+				var param = bound.params[at];
+				row[c] = (param.type === 'null') ? null : param.value;
+			}
+		}
+
+		done(HmiSql.CODES.OK);
+	});
+};
+
+/**
+ * SQLDelete(ConnectionID, TableName, WhereExpr): the rows the where
+ * expression matches. An empty one is refused, as it is for an update:
+ * SQLClearTable is how a script empties a table deliberately.
+ */
+HmiSqlManager.prototype.remove = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], undefined, 'SQLDelete');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	var where = ('' + (args[2] == null ? '' : args[2])).trim();
+
+	if (where === '')
+	{
+		done(this.fail(call, HmiSql.CODES.NO_WHERE_CLAUSE,
+			'SQLDelete needs a where expression. SQLClearTable empties a table.'));
+
+		return;
+	}
+
+	this.exec(call, to.connection, 'DELETE FROM ' + HmiSql.quoteColumn(to.table) +
+		' WHERE ' + where, [], done);
+};
+
+/**
+ * SQLClearTable(ConnectionID, TableName): every row, and the table itself
+ * stays. DELETE rather than TRUNCATE: TRUNCATE is SQL Server's alone and it
+ * refuses a table another table refers to.
+ */
+HmiSqlManager.prototype.clearTable = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], undefined, 'SQLClearTable');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	this.exec(call, to.connection, 'DELETE FROM ' + HmiSql.quoteColumn(to.table), [], done);
+};
+
+/**
+ * SQLCreateTable(ConnectionID, TableName, TemplateName): a table shaped by
+ * one of the project's table templates, and an index for each column that
+ * asks for one.
+ */
+HmiSqlManager.prototype.createTable = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], undefined, 'SQLCreateTable');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	var name = '' + (args[2] == null ? '' : args[2]);
+	var template = HmiSql.tableTemplate(this.project, name);
+
+	if (template == null)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_TEMPLATE,
+			'There is no table template named "' + name + '".'));
+
+		return;
+	}
+
+	var columns = (template.columns || []).filter(function(c) { return !!c.name; });
+
+	if (columns.length === 0)
+	{
+		done(this.fail(call, HmiSql.CODES.NO_TEMPLATE,
+			'Table template "' + template.name + '" has no columns.'));
+
+		return;
+	}
+
+	this.execAll(call, to.connection,
+		HmiSql.tableSql(to.connection.provider, to.table, template), done);
+};
+
+/** SQLDropTable(ConnectionID, TableName). */
+HmiSqlManager.prototype.dropTable = function(call, args, done)
+{
+	var to = this.target(call, args[0], args[1], undefined, 'SQLDropTable');
+
+	if (to.connection == null)
+	{
+		done(to.code);
+
+		return;
+	}
+
+	this.exec(call, to.connection, 'DROP TABLE ' + HmiSql.quoteColumn(to.table), [], done);
 };
 
 /** SQLNumRows: how many rows the last selection found. */
@@ -1454,6 +2093,143 @@ HmiSql.coerceForTag = function(tag, value)
 HmiSql.maxRows = function()
 {
 	return HmiSql.DEFAULT_MAX_ROWS;
+};
+
+/**
+ * How often the manager's own client reads the bind lists' tags. The same
+ * rate the recipe manager uses: fast enough that an insert records what the
+ * screen was showing, slow enough to cost nothing.
+ */
+HmiSql.BIND_RATE_MS = 250;
+
+/**
+ * One bound value, typed from the value itself rather than from the column:
+ * a statement built from a bind list says nothing about the table's types,
+ * and both databases widen a number or convert text as the column needs.
+ *
+ * Bad quality and a missing value are both bound as a null. The tag's type
+ * decides what kind of null it is, which is all the driver needs.
+ */
+HmiSql.paramFor = function(tag, field, v)
+{
+	var textField = (field === 'Name' || field === 'EngUnits' || field === 'Comment');
+
+	if (v == null || v.value == null || v.quality <= HmiTypes.QUALITY_BAD)
+	{
+		return {type: 'null',
+			nullType: (textField || HmiTypes.isMessage(tag.type)) ? 'varchar' : 'float'};
+	}
+
+	// .TimeDate is when the value was read, and the column it stamps is a
+	// date one. Sent as the millisecond number it is, SQL Server answers
+	// "arithmetic overflow converting expression to data type datetime", so
+	// it goes as a time.
+	if (field === 'TimeDate' && typeof v.value === 'number' && isFinite(v.value))
+	{
+		return {type: 'datetime', value: new Date(v.value)};
+	}
+
+	return HmiSql.paramOf(v.value);
+};
+
+/** One bound value of whatever JavaScript type it arrived as. */
+HmiSql.paramOf = function(value)
+{
+	if (value == null)
+	{
+		return {type: 'null', nullType: 'varchar'};
+	}
+
+	if (value instanceof Date)
+	{
+		return {type: 'datetime', value: value};
+	}
+
+	if (typeof value === 'boolean')
+	{
+		return {type: 'int', value: (value) ? 1 : 0};
+	}
+
+	if (typeof value === 'number')
+	{
+		// A whole number that fits a 32-bit column goes as an integer; a
+		// millisecond timestamp does not, so it goes as a double
+		return (Math.floor(value) === value && Math.abs(value) <= 2147483647) ?
+			{type: 'int', value: value} : {type: 'double', value: value};
+	}
+
+	return {type: 'varchar', value: '' + value};
+};
+
+/**
+ * CREATE TABLE for a table template, then one CREATE INDEX per indexed
+ * column, in the dialect of the database the connection is to.
+ *
+ * SQLite's types are affinities rather than constraints, and it has no date
+ * type of its own: a date column is TEXT, which is the ISO 8601 convention
+ * its own date functions use.
+ */
+HmiSql.tableSql = function(provider, table, template)
+{
+	var name = HmiSql.quoteColumn(table);
+	var lines = [];
+	var indexes = [];
+	var columns = (template != null) ? (template.columns || []) : [];
+
+	for (var i = 0; i < columns.length; i++)
+	{
+		var column = columns[i];
+
+		if (!column.name)
+		{
+			continue;
+		}
+
+		lines.push(HmiSql.quoteColumn(column.name) + ' ' +
+			HmiSql.columnSql(provider, column) +
+			((column.allowNull === false) ? ' NOT NULL' : ''));
+
+		if (column.index === 'unique' || column.index === 'nonunique')
+		{
+			// The index name carries the table's, because SQLite's index
+			// names are unique across the whole database
+			indexes.push('CREATE ' + ((column.index === 'unique') ? 'UNIQUE ' : '') +
+				'INDEX ' + HmiSql.quoteColumn(table + '_' + column.name + '_idx') +
+				' ON ' + name + ' (' + HmiSql.quoteColumn(column.name) + ')');
+		}
+	}
+
+	return ['CREATE TABLE ' + name + ' (' + lines.join(', ') + ')'].concat(indexes);
+};
+
+HmiSql.columnSql = function(provider, column)
+{
+	var sqlite = (provider === 'sqlite');
+	var length = parseInt(column.length, 10);
+	var scale = parseInt(column.scale, 10);
+
+	switch (HmiSql.normalizeType(column.type))
+	{
+		case 'integer':
+			return (sqlite) ? 'INTEGER' : 'INT';
+		case 'number':
+			return (sqlite) ? 'REAL' : 'FLOAT';
+		case 'decimal':
+			return (sqlite) ? 'NUMERIC' : 'DECIMAL(' +
+				(isFinite(length) && length > 0 ? length : 18) + ', ' +
+				(isFinite(scale) && scale >= 0 ? scale : 2) + ')';
+		case 'boolean':
+			return (sqlite) ? 'INTEGER' : 'BIT';
+		case 'date':
+			return (sqlite) ? 'TEXT' : 'DATE';
+		case 'time':
+			return (sqlite) ? 'TEXT' : 'TIME';
+		case 'datetime':
+			return (sqlite) ? 'TEXT' : 'DATETIME';
+	}
+
+	return (sqlite) ? 'TEXT' : 'NVARCHAR(' +
+		(isFinite(length) && length > 0 ? length : 255) + ')';
 };
 
 /**

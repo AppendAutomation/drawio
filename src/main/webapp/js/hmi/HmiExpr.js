@@ -188,6 +188,13 @@ HmiExpr.FUNCTIONS = {
 	'SQLNumRows': {arity: 1, action: true},
 	'SQLEnd': {arity: 1, action: true},
 	'SQLErrorMsg': {arity: 1, action: true},
+	'SQLInsert': {arity: 3, action: true, async: true},
+	'SQLUpdate': {arity: 4, action: true, async: true},
+	'SQLUpdateCurrent': {arity: 1, action: true, async: true},
+	'SQLDelete': {arity: 3, action: true, async: true},
+	'SQLClearTable': {arity: 2, action: true, async: true},
+	'SQLCreateTable': {arity: 3, action: true, async: true},
+	'SQLDropTable': {arity: 2, action: true, async: true},
 
 	// Trends (HmiTrend.js), by the trend's name; TrendSetPen also takes the
 	// pen's tag name. Names are text: literals or message tags
