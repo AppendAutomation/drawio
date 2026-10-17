@@ -122,6 +122,33 @@ HmiExpr.coerceLocal = function(type, value)
 };
 
 /**
+ * A number of characters: whole, and never below zero. A count that runs past
+ * the end of the text simply stops there.
+ */
+HmiExpr.count = function(v)
+{
+	return Math.max(0, Math.trunc(HmiExpr.num(v)));
+};
+
+/**
+ * The number some text holds, or 0 when it holds none. Unlike HmiExpr.num,
+ * which refuses what is not a number, this is what StringToIntg and
+ * StringToReal are for: an operator's typing reaches them, and a script that
+ * stopped on every stray character would be unusable.
+ */
+HmiExpr.looseNum = function(v)
+{
+	if (typeof v === 'number')
+	{
+		return v;
+	}
+
+	var n = parseFloat(HmiExpr.text(v));
+
+	return (isNaN(n)) ? 0 : n;
+};
+
+/**
  * Built-in functions. Each takes already-evaluated plain values and returns a
  * plain value; quality and timestamp are combined by the caller.
  */
@@ -135,6 +162,81 @@ HmiExpr.FUNCTIONS = {
 	'Sqr': {arity: 1, fn: function(a) { return HmiExpr.num(a) * HmiExpr.num(a); }},
 	'StringLen': {arity: 1, fn: function(a) { return ('' + a).length; }},
 	'Text': {arity: 2, fn: function(a, b) { return HmiExpr.picture(HmiExpr.num(a), '' + b); }},
+
+	// Text. A character position counts from 1, as it reads on the page, and
+	// a number given where text is expected is used as it would show.
+	'StringLeft': {arity: 2, fn: function(a, b)
+	{
+		return HmiExpr.text(a).substring(0, HmiExpr.count(b));
+	}},
+	'StringRight': {arity: 2, fn: function(a, b)
+	{
+		var text = HmiExpr.text(a);
+
+		return text.substring(Math.max(0, text.length - HmiExpr.count(b)));
+	}},
+	'StringMid': {arity: 3, fn: function(a, b, c)
+	{
+		var from = Math.max(1, Math.trunc(HmiExpr.num(b))) - 1;
+
+		return HmiExpr.text(a).substring(from, from + HmiExpr.count(c));
+	}},
+	'StringTrim': {arity: 1, fn: function(a)
+	{
+		return HmiExpr.text(a).replace(/^\s+|\s+$/g, '');
+	}},
+	'StringUpper': {arity: 1, fn: function(a) { return HmiExpr.text(a).toUpperCase(); }},
+	'StringLower': {arity: 1, fn: function(a) { return HmiExpr.text(a).toLowerCase(); }},
+	// Where it starts, counting from 1, or 0 when it is not there at all
+	'StringInString': {arity: 2, fn: function(a, b)
+	{
+		return HmiExpr.text(a).indexOf(HmiExpr.text(b)) + 1;
+	}},
+	// Every occurrence, not just the first. Nothing to look for changes nothing.
+	'StringReplace': {arity: 3, fn: function(a, b, c)
+	{
+		var text = HmiExpr.text(a);
+		var find = HmiExpr.text(b);
+
+		return (find === '') ? text : text.split(find).join(HmiExpr.text(c));
+	}},
+	// StringFromIntg(255, 16) is "ff"; StringUpper around it if "FF" is wanted
+	'StringFromIntg': {minArity: 1, maxArity: 2, fn: function(a, b)
+	{
+		var base = (b == null) ? 10 : Math.trunc(HmiExpr.num(b));
+
+		if (base < 2 || base > 36)
+		{
+			throw new HmiExpr.RuntimeError('StringFromIntg: the base must be 2 to 36');
+		}
+
+		return Math.trunc(HmiExpr.num(a)).toString(base);
+	}},
+	/*
+	 * StringFromReal(value, decimals[, kind]): "f" is a plain number (the
+	 * default), "e" is exponential, and "g" is the shorter of the two with
+	 * the trailing zeros dropped, decimals counting significant digits.
+	 */
+	'StringFromReal': {minArity: 2, maxArity: 3, fn: function(a, b, c)
+	{
+		var n = HmiExpr.num(a);
+		var places = Math.min(100, HmiExpr.count(b));
+		var kind = (c == null) ? 'f' : HmiExpr.text(c).toLowerCase();
+
+		if (kind === 'e')
+		{
+			return n.toExponential(places);
+		}
+
+		if (kind === 'g')
+		{
+			return '' + parseFloat(n.toPrecision(Math.max(1, places)));
+		}
+
+		return n.toFixed(places);
+	}},
+	'StringToIntg': {arity: 1, fn: function(a) { return Math.trunc(HmiExpr.looseNum(a)); }},
+	'StringToReal': {arity: 1, fn: function(a) { return HmiExpr.looseNum(a); }},
 
 	// Actions, for scripts only: they run through the runtime (ctx.call) and
 	// have effects, so an expression re-evaluated on every change must not

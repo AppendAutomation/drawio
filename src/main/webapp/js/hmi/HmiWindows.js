@@ -401,6 +401,7 @@ HmiWindowManager.prototype.start = function()
 	this.recipes.start();
 	this.trends.start();
 	this.sql.start();
+	this.startClock();
 
 	// On start runs before the first window opens, so it can set up what the
 	// windows show
@@ -428,6 +429,7 @@ HmiWindowManager.prototype.stop = function()
 	}
 
 	this.running = false;
+	this.stopClock();
 
 	while (this.windows.length > 0)
 	{
@@ -549,6 +551,45 @@ HmiWindowManager.prototype.stopAppScripts = function()
 		});
 
 		app.stopScripts();
+	}
+};
+
+// ------------------------------------------------------------------ clock
+
+/**
+ * The date and time system tags move on their own, so once a second every
+ * window is told to re-evaluate what shows them. The values are not held
+ * anywhere: a tick only repaints, and each read works the time out afresh
+ * (HmiTypes.readClock), so a script reading _Msec gets the millisecond it
+ * asked in rather than the last tick's.
+ *
+ * A window with no clock on it marks nothing dirty, so an application that
+ * never shows the time pays a lookup a second and no repaint.
+ */
+HmiWindowManager.prototype.startClock = function()
+{
+	var that = this;
+
+	this.clockTimer = window.setInterval(function()
+	{
+		for (var i = 0; i < that.windows.length; i++)
+		{
+			var runtime = that.windows[i].runtime;
+
+			if (runtime != null && runtime.running)
+			{
+				runtime.invalidateNames(HmiTypes.CLOCK_NAMES);
+			}
+		}
+	}, 1000);
+};
+
+HmiWindowManager.prototype.stopClock = function()
+{
+	if (this.clockTimer != null)
+	{
+		window.clearInterval(this.clockTimer);
+		this.clockTimer = null;
 	}
 };
 

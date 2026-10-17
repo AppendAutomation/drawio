@@ -3215,24 +3215,13 @@ HmiSql.countPlaceholders = function(sql)
 	return found;
 };
 
-/** A date and time as text, in the form both databases read back. */
+/**
+ * A date and time as text, in the form both databases read back -- the same
+ * text the _DateTime system tag shows, so a script can stamp a row with it.
+ */
 HmiSql.dateText = function(d)
 {
-	var pad = function(n, w)
-	{
-		var text = '' + n;
-
-		while (text.length < (w || 2))
-		{
-			text = '0' + text;
-		}
-
-		return text;
-	};
-
-	return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-		' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) +
-		'.' + pad(d.getMilliseconds(), 3);
+	return HmiTypes.stampText(d);
 };
 
 HmiSql.DATE_TEXT = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{1,2})(?::(\d{1,2}))?(?:\.(\d{1,3}))?)?\s*$/;

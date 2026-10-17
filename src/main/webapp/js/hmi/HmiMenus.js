@@ -1236,7 +1236,12 @@ HmiMenus.checkDatabase = function(project)
 			// tag exists is the only one that needs a whole project
 			if (tag !== '' && project.getTag(tag) == null)
 			{
-				at(where, 'No tag named "' + tag + '"');
+				// A system tag reads but cannot be written, and a bind list
+				// is written to as well as read, so it names dictionary tags
+				at(where, (HmiTypes.systemTag(tag) != null) ?
+					'"' + HmiTypes.systemTag(tag) + '" is a system tag; a bind list names tags ' +
+					'from the dictionary, so copy it into one first' :
+					'No tag named "' + tag + '"');
 			}
 
 			at(where, HmiMenus.columnNote(items[b].column));

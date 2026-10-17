@@ -688,13 +688,27 @@ HmiRuntime.prototype.readField = function(name, field)
 
 	if (system != null)
 	{
-		var provider = (system === '_Username' || system === '_AccessLevel') ? this.security : this.alarms;
-
-		return (provider != null && (field == null || field === 'Value')) ?
-			provider.readSystem(system) :
-			{value: (field === 'Name') ? system : null,
+		// A system tag has a name and a value and nothing else
+		if (field != null && field !== 'Value')
+		{
+			return {value: (field === 'Name') ? system : null,
 				quality: (field === 'Name') ? HmiTypes.QUALITY_GOOD : HmiTypes.QUALITY_BAD,
 				timestamp: Date.now()};
+		}
+
+		// Each one says what answers it: the alarm manager, security, or the
+		// clock, which needs nothing of the Run to read the time
+		var from = HmiTypes.SYSTEM_TAGS[system].provider;
+
+		if (from === 'clock')
+		{
+			return HmiTypes.readClock(system);
+		}
+
+		var provider = (from === 'security') ? this.security : this.alarms;
+
+		return (provider != null) ? provider.readSystem(system) :
+			{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: Date.now()};
 	}
 
 	var live = this.getValue(name);
@@ -804,6 +818,8 @@ HmiRuntime.prototype.invalidateNames = function(names)
 		names = names.concat(this.indirect.aliases(names));
 	}
 
+	var marked = 0;
+
 	for (var i = 0; i < names.length; i++)
 	{
 		var cells = this.reverseIndex[names[i]] || this.reverseIndex[('' + names[i]).toLowerCase()];
@@ -813,11 +829,17 @@ HmiRuntime.prototype.invalidateNames = function(names)
 			for (var j = 0; j < cells.length; j++)
 			{
 				this.markDirty(cells[j]);
+				marked++;
 			}
 		}
 	}
 
-	this.scheduleFlush();
+	// Nothing shows these names, so there is nothing to repaint: the clock
+	// calls this every second whether a screen has the time on it or not
+	if (marked > 0)
+	{
+		this.scheduleFlush();
+	}
 };
 
 HmiRuntime.prototype.markDirty = function(cellId)

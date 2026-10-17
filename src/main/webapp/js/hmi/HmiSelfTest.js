@@ -37,6 +37,8 @@ HmiSelfTest.run = function(ui)
 	try
 	{
 		HmiSelfTest.testExpressions();
+		HmiSelfTest.testStrings();
+		HmiSelfTest.testClock(ui);
 		HmiSelfTest.testSimulation();
 		HmiSelfTest.testConditionals();
 		HmiSelfTest.testLoops();
@@ -2123,6 +2125,261 @@ HmiSelfTest.testExpressions = function()
 	HmiSelfTest.check('expr.cacheInvalidatesOnEdit',
 		before.errors.length > 0 && after.errors.length === 0,
 		'before=' + before.errors.length + ' after=' + after.errors.length);
+};
+
+/**
+ * The text functions. They are pure, so they belong in an animation link as
+ * much as in a script, and they are checked here through the expression
+ * engine, which is the way a screen reaches them.
+ */
+HmiSelfTest.testStrings = function()
+{
+	var project = HmiSelfTest.sampleProject();
+	var values = {'recipe_name': {value: '  Blue Paint  ',
+		quality: HmiTypes.QUALITY_GOOD, timestamp: 1}};
+
+	var ctx = {
+		read: function(name)
+		{
+			var live = values[name.toLowerCase()];
+
+			return (live != null) ? live :
+				{value: null, quality: HmiTypes.QUALITY_BAD, timestamp: 0};
+		},
+		now: function() { return Date.now(); }
+	};
+
+	var value = function(src)
+	{
+		var compiled = HmiExpr.compile(src, {project: project});
+
+		return (compiled.errors.length > 0) ?
+			'DID NOT COMPILE: ' + compiled.errors[0].message :
+			compiled.eval(ctx).value;
+	};
+
+	var is = function(name, src, want)
+	{
+		var got = value(src);
+
+		HmiSelfTest.check(name, got === want,
+			src + ' = ' + JSON.stringify(got) + ', wanted ' + JSON.stringify(want));
+	};
+
+	is('string.left', 'StringLeft("Conveyor", 3)', 'Con');
+	is('string.leftPastTheEndStops', 'StringLeft("Con", 99)', 'Con');
+	is('string.leftOfNothing', 'StringLeft("Con", 0)', '');
+	is('string.leftOfLessThanNothing', 'StringLeft("Con", -4)', '');
+	is('string.right', 'StringRight("Conveyor", 3)', 'yor');
+	is('string.rightPastTheEndStops', 'StringRight("Con", 99)', 'Con');
+	is('string.mid', 'StringMid("Conveyor", 4, 3)', 'vey');
+	is('string.midCountsFromOne', 'StringMid("Conveyor", 1, 3)', 'Con');
+	is('string.midBeforeTheStartIsTheStart', 'StringMid("Conveyor", 0, 3)', 'Con');
+	is('string.midToTheEnd', 'StringMid("Conveyor", 6, 99)', 'yor');
+	is('string.trim', 'StringTrim(Recipe_Name)', 'Blue Paint');
+	is('string.trimKeepsTheMiddle', 'StringLen(StringTrim(Recipe_Name))', 10);
+	is('string.upper', 'StringUpper("Pump 1 ok")', 'PUMP 1 OK');
+	is('string.lower', 'StringLower(Recipe_Name)', '  blue paint  ');
+	is('string.inString', 'StringInString("Tank_Level", "_")', 5);
+	is('string.inStringFindsTheFirst', 'StringInString("a.b.c", ".")', 2);
+	is('string.inStringMissingIsZero', 'StringInString("Tank", "x")', 0);
+	is('string.replaceEveryOne', 'StringReplace("a,b,c", ",", ";")', 'a;b;c');
+	is('string.replaceRemoves', 'StringReplace("1 2 3", " ", "")', '123');
+	is('string.replaceNothingToFind', 'StringReplace("abc", "", "-")', 'abc');
+	is('string.fromIntg', 'StringFromIntg(42)', '42');
+	is('string.fromIntgTruncates', 'StringFromIntg(42.9)', '42');
+	is('string.fromIntgBase16', 'StringFromIntg(255, 16)', 'ff');
+	is('string.fromIntgBase2', 'StringFromIntg(5, 2)', '101');
+	is('string.fromReal', 'StringFromReal(3.14159, 2)', '3.14');
+	is('string.fromRealPadsTheZeros', 'StringFromReal(5, 3)', '5.000');
+	is('string.fromRealNoDecimals', 'StringFromReal(3.7, 0)', '4');
+	is('string.fromRealExponential', 'StringFromReal(12345, 2, "e")', '1.23e+4');
+	is('string.fromRealGeneralDropsZeros', 'StringFromReal(1.5, 4, "g")', '1.5');
+	is('string.toIntg', 'StringToIntg("42")', 42);
+	is('string.toIntgTruncates', 'StringToIntg("42.9")', 42);
+	is('string.toIntgTakesTheNumberInFront', 'StringToIntg("12 bags")', 12);
+	is('string.toIntgOfNonsenseIsZero', 'StringToIntg("fault")', 0);
+	is('string.toReal', 'StringToReal("3.5")', 3.5);
+	is('string.toRealOfNothingIsZero', 'StringToReal("")', 0);
+
+	// A number where text is expected shows as its digits, as it does in a
+	// concatenation
+	is('string.aNumberBecomesItsDigits', 'StringLeft(1234, 2)', '12');
+
+	// Nested, the way a WHERE expression gets built
+	is('string.nested', 'StringUpper(StringMid("tank_level", 6, 5))', 'LEVEL');
+
+	// A base the digits cannot be written in is a failure, not a wrong answer
+	var badBase = HmiExpr.compile('StringFromIntg(5, 99)', {project: project}).eval(ctx);
+
+	HmiSelfTest.check('string.fromIntgRefusesABase',
+		badBase.quality === HmiTypes.QUALITY_BAD && badBase.error != null,
+		JSON.stringify(badBase));
+
+	// Quality travels through them: text from a tag on a link that is down
+	// does not become good because it was trimmed
+	values['recipe_name'].quality = HmiTypes.QUALITY_BAD;
+
+	var fromBad = HmiExpr.compile('StringTrim(Recipe_Name)', {project: project}).eval(ctx);
+
+	HmiSelfTest.check('string.qualityCarries',
+		fromBad.quality === HmiTypes.QUALITY_BAD && fromBad.value === 'Blue Paint',
+		JSON.stringify(fromBad));
+
+	values['recipe_name'].quality = HmiTypes.QUALITY_GOOD;
+
+	// In a script as well as a link, and no script needed for a link
+	var inScript = HmiExpr.compile('Recipe_Name = StringUpper(Recipe_Name);',
+		{project: project, mode: 'script'});
+
+	HmiSelfTest.check('string.inAScript', inScript.errors.length === 0,
+		(inScript.errors[0] || {}).message);
+
+	HmiSelfTest.check('string.wrongArgumentCount',
+		HmiExpr.compile('StringMid("abc", 1)', {project: project}).errors.length > 0 &&
+		HmiExpr.compile('StringUpper()', {project: project}).errors.length > 0 &&
+		HmiExpr.compile('StringFromIntg(1, 2, 3)', {project: project}).errors.length > 0);
+};
+
+/**
+ * The date and time system tags: what they read, that nothing can write
+ * them, and the once-a-second tick that repaints a screen showing one.
+ */
+HmiSelfTest.testClock = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var project = HmiSelfTest.sampleProject();
+	var when = new Date(2026, 9, 17, 14, 5, 9, 270);
+
+	check('clock.dateText', HmiTypes.dateText(when) === '2026-10-17', HmiTypes.dateText(when));
+	check('clock.timeText', HmiTypes.timeText(when) === '14:05:09', HmiTypes.timeText(when));
+	check('clock.stampText', HmiTypes.stampText(when) === '2026-10-17 14:05:09.270',
+		HmiTypes.stampText(when));
+
+	// One definition of the stamp: _DateTime is the text a date column takes
+	check('clock.stampIsTheDatabaseText', HmiSql.dateText(when) === HmiTypes.stampText(when));
+	check('clock.stampReadsBackTheSame',
+		HmiSql.parseDateTime(HmiTypes.stampText(when)).getTime() === when.getTime(),
+		HmiTypes.stampText(when));
+
+	var read = function(name) { return HmiTypes.readClock(name, when).value; };
+
+	check('clock.dateFields', read('_Year') === 2026 && read('_Month') === 10 &&
+		read('_Day') === 17, read('_Year') + '-' + read('_Month') + '-' + read('_Day'));
+	check('clock.timeFields', read('_Hour') === 14 && read('_Minute') === 5 &&
+		read('_Second') === 9 && read('_Msec') === 270,
+		read('_Hour') + ':' + read('_Minute') + ':' + read('_Second') + '.' + read('_Msec'));
+	check('clock.textFields', read('_DateString') === '2026-10-17' &&
+		read('_TimeString') === '14:05:09' && read('_DateTime') === '2026-10-17 14:05:09.270');
+	check('clock.tenNames', HmiTypes.CLOCK_NAMES.length === 10,
+		HmiTypes.CLOCK_NAMES.join(','));
+	check('clock.goodQuality',
+		HmiTypes.readClock('_Year', when).quality === HmiTypes.QUALITY_GOOD &&
+		HmiTypes.readClock('_Nonsense', when).quality === HmiTypes.QUALITY_BAD);
+
+	// Reserved, in any case, and a tag named after an object's own property
+	// is still only a tag
+	check('clock.namesAreReserved', HmiTypes.systemTag('_datetime') === '_DateTime' &&
+		HmiTypes.systemTag('_YEAR') === '_Year');
+	check('clock.inheritedPropertiesAreNotSystemTags',
+		HmiTypes.systemTag('constructor') === null &&
+		HmiTypes.systemTag('toString') === null);
+
+	check('clock.compiles',
+		HmiExpr.compile('_Year > 2000', {project: project}).errors.length === 0 &&
+		HmiExpr.compile('"at " + _TimeString', {project: project}).errors.length === 0);
+	check('clock.readOnly',
+		HmiExpr.compile('_Year = 1', {project: project, mode: 'script'}).errors.length > 0 &&
+		HmiExpr.compile('_DateString = "x"', {project: project, mode: 'script'}).errors.length > 0);
+
+	// Through a runtime: the value, the one dotfield a system tag has, and
+	// that the driver is never asked for it
+	var sim = new HmiSimulator(project);
+	var rt = new HmiRuntime({graph: ui.editor.graph, project: project, driver: sim});
+	var now = new Date();
+
+	check('clock.readField', rt.readField('_Year').value === now.getFullYear() &&
+		rt.readField('_Year').quality === HmiTypes.QUALITY_GOOD,
+		JSON.stringify(rt.readField('_Year')));
+	check('clock.nameField', rt.readField('_DateTime', 'Name').value === '_DateTime');
+	check('clock.noOtherFields',
+		rt.readField('_DateTime', 'MaxEU').quality === HmiTypes.QUALITY_BAD);
+	check('clock.evaluates', ('' + rt.evaluate('_DateString').value).length === 10 &&
+		rt.evaluate('_Hour >= 0 AND _Hour <= 23').value === true,
+		'' + rt.evaluate('_DateString').value);
+
+	// --- the tick ---------------------------------------------------------
+
+	var graph = ui.editor.graph;
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = project;
+	HmiSelfTest.resetGraph(ui);
+
+	var clockCell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 160, 30);
+	HmiProject.setCellLinks(graph, clockCell, {'valueDisplay': {kind: 'string',
+		expr: '_TimeString', format: '', prefix: '', suffix: ''}});
+
+	var shown = new HmiRuntime({graph: graph, project: project, driver: sim});
+	shown.start();
+	shown.flush();
+
+	check('clock.notSubscribedFromTheDriver',
+		mxUtils.indexOf(shown.subscriptionPaths(), '_TimeString') < 0,
+		shown.subscriptionPaths().join(','));
+
+	shown.invalidateNames(HmiTypes.CLOCK_NAMES);
+
+	check('clock.tickRepaintsWhatShowsIt', shown.dirtyCount > 0,
+		'dirty = ' + shown.dirtyCount);
+
+	shown.flush();
+	shown.stop();
+	HmiSelfTest.resetGraph(ui);
+
+	// A screen with no clock on it: a tick a second must cost it nothing
+	var plain = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 160, 30);
+	HmiProject.setCellLinks(graph, plain, {'valueDisplay': {kind: 'analog',
+		expr: 'Tank_Level', format: '0.0', prefix: '', suffix: ''}});
+
+	var quiet = new HmiRuntime({graph: graph, project: project, driver: sim});
+	quiet.start();
+	quiet.flush();
+
+	// What starting scheduled is not what the tick does
+	quiet.frame = null;
+	quiet.invalidateNames(HmiTypes.CLOCK_NAMES);
+
+	check('clock.tickRepaintsNothingElse', quiet.dirtyCount === 0 && quiet.frame == null,
+		'dirty = ' + quiet.dirtyCount);
+
+	quiet.stop();
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
+
+	// A bind list names dictionary tags, so a system tag in one is worth
+	// saying something better than "no such tag" about
+	var dbProject = HmiSelfTest.sampleProject();
+	dbProject.bindLists = [{name: 'Stamp', items: [{tag: '_DateTime', column: 'Written'}]}];
+
+	var notes = HmiMenus.checkDatabase(dbProject);
+	var explained = false;
+
+	for (var n = 0; n < notes.length; n++)
+	{
+		if (notes[n].message.indexOf('system tag') >= 0)
+		{
+			explained = true;
+		}
+	}
+
+	check('clock.systemTagInABindListIsExplained', explained, JSON.stringify(notes));
+
+	// The Run's timer, without a Run: it starts and it stops
+	var fake = {windows: []};
+	HmiWindowManager.prototype.startClock.call(fake);
+	check('clock.timerStarts', fake.clockTimer != null);
+	HmiWindowManager.prototype.stopClock.call(fake);
+	check('clock.timerStops', fake.clockTimer == null);
 };
 
 /**

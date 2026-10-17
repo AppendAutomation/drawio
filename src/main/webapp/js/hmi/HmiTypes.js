@@ -111,20 +111,54 @@ HmiTypes.describe = function(tag, inAlarm, acked)
 
 // ------------------------------------------------------------ system tags
 // Supplied by the runtime rather than the dictionary. The names are reserved:
-// no dictionary tag may take one.
+// no dictionary tag may take one. Each entry's provider says what answers it:
+// the alarm manager, security, or the clock, which needs no Run at all.
 
 HmiTypes.SYSTEM_TAGS = {
-	'_AlarmsActive': {type: 'MemoryInteger', readOnly: true,
+	'_AlarmsActive': {type: 'MemoryInteger', readOnly: true, provider: 'alarms',
 		comment: 'Number of active alarms'},
-	'_AlarmsUnacked': {type: 'MemoryInteger', readOnly: true,
+	'_AlarmsUnacked': {type: 'MemoryInteger', readOnly: true, provider: 'alarms',
 		comment: 'Number of unacknowledged alarms'},
-	'_AckAll': {type: 'MemoryDiscrete', readOnly: false,
+	'_AckAll': {type: 'MemoryDiscrete', readOnly: false, provider: 'alarms',
 		comment: 'Write 1 to acknowledge all alarms'},
-	'_Username': {type: 'MemoryMessage', readOnly: true,
+	'_Username': {type: 'MemoryMessage', readOnly: true, provider: 'security',
 		comment: 'The logged-in user, "None" when nobody is'},
-	'_AccessLevel': {type: 'MemoryInteger', readOnly: true,
-		comment: "The logged-in user's access level, 0 when nobody is"}
+	'_AccessLevel': {type: 'MemoryInteger', readOnly: true, provider: 'security',
+		comment: "The logged-in user's access level, 0 when nobody is"},
+	'_DateString': {type: 'MemoryMessage', readOnly: true, provider: 'clock',
+		comment: "Today's date, as YYYY-MM-DD"},
+	'_TimeString': {type: 'MemoryMessage', readOnly: true, provider: 'clock',
+		comment: 'The time of day, as HH:MM:SS'},
+	'_DateTime': {type: 'MemoryMessage', readOnly: true, provider: 'clock',
+		comment: 'The date and the time, as YYYY-MM-DD HH:MM:SS.mmm'},
+	'_Year': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The year, all four digits'},
+	'_Month': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The month, 1 to 12'},
+	'_Day': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The day of the month, 1 to 31'},
+	'_Hour': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The hour, 0 to 23'},
+	'_Minute': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The minute, 0 to 59'},
+	'_Second': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The second, 0 to 59'},
+	'_Msec': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
+		comment: 'The millisecond within the second, 0 to 999'}
 };
+
+/** The names by their lower-case spelling: systemTag is on every value read. */
+HmiTypes.SYSTEM_INDEX = (function()
+{
+	var index = {};
+
+	for (var key in HmiTypes.SYSTEM_TAGS)
+	{
+		index[key.toLowerCase()] = key;
+	}
+
+	return index;
+})();
 
 /** The system tag's canonical name, or null. Case-insensitive like tag names. */
 HmiTypes.systemTag = function(name)
@@ -136,15 +170,88 @@ HmiTypes.systemTag = function(name)
 
 	var lower = name.toLowerCase();
 
-	for (var key in HmiTypes.SYSTEM_TAGS)
+	// hasOwnProperty, or a tag named "constructor" would find Object's
+	return (Object.prototype.hasOwnProperty.call(HmiTypes.SYSTEM_INDEX, lower)) ?
+		HmiTypes.SYSTEM_INDEX[lower] : null;
+};
+
+// ------------------------------------------------------ the date and the time
+
+/** A date field, zero-padded to its width. */
+HmiTypes.pad = function(n, width)
+{
+	var text = '' + n;
+
+	while (text.length < (width || 2))
 	{
-		if (key.toLowerCase() === lower)
-		{
-			return key;
-		}
+		text = '0' + text;
 	}
 
-	return null;
+	return text;
+};
+
+/** The local date, as YYYY-MM-DD: the one order that reads the same anywhere. */
+HmiTypes.dateText = function(d)
+{
+	return d.getFullYear() + '-' + HmiTypes.pad(d.getMonth() + 1) + '-' + HmiTypes.pad(d.getDate());
+};
+
+/** The local time of day, as HH:MM:SS on a 24-hour clock. */
+HmiTypes.timeText = function(d)
+{
+	return HmiTypes.pad(d.getHours()) + ':' + HmiTypes.pad(d.getMinutes()) +
+		':' + HmiTypes.pad(d.getSeconds());
+};
+
+/**
+ * The local date and time, as YYYY-MM-DD HH:MM:SS.mmm. This is the text a
+ * date or datetime column takes as it stands (HmiSql.dateText is this
+ * function), so a script can stamp a row with _DateTime.
+ */
+HmiTypes.stampText = function(d)
+{
+	return HmiTypes.dateText(d) + ' ' + HmiTypes.timeText(d) +
+		'.' + HmiTypes.pad(d.getMilliseconds(), 3);
+};
+
+/**
+ * What each date and time system tag reads. The values are worked out when
+ * they are read rather than held, so a script reading _Msec gets the
+ * millisecond it asked in; the once-a-second tick (HmiWindowManager's clock)
+ * is only what makes a screen showing them repaint.
+ *
+ * Plant-local time throughout, as the rest of the application uses it: a row
+ * stamped by a script and read back by one reports the same wall clock.
+ */
+HmiTypes.CLOCK_READERS = {
+	'_DateString': function(d) { return HmiTypes.dateText(d); },
+	'_TimeString': function(d) { return HmiTypes.timeText(d); },
+	'_DateTime': function(d) { return HmiTypes.stampText(d); },
+	'_Year': function(d) { return d.getFullYear(); },
+	'_Month': function(d) { return d.getMonth() + 1; },
+	'_Day': function(d) { return d.getDate(); },
+	'_Hour': function(d) { return d.getHours(); },
+	'_Minute': function(d) { return d.getMinutes(); },
+	'_Second': function(d) { return d.getSeconds(); },
+	'_Msec': function(d) { return d.getMilliseconds(); }
+};
+
+/** The date and time tags, the names a tick re-evaluates. */
+HmiTypes.CLOCK_NAMES = Object.keys(HmiTypes.CLOCK_READERS);
+
+/** A date and time system tag's value, as the expression engine reads it. */
+HmiTypes.readClock = function(name, now)
+{
+	var reader = HmiTypes.CLOCK_READERS[name];
+
+	if (reader == null)
+	{
+		return {value: null, quality: HmiTypes.QUALITY_BAD, timestamp: Date.now()};
+	}
+
+	var when = (now != null) ? now : new Date();
+
+	return {value: reader(when), quality: HmiTypes.QUALITY_GOOD, timestamp: when.getTime()};
 };
 
 // ------------------------------------------------------- link type registry
