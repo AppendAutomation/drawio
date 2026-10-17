@@ -1216,7 +1216,16 @@ HmiExpr.Parser.prototype.asyncError = function(node, token)
 		}
 	})(node);
 
-	this.error(name + '() must be a statement or the value of an assignment', token);
+	// A database call says why it cannot sit in the middle of an expression:
+	// it waits for an answer, and the form it waits in is the one every one of
+	// them is written in anyway
+	var waits = (typeof HmiSql !== 'undefined' && HmiSql.isAsyncFunction != null &&
+		HmiSql.isAsyncFunction(name)) ?
+		'() waits for the database, so it must be a statement or the value of an ' +
+		'assignment (ResultCode = ' + name + '(...))' :
+		'() must be a statement or the value of an assignment';
+
+	this.error(name + waits, token);
 };
 
 /**

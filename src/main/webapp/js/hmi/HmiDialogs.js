@@ -6810,8 +6810,9 @@ HmiDialogs.showDatabase = function(ui)
 
 		right.appendChild(HmiDialogs.el('div', 'hmiHint',
 			'The order is the order the columns are written in. A dotfield reads something other than ' +
-			'the tag’s value, such as InAlarm. A delimiter wraps the value, for a database that ' +
-			'wants a date delimited.'));
+			'the tag’s value, such as InAlarm. A delimiter is kept for projects brought over from ' +
+			'elsewhere and changes nothing: values are sent as parameters, so none of them needs ' +
+			'wrapping or quoting.'));
 	};
 
 	var renderTemplate = function(template)

@@ -458,6 +458,16 @@ HmiSql.bindListProblem = function(list, bindList, draft)
 		{
 			return 'Every row of a bind list needs a tag.';
 		}
+
+		// A dotfield is checked here rather than in Validate alone, so the
+		// dialog refuses to save one and the command line refuses to build
+		// one: it is a rule about the name, not about the project
+		var field = '' + (items[i].field == null ? '' : items[i].field);
+
+		if (field.trim() !== '' && !HmiTypes.DOTFIELDS[field.trim()])
+		{
+			return '"' + field.trim() + '" is not one of a tag\'s fields.';
+		}
 	}
 
 	return null;
@@ -892,6 +902,40 @@ HmiSql.isFunction = function(name)
 HmiSql.isAsyncFunction = function(name)
 {
 	return mxUtils.indexOf(HmiSql.ASYNC_FUNCTIONS, name) >= 0;
+};
+
+/**
+ * Which argument of which call names one of the project's database sections,
+ * so a literal name can be checked where it is written rather than when it
+ * runs -- the way a literal window name is. `empty` marks the ones a
+ * zero-length name is an answer for: SQLExecute with no bind list says the
+ * rows it returns are not for tags.
+ */
+HmiSql.NAME_ARGS = {
+	'SQLConnect': [{at: 1, kind: 'dataSource', what: 'data source'}],
+	'SQLSelect': [{at: 2, kind: 'bindList', what: 'bind list'}],
+	'SQLInsert': [{at: 2, kind: 'bindList', what: 'bind list'}],
+	'SQLUpdate': [{at: 2, kind: 'bindList', what: 'bind list'}],
+	'SQLInsertPrepare': [{at: 2, kind: 'bindList', what: 'bind list'}],
+	'SQLInsertExecute': [{at: 1, kind: 'bindList', what: 'bind list', empty: true}],
+	'SQLExecute': [{at: 1, kind: 'bindList', what: 'bind list', empty: true}],
+	'SQLCreateTable': [{at: 2, kind: 'tableTemplate', what: 'table template'}],
+	'SQLLoadStatement': [{at: 1, kind: 'query', what: 'query'}]
+};
+
+/**
+ * Which argument of which call is a where expression. An empty one is
+ * refused at run time, because it would act on every row in the table; a
+ * literal empty one is refused at Validate.
+ */
+HmiSql.WHERE_ARGS = {'SQLUpdate': 3, 'SQLDelete': 2};
+
+/** The four sections by the kind NAME_ARGS names. */
+HmiSql.FINDERS = {
+	dataSource: HmiSql.dataSource,
+	bindList: HmiSql.bindList,
+	tableTemplate: HmiSql.tableTemplate,
+	query: HmiSql.query
 };
 
 /** How a call reads in an error message. */

@@ -999,6 +999,14 @@ HmiMenus.collectProblems = function(ui, fn)
 		}
 	}
 
+	var dbProblems = HmiMenus.checkDatabase(project);
+
+	for (var i = 0; i < dbProblems.length; i++)
+	{
+		problems.push({page: mxResources.get('hmiDatabase'), cell: null,
+			link: dbProblems[i].where, message: dbProblems[i].message});
+	}
+
 	var quickProblems = HmiMenus.checkQuickFunctions(project);
 
 	for (var i = 0; i < quickProblems.length; i++)
@@ -1056,7 +1064,13 @@ HmiMenus.collectProblems = function(ui, fn)
 	}
 };
 
-/** ShowWindow("Name") in a script, where no page has that name. */
+/**
+ * The names a script writes as text, checked against the project: the window
+ * ShowWindow names, the trend and pen a Trend call names, and the data
+ * source, bind list, table template or query a database call names. Nothing
+ * here can be caught by compiling the script, because a name in quotation
+ * marks is just text until it runs.
+ */
 HmiMenus.scriptWindowProblems = function(ui, src)
 {
 	var out = [];
@@ -1082,6 +1096,16 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 			out.push('ShowWindow: no window (page) named "' + n.args[0].value + '"');
 		}
 
+		if (n.type === 'call' && HmiSql.isFunction(n.name))
+		{
+			var sqlProblem = HmiMenus.sqlCallProblem(ui.hmiProject, n);
+
+			if (sqlProblem != null)
+			{
+				out.push(sqlProblem);
+			}
+		}
+
 		if (n.type === 'call' && HmiTrend.isFunction(n.name) && n.args.length > 0 && n.args[0].type === 'literal' &&
 			typeof n.args[0].value === 'string' && n.args[0].value.trim() !== '')
 		{
@@ -1100,6 +1124,178 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 	})(compiled.ast);
 
 	return out;
+};
+
+/**
+ * A database call's literal names checked against the project, and a where
+ * expression that would act on every row in a table.
+ */
+HmiMenus.sqlCallProblem = function(project, n)
+{
+	if (project == null)
+	{
+		return null;
+	}
+
+	var args = n.args || [];
+
+	var literal = function(at)
+	{
+		var a = args[at];
+
+		return (a != null && a.type === 'literal' && typeof a.value === 'string') ? a.value : null;
+	};
+
+	var wants = HmiSql.NAME_ARGS[n.name] || [];
+
+	for (var i = 0; i < wants.length; i++)
+	{
+		var name = literal(wants[i].at);
+
+		if (name == null)
+		{
+			continue;
+		}
+
+		if (name.trim() === '')
+		{
+			if (wants[i].empty)
+			{
+				continue;
+			}
+
+			return n.name + ': the ' + wants[i].what + ' has no name';
+		}
+
+		// A script may hand SQLConnect a connect string of its own instead of
+		// naming one of the project's data sources
+		if (wants[i].kind === 'dataSource' && name.indexOf('=') > 0)
+		{
+			continue;
+		}
+
+		if (HmiSql.FINDERS[wants[i].kind](project, name) == null)
+		{
+			return n.name + ': no ' + wants[i].what + ' named "' + name + '"';
+		}
+	}
+
+	var where = HmiSql.WHERE_ARGS[n.name];
+	var text = (where != null) ? literal(where) : null;
+
+	if (text != null && text.trim() === '')
+	{
+		return n.name + ': a where expression is needed, or every row in the table would be ' +
+			((n.name === 'SQLDelete') ? 'deleted. SQLClearTable is how a table is emptied' : 'changed');
+	}
+
+	return null;
+};
+
+/**
+ * What is wrong in the Database dialog's four sections: the rules the dialog
+ * and the command line already share, and the two things only a whole
+ * project can answer -- a bind list naming a tag or a field that does not
+ * exist, and a column name a database would quarrel with.
+ */
+HmiMenus.checkDatabase = function(project)
+{
+	var out = [];
+
+	var at = function(where, message)
+	{
+		if (message != null)
+		{
+			out.push({where: where, message: message});
+		}
+	};
+
+	var sources = project.dataSources || [];
+
+	for (var i = 0; i < sources.length; i++)
+	{
+		at('Data source "' + sources[i].name + '"',
+			HmiSql.dataSourceProblem(sources, sources[i]));
+	}
+
+	var lists = project.bindLists || [];
+
+	for (var l = 0; l < lists.length; l++)
+	{
+		var where = 'Bind list "' + lists[l].name + '"';
+		at(where, HmiSql.bindListProblem(lists, lists[l]));
+
+		var items = lists[l].items || [];
+
+		for (var b = 0; b < items.length; b++)
+		{
+			var tag = ('' + (items[b].tag == null ? '' : items[b].tag)).trim();
+
+			// The dotfield and the column name are rules HmiSql holds, so the
+			// dialog and the command line ask the same questions; whether the
+			// tag exists is the only one that needs a whole project
+			if (tag !== '' && project.getTag(tag) == null)
+			{
+				at(where, 'No tag named "' + tag + '"');
+			}
+
+			at(where, HmiMenus.columnNote(items[b].column));
+		}
+	}
+
+	var templates = project.tableTemplates || [];
+
+	for (var t = 0; t < templates.length; t++)
+	{
+		var templateWhere = 'Table template "' + templates[t].name + '"';
+		at(templateWhere, HmiSql.templateProblem(templates, templates[t]));
+
+		var columns = templates[t].columns || [];
+
+		for (var c = 0; c < columns.length; c++)
+		{
+			at(templateWhere, HmiMenus.columnNote(columns[c].name));
+		}
+	}
+
+	var queries = project.queries || [];
+
+	for (var q = 0; q < queries.length; q++)
+	{
+		at('Query "' + queries[q].name + '"', HmiSql.queryProblem(queries, queries[q]));
+	}
+
+	return out;
+};
+
+/**
+ * A column name one of the databases would quarrel with: a word it reserves,
+ * or a name that needs brackets around it. The calls that build their own
+ * statements bracket a name themselves; a where expression or a statement a
+ * script writes is the script's own to get right.
+ */
+HmiMenus.columnNote = function(name)
+{
+	var text = ('' + (name == null ? '' : name)).trim();
+
+	if (text === '')
+	{
+		return null;
+	}
+
+	if (HmiSql.isReservedColumn(text))
+	{
+		return 'The column "' + text + '" is a SQL keyword, and some databases refuse it as a ' +
+			'column name. A slightly different name avoids it';
+	}
+
+	if (HmiSql.needsBrackets(text))
+	{
+		return 'The column "' + text + '" needs square brackets around it in a where expression ' +
+			'or a statement a script writes';
+	}
+
+	return null;
 };
 
 /** A trend function's literal trend name (and TrendSetPen's pen) checked against the pages. */

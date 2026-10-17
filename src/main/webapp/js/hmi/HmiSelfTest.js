@@ -55,6 +55,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testRecipes(ui);
 		HmiSelfTest.testQuickFunctionsDialog(ui);
 		HmiSelfTest.testDatabaseDialog(ui);
+		HmiSelfTest.testSqlValidate(ui);
 		HmiSelfTest.testTrends(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testArcs(ui);
@@ -7599,6 +7600,227 @@ HmiSelfTest.testDatabaseDialog = function(ui)
 		ui.showDialog = realShow;
 		ui.hideDialog = realHide;
 		ui.hmiProject = saved;
+	}
+};
+
+/**
+ * What Validate makes of the database sections, and what a tag rename
+ * reaches: a bind list pairs a tag with a column, so the tag side is a name
+ * the project has to keep in step.
+ */
+HmiSelfTest.testSqlValidate = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var saved = ui.hmiProject;
+	var project = HmiSelfTest.sqlProject();
+	project.addTag(HmiProject.createTag('ConnId', 'MemoryInteger'));
+	project.addTag(HmiProject.createTag('Res', 'MemoryInteger'));
+	ui.hmiProject = project;
+	// A rename reaches the current page's cells as well, so it runs against
+	// an empty one: what is being checked here is the project's own holders
+	HmiSelfTest.resetGraph(ui);
+
+	try
+	{
+		// --- the four sections --------------------------------------------
+
+		var messages = function()
+		{
+			return HmiMenus.checkDatabase(ui.hmiProject).map(function(p)
+			{
+				return p.where + ' :: ' + p.message;
+			});
+		};
+
+		check('sqlCheck.aGoodProjectIsQuiet', messages().length === 0, messages().join(' | '));
+
+		// A bind list naming a tag the dictionary does not have is the one
+		// thing neither the dialog's own rules nor the file can catch
+		var list = HmiSql.bindList(project, 'BatchRow');
+		list.items[0].tag = 'Gone_Tag';
+		check('sqlCheck.unknownTag', messages().join(' | ') ===
+			'Bind list "BatchRow" :: No tag named "Gone_Tag"', messages().join(' | '));
+		list.items[0].tag = 'Tank_Level';
+
+		list.items[2].field = 'Nonsense';
+		check('sqlCheck.unknownDotfield',
+			messages().length === 1 && messages()[0].indexOf("one of a tag's fields") > 0,
+			messages().join(' | '));
+		list.items[2].field = 'InAlarm';
+
+		// A column a database would quarrel with: a keyword, or a name that
+		// has to be bracketed wherever a script writes it
+		list.items[1].column = 'Order';
+		check('sqlCheck.reservedColumn',
+			messages().length === 1 && messages()[0].indexOf('is a SQL keyword') > 0,
+			messages().join(' | '));
+		list.items[1].column = 'Valve ID';
+		check('sqlCheck.columnNeedingBrackets',
+			messages().length === 1 && messages()[0].indexOf('square brackets') > 0,
+			messages().join(' | '));
+		list.items[1].column = 'Recipe';
+		check('sqlCheck.quietAgain', messages().length === 0, messages().join(' | '));
+
+		// The rules the dialog and the command line already share are the
+		// same ones here, so an empty section is reported once
+		var template = HmiSql.tableTemplate(project, 'BatchLog');
+		var columns = template.columns;
+		template.columns = [];
+		check('sqlCheck.emptyTemplate',
+			messages().length === 1 && messages()[0].indexOf('no columns') > 0,
+			messages().join(' | '));
+		template.columns = columns;
+
+		var query = HmiSql.query(project, 'Recent');
+		var sql = query.sql;
+		query.sql = '';
+		check('sqlCheck.emptyQuery',
+			messages().length === 1 && messages()[0].indexOf('no statement') > 0,
+			messages().join(' | '));
+		query.sql = sql;
+
+		var source = HmiSql.dataSource(project, 'Plant');
+		var host = source.host;
+		source.host = '';
+		check('sqlCheck.dataSourceWithNoServer',
+			messages().length === 1 && messages()[0].indexOf('needs a server') > 0,
+			messages().join(' | '));
+		source.host = host;
+
+		var second = HmiSql.newBindList('BatchRow');
+		second.items.push({tag: 'Tank_Level', field: '', column: 'Level', delim: ''});
+		project.bindLists.push(second);
+		check('sqlCheck.twoOfTheSameName',
+			messages().join(' | ').indexOf('There are two of these named "BatchRow"') > 0,
+			messages().join(' | '));
+		project.bindLists.pop();
+
+		// --- names a script writes as text --------------------------------
+
+		var problems = function(src) { return HmiMenus.scriptWindowProblems(ui, src); };
+
+		check('sqlCheck.goodCallsAreQuiet',
+			problems('Res = SQLConnect(ConnId, "Plant");\n' +
+				'Res = SQLSelect(ConnId, "T", "BatchRow", "", "");\n' +
+				'Res = SQLCreateTable(ConnId, "T", "BatchLog");\n' +
+				'Res = SQLLoadStatement(ConnId, "Recent");\n' +
+				'Res = SQLExecute(ConnId, "", 0);').length === 0,
+			problems('Res = SQLConnect(ConnId, "Plant");').join(' | '));
+
+		check('sqlCheck.unknownDataSourceInAScript',
+			problems('Res = SQLConnect(ConnId, "Nope");').join('|') ===
+			'SQLConnect: no data source named "Nope"',
+			problems('Res = SQLConnect(ConnId, "Nope");').join('|'));
+		check('sqlCheck.aConnectStringIsNotAName',
+			problems('Res = SQLConnect(ConnId, "Data Source=x;Initial Catalog=y");').length === 0);
+		check('sqlCheck.unknownBindListInAScript',
+			problems('Res = SQLSelect(ConnId, "T", "Nope", "", "");').join('|') ===
+			'SQLSelect: no bind list named "Nope"',
+			problems('Res = SQLSelect(ConnId, "T", "Nope", "", "");').join('|'));
+		check('sqlCheck.unknownTemplateInAScript',
+			problems('Res = SQLCreateTable(ConnId, "T", "Nope");').join('|') ===
+			'SQLCreateTable: no table template named "Nope"');
+		check('sqlCheck.unknownQueryInAScript',
+			problems('Res = SQLLoadStatement(ConnId, "Nope");').join('|') ===
+			'SQLLoadStatement: no query named "Nope"');
+		check('sqlCheck.aBindListIsNeeded',
+			problems('Res = SQLInsert(ConnId, "T", "");').join('|') ===
+			'SQLInsert: the bind list has no name',
+			problems('Res = SQLInsert(ConnId, "T", "");').join('|'));
+		// SQLExecute with no bind list is an answer, not an omission: the
+		// rows it returns are not for tags
+		check('sqlCheck.executeNeedsNoBindList',
+			problems('Res = SQLExecute(ConnId, "", 0);').length === 0 &&
+			problems('Res = SQLInsertExecute(ConnId, "", 1);').length === 0);
+		check('sqlCheck.aNameFromATagIsNotChecked',
+			problems('Res = SQLSelect(ConnId, "T", Recipe_Name, "", "");').length === 0);
+
+		// An empty where expression would act on every row in the table
+		check('sqlCheck.emptyWhereOnADelete',
+			problems('Res = SQLDelete(ConnId, "T", "");').join('|').indexOf(
+				'SQLDelete: a where expression is needed') === 0 &&
+			problems('Res = SQLDelete(ConnId, "T", "");').join('|').indexOf('SQLClearTable') > 0,
+			problems('Res = SQLDelete(ConnId, "T", "");').join('|'));
+		check('sqlCheck.emptyWhereOnAnUpdate',
+			problems('Res = SQLUpdate(ConnId, "T", "BatchRow", "  ");').join('|').indexOf(
+				'every row in the table would be changed') > 0,
+			problems('Res = SQLUpdate(ConnId, "T", "BatchRow", "  ");').join('|'));
+		check('sqlCheck.aWhereFromATagIsNotChecked',
+			problems('Res = SQLUpdate(ConnId, "T", "BatchRow", Recipe_Name);').length === 0);
+
+		// --- a database call where it cannot wait -------------------------
+
+		var errs = function(src)
+		{
+			return HmiExpr.compile(src, {project: ui.hmiProject, mode: 'script'}).errors;
+		};
+
+		check('sqlCheck.midExpressionSaysWhy', (function()
+		{
+			var e = errs('IF SQLSelect(ConnId, "T", "BatchRow", "", "") == 0 THEN\n Res = 1;\nENDIF;');
+
+			return e.length > 0 && e[0].message.indexOf('waits for the database') > 0 &&
+				e[0].message.indexOf('ResultCode = SQLSelect(...)') > 0;
+		})(), errs('IF SQLSelect(ConnId, "T", "BatchRow", "", "") == 0 THEN\n Res = 1;\nENDIF;')
+			.map(function(e) { return e.message; }).join(' | '));
+		// The cursor family does not wait, so it is not spoken of that way
+		check('sqlCheck.aLocalCallIsNotADatabaseWait',
+			errs('IF SQLNumRows(ConnId) > 0 THEN\n Res = 1;\nENDIF;').length === 0);
+
+		// --- Validate puts them under Database ----------------------------
+
+		var found = null;
+		var available = HmiComms.available;
+		HmiComms.available = function() { return false; };
+		HmiSql.bindList(ui.hmiProject, 'BatchRow').items[0].tag = 'Gone_Tag';
+		HmiMenus.collectProblems(ui, function(all) { found = all; });
+		HmiSql.bindList(ui.hmiProject, 'BatchRow').items[0].tag = 'Tank_Level';
+		HmiComms.available = available;
+
+		check('sqlCheck.reportedUnderDatabase', found != null && found.some(function(x)
+		{
+			return x.page === mxResources.get('hmiDatabase') &&
+				x.link === 'Bind list "BatchRow"' && x.message.indexOf('Gone_Tag') > 0;
+		}), JSON.stringify((found || []).map(function(x) { return x.page + '/' + x.message; })));
+
+		// --- a rename reaches a bind list ---------------------------------
+
+		var sites = HmiTagRefs.findInProject(ui, 'Tank_Level');
+		check('sqlRefs.bindListIsASite', sites.some(function(s)
+		{
+			return s.path === 'bind list "BatchRow" tag';
+		}), JSON.stringify(sites.map(function(s) { return s.path; })));
+		check('sqlRefs.bothRowsCount',
+			sites.filter(function(s) { return s.path === 'bind list "BatchRow" tag'; }).length === 2,
+			'' + sites.length);
+		check('sqlRefs.theColumnIsNotASite', !sites.some(function(s)
+		{
+			return s.field === 'column' || s.field === 'delim' || s.field === 'field';
+		}), JSON.stringify(sites.map(function(s) { return s.field; })));
+
+		// What the Tag Dictionary does: the references first, then the tag
+		var result = HmiTagDialog.rewriteReferences(ui, 'Tank_Level', 'Vessel_Level');
+		var tag = project.getTag('Tank_Level');
+		delete project.tagIndex['tank_level'];
+		tag.name = 'Vessel_Level';
+		project.tagIndex['vessel_level'] = tag;
+
+		var renamed = HmiSql.bindList(ui.hmiProject, 'BatchRow');
+		check('sqlRefs.renameRewritesTheTag',
+			renamed.items[0].tag === 'Vessel_Level' && renamed.items[2].tag === 'Vessel_Level',
+			renamed.items.map(function(i) { return i.tag; }).join(','));
+		check('sqlRefs.renameLeavesTheColumnAlone',
+			renamed.items[0].column === 'Level' && renamed.items[1].column === 'Recipe',
+			renamed.items.map(function(i) { return i.column; }).join(','));
+		check('sqlRefs.renameCountsTheSites', result.project >= 2, JSON.stringify(result));
+		check('sqlRefs.renamedTagStillValidates',
+			HmiMenus.checkDatabase(ui.hmiProject).length === 0,
+			JSON.stringify(HmiMenus.checkDatabase(ui.hmiProject)));
+	}
+	finally
+	{
+		ui.hmiProject = saved;
+		HmiSelfTest.resetGraph(ui);
 	}
 };
 

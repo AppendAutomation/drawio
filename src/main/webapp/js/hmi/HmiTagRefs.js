@@ -1070,6 +1070,25 @@ HmiTagRefs.eachProjectField = function(project, fn)
 		}
 	}
 
+	// A bind list pairs a tag with a column, so the tag side is a name a
+	// rename has to reach. The column, the dotfield and the delimiter are the
+	// database's side of the pair and name nothing in the project.
+	var lists = project.bindLists || [];
+
+	for (var l = 0; l < lists.length; l++)
+	{
+		var items = lists[l].items || [];
+
+		for (var bi = 0; bi < items.length; bi++)
+		{
+			if (typeof items[bi].tag === 'string' && items[bi].tag !== '')
+			{
+				fn({holder: items[bi], field: 'tag', role: 'tag',
+					path: 'bind list "' + lists[l].name + '" tag'});
+			}
+		}
+	}
+
 	var fns = (project.quickFunctions != null) ? project.quickFunctions : [];
 
 	for (var q = 0; q < fns.length; q++)
