@@ -1983,40 +1983,84 @@ HmiRuntime.prototype.installInput = function()
 };
 
 /**
- * The object a touch lands on: the topmost one at the point that is not
- * hidden by a Visibility link. A hidden object lets the touch through to
- * what is beneath it, as on the device (a faceplate's note hidden over its
- * mode buttons must not swallow their touches).
+ * The object a touch lands on: the topmost one at the point that takes
+ * touches. An object that takes none lets the touch through to what is
+ * beneath it, as on the device, and there are two kinds:
+ *
+ *  - one hidden by a Visibility link (a faceplate's note hidden over its
+ *    mode buttons must not swallow their touches);
+ *  - one with no touch link of its own -- a label, a panel, a pipe or an
+ *    outline drawn over a button. An object that has a touch link keeps the
+ *    touch even when its Enable when or Enable link refuses it just now, so
+ *    a button the operator may not use does nothing rather than passing the
+ *    touch to whatever lies behind it.
+ *
+ * A group's child is seen through unless it carries a touch link itself, so
+ * a touch link on the group is reached: mxGraph offers a parent after its
+ * children.
  */
 HmiRuntime.prototype.touchedCell = function(me)
 {
 	var cell = me.getCell();
+
+	if (cell == null)
+	{
+		return null;
+	}
+
 	var that = this;
 
-	var hidden = function(c)
+	var through = function(c)
 	{
-		for (; c != null; c = that.graph.getModel().getParent(c))
-		{
-			var b = that.bindings[c.id];
-
-			if (b != null && b.visual.visible === false)
-			{
-				return true;
-			}
-		}
-
-		return false;
+		return that.hiddenCell(c) || !that.hasTouchLink(c);
 	};
 
-	if (cell == null || !hidden(cell))
+	if (!through(cell))
 	{
 		return cell;
 	}
 
 	return this.graph.getCellAt(me.getGraphX(), me.getGraphY(), null, true, true, function(state)
 	{
-		return hidden(state.cell);
+		return through(state.cell);
 	});
+};
+
+/** Whether the cell, or a group it is in, is hidden by a Visibility link. */
+HmiRuntime.prototype.hiddenCell = function(cell)
+{
+	for (var c = cell; c != null; c = this.graph.getModel().getParent(c))
+	{
+		var b = this.bindings[c.id];
+
+		if (b != null && b.visual.visible === false)
+		{
+			return true;
+		}
+	}
+
+	return false;
+};
+
+/** Whether the cell has a touch link, whether or not it allows a touch now. */
+HmiRuntime.prototype.hasTouchLink = function(cell)
+{
+	var binding = (cell != null) ? this.bindings[cell.id] : null;
+
+	if (binding == null)
+	{
+		return false;
+	}
+
+	for (var i = 0; i < HmiRuntime.TOUCH_LINKS.length; i++)
+	{
+		if (binding.links[HmiRuntime.TOUCH_LINKS[i]] != null)
+		{
+			return true;
+		}
+	}
+
+	return false;
 };
 
 /** The links that act on a touch. */

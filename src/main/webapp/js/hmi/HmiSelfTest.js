@@ -60,6 +60,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testSqlValidate(ui);
 		HmiSelfTest.testTrends(ui);
 		HmiSelfTest.testIndirect(ui);
+		HmiSelfTest.testTouchLayers(ui);
 		HmiSelfTest.testArcs(ui);
 		HmiSelfTest.testFlip(ui);
 		HmiSelfTest.testViews(ui);
@@ -4453,33 +4454,6 @@ HmiSelfTest.testIndirect = function(ui)
 		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}]) === 'Recipe Error' &&
 		HmiDialogs.functionErrorTitle([{call: 'RecipeLoad("A", "")'}, {call: 'LinkIndirectTag("A", "B")'}]) === 'Script Error');
 
-	// A hidden object over a button lets touches through to it
-	HmiSelfTest.resetGraph(ui);
-	var under = graph.insertVertex(graph.getDefaultParent(), null, 'button', 20, 20, 120, 40, 'html=1;');
-	HmiProject.setCellLinks(graph, under, {pushbutton: {kind: 'discrete', tag: 'Disc1', action: 'set', enableExpr: ''}});
-	var over = graph.insertVertex(graph.getDefaultParent(), null, 'note', 10, 10, 200, 60, 'html=1;');
-	HmiProject.setCellLinks(graph, over, {visibility: {expr: 'Disc1', sense: 'visible'}});
-	var trt = new HmiRuntime({graph: graph, project: p, driver: sim});
-	trt.start();
-	sim.write({Disc1: 0});
-	trt.flush();
-	var ust = graph.view.getState(under);
-	var fakeMe = {getCell: function() { return over; }, getGraphX: function() { return ust.getCenterX(); },
-		getGraphY: function() { return ust.getCenterY(); }};
-	check('touch.throughHidden', trt.touchedCell(fakeMe) === under);
-	sim.write({Disc1: 1});
-	trt.flush();
-	check('touch.visibleOnTopWins', trt.touchedCell(fakeMe) === over);
-	check('cursor.touchable', trt.isTouchable(under) && !trt.isTouchable(over));
-	trt.updateCursor({getCell: function() { return under; }, getGraphX: fakeMe.getGraphX, getGraphY: fakeMe.getGraphY});
-	check('cursor.handOverButton', graph.container.style.cursor === 'pointer');
-	trt.updateCursor({getCell: function() { return null; }, getGraphX: function() { return 5; }, getGraphY: function() { return 5; }});
-	check('cursor.arrowElsewhere', graph.container.style.cursor === 'default');
-	trt.bindings[under.id].visual.disabled = true;
-	check('cursor.disabledNotTouchable', !trt.isTouchable(under));
-	trt.bindings[under.id].visual.disabled = false;
-	trt.stop();
-
 	// Automation spec
 	var errors = [];
 	var built = HmiCli.buildProject({tags: [{name: 'P', type: 'IndirectAnalog', comment: 'pointer'},
@@ -4571,6 +4545,121 @@ HmiSelfTest.testArcs = function(ui)
 };
 
 /** Flipping a group mirrors everything in it about the group's center. */
+/**
+ * Layering: a touch lands on the topmost object that takes touches. An object
+ * over it that takes none is seen through -- one hidden by a Visibility link,
+ * and one with no touch link of its own.
+ */
+HmiSelfTest.testTouchLayers = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var p = HmiSelfTest.sampleProject();
+	p.addTag(HmiProject.createTag('Disc1', 'MemoryDiscrete'));
+	p.addTag(HmiProject.createTag('Disc2', 'MemoryDiscrete'));
+	p.addTag(HmiProject.createTag('N', 'MemoryInteger'));
+	var sim = new HmiSimulator(p);
+	sim.connect();
+
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var under = graph.insertVertex(graph.getDefaultParent(), null, 'button', 20, 20, 120, 40, 'html=1;');
+	HmiProject.setCellLinks(graph, under, {pushbutton: {kind: 'discrete', tag: 'Disc1', action: 'set', enableExpr: ''}});
+	var over = graph.insertVertex(graph.getDefaultParent(), null, 'note', 10, 10, 200, 60, 'html=1;');
+	HmiProject.setCellLinks(graph, over, {visibility: {expr: 'N > 5', sense: 'visible'}});
+	var trt = new HmiRuntime({graph: graph, project: p, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0, Disc2: 0, N: 0});
+	trt.flush();
+	var ust = graph.view.getState(under);
+	var at = function(cell, x, y)
+	{
+		return {getCell: function() { return cell; },
+			getGraphX: function() { return (x != null) ? x : ust.getCenterX(); },
+			getGraphY: function() { return (y != null) ? y : ust.getCenterY(); }};
+	};
+
+	// Hidden over the button: through to it (a faceplate's note over its buttons)
+	check('touch.throughHidden', trt.touchedCell(at(over)) === under);
+
+	// Visible, but with no touch link of its own: through to it as well
+	sim.write({N: 9});
+	trt.flush();
+	check('touch.overIsVisible', trt.bindings[over.id].visual.visible !== false);
+	check('touch.throughPlain', trt.touchedCell(at(over)) === under);
+	check('touch.hasTouchLink', trt.hasTouchLink(under) && !trt.hasTouchLink(over) &&
+		!trt.hasTouchLink(null));
+
+	// The pointing hand over the button and over what covers it, the arrow off them
+	trt.updateCursor(at(over));
+	check('cursor.handOverPlain', graph.container.style.cursor === 'pointer');
+	trt.updateCursor(at(under));
+	check('cursor.handOverButton', graph.container.style.cursor === 'pointer');
+	check('cursor.touchable', trt.isTouchable(under) && !trt.isTouchable(over));
+	trt.updateCursor(at(null, 5, 5));
+	check('cursor.arrowElsewhere', graph.container.style.cursor === 'default');
+
+	// Press and release on the object on top: the button beneath acts
+	trt.mouseListener.mouseDown(graph, at(over));
+	trt.mouseListener.mouseUp(graph, at(over));
+	check('touch.clickThroughPlain', sim.get('Disc1').value === 1,
+		JSON.stringify(sim.get('Disc1')));
+
+	// Over nothing that takes touches: nothing is touched
+	check('touch.nothingBeneath', trt.touchedCell(at(over, 195, 65)) == null);
+
+	// A button that may not be touched keeps the touch, and shows the arrow
+	trt.bindings[under.id].visual.disabled = true;
+	check('cursor.disabledNotTouchable', !trt.isTouchable(under));
+	check('touch.disabledKeepsTouch', trt.touchedCell(at(under)) === under);
+	trt.updateCursor(at(under));
+	check('cursor.arrowOverDisabled', graph.container.style.cursor === 'default');
+	trt.bindings[under.id].visual.disabled = false;
+	trt.stop();
+
+	// A touch link on top wins, and it alone acts
+	HmiProject.setCellLinks(graph, over, {pushbutton: {kind: 'discrete', tag: 'Disc2', action: 'set', enableExpr: ''}});
+	trt = new HmiRuntime({graph: graph, project: p, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0, Disc2: 0});
+	trt.flush();
+	check('touch.topTouchWins', trt.touchedCell(at(over)) === over);
+	trt.mouseListener.mouseDown(graph, at(over));
+	trt.mouseListener.mouseUp(graph, at(over));
+	check('touch.onlyTopActs', sim.get('Disc2').value === 1 && sim.get('Disc1').value === 0,
+		JSON.stringify([sim.get('Disc1'), sim.get('Disc2')]));
+	trt.stop();
+
+	// A touch link on a group is reached through the children drawn over it
+	HmiSelfTest.resetGraph(ui);
+	var grp = null, kid = null;
+	graph.getModel().beginUpdate();
+
+	try
+	{
+		grp = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 160, 80, 'group');
+		kid = graph.insertVertex(grp, null, 'face', 20, 20, 120, 40, 'html=1;');
+	}
+	finally
+	{
+		graph.getModel().endUpdate();
+	}
+
+	HmiProject.setCellLinks(graph, grp, {pushbutton: {kind: 'discrete', tag: 'Disc1', action: 'set', enableExpr: ''}});
+	var grt = new HmiRuntime({graph: graph, project: p, driver: sim});
+	grt.start();
+	sim.write({Disc1: 0});
+	grt.flush();
+	var kst = graph.view.getState(kid);
+	var onKid = {getCell: function() { return kid; }, getGraphX: function() { return kst.getCenterX(); },
+		getGraphY: function() { return kst.getCenterY(); }};
+	check('touch.throughGroupChild', grt.touchedCell(onKid) === grp);
+	grt.mouseListener.mouseDown(graph, onKid);
+	grt.mouseListener.mouseUp(graph, onKid);
+	check('touch.groupActs', sim.get('Disc1').value === 1, JSON.stringify(sim.get('Disc1')));
+	grt.stop();
+	sim.disconnect();
+};
+
 HmiSelfTest.testFlip = function(ui)
 {
 	var check = HmiSelfTest.check;
