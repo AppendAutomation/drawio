@@ -6736,7 +6736,7 @@ HmiDialogs.showDatabase = function(ui)
 		right.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Tags and columns'));
 
 		var wrap = HmiDialogs.el('div', 'hmiUserList');
-		var table = HmiDialogs.el('table', 'hmiUserTable hmiSqlTable');
+		var table = HmiDialogs.el('table', 'hmiUserTable hmiSqlTable hmiSqlBind');
 		var head = HmiDialogs.el('thead');
 		var headRow = HmiDialogs.el('tr');
 

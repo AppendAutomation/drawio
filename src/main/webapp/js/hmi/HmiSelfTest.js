@@ -8533,12 +8533,15 @@ HmiSelfTest.testSqlFunctions = function()
 	check('sqlBind.createTable',
 		callAsync('SQLCreateTable', [1, 'BatchLog', 'BatchLog']) === 0, '' + last);
 	check('sqlBind.createTableStatement',
-		sent[before].args.sql === 'CREATE TABLE BatchLog (Recipe NVARCHAR(80) NOT NULL, ' +
+		sent[before].args.sql === "IF OBJECT_ID(N'BatchLog', N'U') IS NULL " +
+			'CREATE TABLE BatchLog (Recipe NVARCHAR(80) NOT NULL, ' +
 			'Level FLOAT, Amount DECIMAL(10, 3))',
 		sent[before].args.sql);
 	check('sqlBind.createTableIndexes',
 		sent.length === before + 2 &&
-		sent[before + 1].args.sql === 'CREATE INDEX BatchLog_Recipe_idx ON BatchLog (Recipe)',
+		sent[before + 1].args.sql === "IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = " +
+			"N'BatchLog_Recipe_idx' AND object_id = OBJECT_ID(N'BatchLog')) " +
+			'CREATE INDEX BatchLog_Recipe_idx ON BatchLog (Recipe)',
 		(sent.length - before) + ': ' + (sent[before + 1] || {args: {}}).args.sql);
 	check('sqlBind.createTableNeedsATemplate',
 		callAsync('SQLCreateTable', [1, 'BatchLog', 'Nope']) === HmiSql.CODES.NO_TEMPLATE, '' + last);
@@ -8556,10 +8559,22 @@ HmiSelfTest.testSqlFunctions = function()
 	})());
 
 	check('sqlBind.sqliteTypes',
-		sqlite[0] === 'CREATE TABLE BatchLog (Stamp TEXT NOT NULL, Recipe TEXT)',
+		sqlite[0] === 'CREATE TABLE IF NOT EXISTS BatchLog (Stamp TEXT NOT NULL, Recipe TEXT)',
 		sqlite[0]);
 	check('sqlBind.sqliteUniqueIndex',
-		sqlite[1] === 'CREATE UNIQUE INDEX BatchLog_Stamp_idx ON BatchLog (Stamp)', sqlite[1]);
+		sqlite[1] === 'CREATE UNIQUE INDEX IF NOT EXISTS BatchLog_Stamp_idx ON BatchLog (Stamp)', sqlite[1]);
+
+	// Making sure of the table on every start is the call an application
+	// makes, so a table that is already there is not a failure
+	check('sqlBind.createTableIsIdempotent',
+		HmiSql.tableSql('sqlite', 'BatchLog', {columns: [{name: 'A', type: 'text'}]})[0]
+			.indexOf('IF NOT EXISTS') > 0 &&
+		HmiSql.tableSql('mssql', 'BatchLog', {columns: [{name: 'A', type: 'text'}]})[0]
+			.indexOf('IS NULL') > 0);
+	check('sqlBind.createTableQuotesTheName',
+		HmiSql.tableSql('mssql', "O'Brien", {columns: [{name: 'A', type: 'text'}]})[0] ===
+			"IF OBJECT_ID(N'[O''Brien]', N'U') IS NULL CREATE TABLE [O'Brien] (A NVARCHAR(255))",
+		HmiSql.tableSql('mssql', "O'Brien", {columns: [{name: 'A', type: 'text'}]})[0]);
 
 	// --- the row the cursor is on -------------------------------------
 

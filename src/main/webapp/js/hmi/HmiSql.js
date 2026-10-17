@@ -1943,7 +1943,8 @@ HmiSqlManager.prototype.clearTable = function(call, args, done)
 /**
  * SQLCreateTable(ConnectionID, TableName, TemplateName): a table shaped by
  * one of the project's table templates, and an index for each column that
- * asks for one.
+ * asks for one. A table that is already there is left as it is, so an
+ * application can make sure of its table on every start.
  */
 HmiSqlManager.prototype.createTable = function(call, args, done)
 {
@@ -3376,9 +3377,16 @@ HmiSql.NULL_PARAM_TYPES = ['varchar', 'datetime', 'int', 'double', 'decimal'];
  * SQLite's types are affinities rather than constraints, and it has no date
  * type of its own: a date column is TEXT, which is the ISO 8601 convention
  * its own date functions use.
+ *
+ * A table that is already there is left alone, because the call an
+ * application makes is "make sure my table exists", on every start: SQLite
+ * says IF NOT EXISTS, and SQL Server is asked whether the name is taken. A
+ * failure here would otherwise put a Database Error in front of the operator
+ * every time the application started.
  */
 HmiSql.tableSql = function(provider, table, template)
 {
+	var sqlite = (provider === 'sqlite');
 	var name = HmiSql.quoteColumn(table);
 	var lines = [];
 	var indexes = [];
@@ -3401,13 +3409,28 @@ HmiSql.tableSql = function(provider, table, template)
 		{
 			// The index name carries the table's, because SQLite's index
 			// names are unique across the whole database
-			indexes.push('CREATE ' + ((column.index === 'unique') ? 'UNIQUE ' : '') +
-				'INDEX ' + HmiSql.quoteColumn(table + '_' + column.name + '_idx') +
-				' ON ' + name + ' (' + HmiSql.quoteColumn(column.name) + ')');
+			var index = table + '_' + column.name + '_idx';
+			var create = 'CREATE ' + ((column.index === 'unique') ? 'UNIQUE ' : '') + 'INDEX ' +
+				((sqlite) ? 'IF NOT EXISTS ' : '') + HmiSql.quoteColumn(index) +
+				' ON ' + name + ' (' + HmiSql.quoteColumn(column.name) + ')';
+
+			indexes.push((sqlite) ? create :
+				'IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = ' + HmiSql.textLiteral(index) +
+				' AND object_id = OBJECT_ID(' + HmiSql.textLiteral(name) + ')) ' + create);
 		}
 	}
 
-	return ['CREATE TABLE ' + name + ' (' + lines.join(', ') + ')'].concat(indexes);
+	var create = 'CREATE TABLE ' + ((sqlite) ? 'IF NOT EXISTS ' : '') + name +
+		' (' + lines.join(', ') + ')';
+
+	return [(sqlite) ? create :
+		'IF OBJECT_ID(' + HmiSql.textLiteral(name) + ', N\'U\') IS NULL ' + create].concat(indexes);
+};
+
+/** A name as a Unicode string literal, for the SQL Server catalog views. */
+HmiSql.textLiteral = function(text)
+{
+	return 'N\'' + ('' + text).replace(/'/g, "''") + '\'';
 };
 
 HmiSql.columnSql = function(provider, column)

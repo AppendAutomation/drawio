@@ -1900,3 +1900,16 @@
 {
 	width: 140px;
 }
+
+/* The name in the first column is the longest thing in either table: a tag's
+   in a bind list, a column's in a table template. A bind list's dotfield and
+   delimiter are usually empty, so its column name gets room as well */
+.hmiSqlTable th:first-child
+{
+	width: 30%;
+}
+
+.hmiSqlBind th:nth-child(3)
+{
+	width: 24%;
+}
