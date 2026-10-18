@@ -320,13 +320,33 @@ HmiCli.build = function(ui, project)
 	});
 };
 
+/**
+ * Spec fields whose value has fields of its own. Given text or a number
+ * instead, the project writer would walk the value's own keys -- a string's
+ * keys are 0, 1, 2 -- and write `<sim 0="r" 1="a" 2="m" 3="p"/>`, which is
+ * not a name XML allows, so the file could not be opened again.
+ */
+HmiCli.STRUCT_FIELDS = {sim: true, alarms: true, options: true};
+
 HmiCli.copyFields = function(target, source, fields, what, errors)
 {
 	for (var key in source)
 	{
 		if (mxUtils.indexOf(fields, key) >= 0)
 		{
-			target[key] = source[key];
+			var value = source[key];
+
+			if (HmiCli.STRUCT_FIELDS[key] && (value == null ||
+				typeof value !== 'object' || value instanceof Array))
+			{
+				errors.push(what + ': "' + key + '" takes fields of its own, ' +
+					'not ' + JSON.stringify(value) +
+					' (for example {"mode": "ramp"})');
+
+				continue;
+			}
+
+			target[key] = value;
 		}
 		else if (key !== 'name' && key !== 'type' && key !== 'protocol')
 		{

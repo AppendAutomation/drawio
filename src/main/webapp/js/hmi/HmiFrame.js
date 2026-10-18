@@ -74,7 +74,7 @@ HmiFrame.showScreen = function(ui)
 	if (graph == null || project == null || graph.container == null ||
 		graph.container.clientWidth === 0)
 	{
-		return;
+		return false;
 	}
 
 	var container = graph.container;
@@ -83,7 +83,7 @@ HmiFrame.showScreen = function(ui)
 
 	if (!(width > 0) || !(height > 0))
 	{
-		return;
+		return false;
 	}
 
 	// Room for the border itself, and a little air around it
@@ -99,6 +99,8 @@ HmiFrame.showScreen = function(ui)
 	}
 
 	HmiFrame.centerScreen(ui);
+
+	return true;
 };
 
 /** Scrolls so the screen area sits in the middle of the window. */

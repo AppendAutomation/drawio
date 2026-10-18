@@ -7225,6 +7225,41 @@ HmiSelfTest.testWindows = function(ui)
 		HmiFrame.refresh(ui);
 		check('frame.fullScreenHidesWindow', frame.window.style.display === 'none');
 
+		// View > Reset shows the whole screen area, centered and scaled to
+		// fit, instead of the editor's 1:1 at the canvas origin.
+		var container = ui.editor.graph.container;
+		var fitted = Math.min(1, Math.max(0.2, Math.floor(Math.min(
+			(container.clientWidth - 48) / 800,
+			(container.clientHeight - 48) / 480) * 100) / 100));
+
+		ui.editor.graph.zoomTo(1);
+		ui.resetScrollbars();
+		ui.actions.get('resetView').funct();
+
+		var rv = ui.editor.graph.view;
+		var middle = {
+			x: Math.round((rv.translate.x + 400) * rv.scale - container.clientWidth / 2),
+			y: Math.round((rv.translate.y + 240) * rv.scale - container.clientHeight / 2)};
+
+		check('view.resetFitsScreen', Math.abs(rv.scale - fitted) < 0.001,
+			rv.scale + ' wanted ' + fitted);
+		check('view.resetCentersScreen',
+			Math.abs(container.scrollLeft - middle.x) <= 1 &&
+			Math.abs(container.scrollTop - middle.y) <= 1,
+			container.scrollLeft + ', ' + container.scrollTop + ' wanted ' +
+				JSON.stringify(middle));
+
+		// With no project there is nothing to fit, so the editor's own reset
+		// still runs.
+		var keptProject = ui.hmiProject;
+		ui.hmiProject = null;
+		ui.editor.graph.zoomTo(0.5);
+		ui.actions.get('resetView').funct();
+		check('view.resetWithoutProject', ui.editor.graph.view.scale === 1,
+			'' + ui.editor.graph.view.scale);
+		ui.hmiProject = keptProject;
+		ui.editor.graph.zoomTo(gs);
+
 		// Cancel discards.
 		HmiDialogs.showWindowProps(ui, pa);
 		dlg = ui.dialog.container;
@@ -7399,6 +7434,24 @@ HmiSelfTest.testAppScripts = function(ui)
 	var built = HmiCli.buildProject({settings: {scripts: {onStart: 'X = 1;', everyMs: '', colour: 1}}}, errors);
 	check('app.cliBuild', built.settings.scripts.onStart === 'X = 1;' && built.settings.scripts.everyMs === '1000' &&
 		errors.length === 1 && errors[0].indexOf('colour') > 0, JSON.stringify(errors));
+
+	// A field with fields of its own, given as text, would have been written
+	// out one character at a time (<sim 0="r" 1="a" .../>), which is not XML.
+	var simErrors = [];
+	var simBuilt = HmiCli.buildProject({tags: [
+		{name: 'Bad', type: 'MemoryReal', sim: 'ramp'},
+		{name: 'Good', type: 'MemoryReal', sim: {mode: 'ramp', periodMs: 5000}}]}, simErrors);
+
+	check('cli.structFieldAsText', simErrors.length === 1 &&
+		/"sim" takes fields of its own/.test(simErrors[0]) &&
+		simBuilt.getTag('Bad').sim == null &&
+		simBuilt.getTag('Good').sim.mode === 'ramp', simErrors.join(' | '));
+
+	var simXml = mxUtils.getXml(simBuilt.toXml(mxUtils.createXmlDocument()));
+	check('cli.structFieldLeavesXmlValid',
+		HmiProject.fromXml(mxUtils.parseXml(simXml).documentElement)
+			.getTag('Good').sim.periodMs === '5000' &&
+		simXml.indexOf('0="r"') < 0, simXml.substring(0, 200));
 
 	HmiSelfTest.resetGraph(ui);
 

@@ -223,6 +223,27 @@ HmiMenus.installActions = function()
 		{
 			var ui = this.editorUi;
 
+			// View > Reset (and Enter's Reset/Fit) puts the whole screen area
+			// back on the canvas, centered and scaled to fit, rather than the
+			// editor's 1:1 at the canvas origin -- which leaves the screen's
+			// top left corner in the middle of the window and the rest of it
+			// off to the bottom right. HmiFrame.showScreen is what a new
+			// document already opens with.
+			var reset = this.get('resetView');
+
+			if (reset != null)
+			{
+				var resetView = reset.funct;
+
+				reset.funct = function()
+				{
+					if (!HmiFrame.showScreen(ui))
+					{
+						resetView.apply(this, arguments);
+					}
+				};
+			}
+
 			this.addAction('hmiTagDictionary...', function()
 			{
 				HmiMenus.showTagDictionary(ui);
