@@ -3346,6 +3346,13 @@ HmiSelfTest.testAlarms = function(ui)
 	check('alarm.objectKind', HmiAlarms.objectKind(graph, listCell) === 'list' &&
 		HmiAlarms.objectKind(graph, histCell) === 'history');
 
+	// The title bar: its own key, defaulting to whether there is a title
+	check('alarm.titleBarRule', HmiAlarms.titleBarOf({}, 'list') &&
+		HmiAlarms.titleBarOf({hmiTitle: 'Alarms'}, 'list') &&
+		!HmiAlarms.titleBarOf({hmiTitle: ''}, 'list') &&
+		!HmiAlarms.titleBarOf({hmiTitle: 'Alarms', hmiTitleBar: '0'}, 'list') &&
+		HmiAlarms.titleBarOf({hmiTitle: '', hmiTitleBar: '1'}, 'history'));
+
 	ui.hmiProject = project;
 	var rt3 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
 	rt3.start();
@@ -3382,6 +3389,28 @@ HmiSelfTest.testAlarms = function(ui)
 	rt3.stop();
 	check('alarm.viewsRemoved', graph.container.querySelectorAll('.hmiAlarmView').length === 0);
 
+	// With the title bar off there is no heading at all, counts and Ack All
+	// included, and the rows keep their own Ack buttons
+	var active = mgr.active().length;
+	graph.setCellStyles('hmiTitleBar', '0', [listCell, histCell]);
+	var rt4 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt4.start();
+	var bare = graph.container.querySelector('[data-hmi-alarm-view="list"]');
+	check('alarm.titleBarOff', bare != null && bare.querySelector('.hmiAlarmHead') == null &&
+		bare.querySelector('[data-hmi-field="ackAll"]') == null &&
+		bare.querySelectorAll('tbody tr').length === active,
+		(bare != null) ? bare.querySelectorAll('tbody tr').length + ' rows for ' + active : 'no view');
+	rt4.stop();
+	graph.setCellStyles('hmiTitleBar', null, [listCell, histCell]);
+	var rt5 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt5.start();
+	var titled = graph.container.querySelector('[data-hmi-alarm-view="list"]');
+	check('alarm.titleBarOn', titled.querySelector('.hmiAlarmHead') != null &&
+		titled.querySelector('.hmiAlarmTitle').textContent === 'Active Alarms' &&
+		titled.querySelector('[data-hmi-field="ackAll"]') != null,
+		titled.querySelector('.hmiAlarmTitle') != null ? titled.querySelector('.hmiAlarmTitle').textContent : 'no title');
+	rt5.stop();
+
 	// Settings in the Animation tab
 	if (ui.format != null)
 	{
@@ -3399,6 +3428,18 @@ HmiSelfTest.testAlarms = function(ui)
 		box.dispatchEvent(new Event('change'));
 		check('alarm.settingsColumns', graph.getCellStyle(histCell).hmiColumns === 'time,event,tag,description',
 			graph.getCellStyle(histCell).hmiColumns);
+
+		ui.format.immediateRefresh();
+		var bar = ui.format.container.querySelector('[data-hmi-field="hmiTitleBar"]');
+		check('alarm.settingsTitleBarChecked', bar != null && bar.checked &&
+			!ui.format.container.querySelector('[data-hmi-field="hmiTitle"]').disabled);
+		bar.checked = false;
+		bar.dispatchEvent(new Event('change'));
+		check('alarm.settingsTitleBarOff', String(graph.getCellStyle(histCell).hmiTitleBar) === '0' &&
+			ui.format.container.querySelector('[data-hmi-field="hmiTitle"]').disabled &&
+			graph.getCellStyle(histCell).hmiTitle === 'Plant events',
+			String(graph.getCellStyle(histCell).hmiTitleBar));
+		graph.setCellStyles('hmiTitleBar', null, [histCell]);
 		graph.clearSelection();
 	}
 

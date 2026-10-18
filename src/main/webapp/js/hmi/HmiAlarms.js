@@ -523,7 +523,8 @@ HmiAlarms.loadRecent = function(store, limit, fn)
 // Alarm List (active and unacknowledged alarms) and Alarm History (events)
 // are vertices with shape=hmiAlarmList / shape=hmiAlarmHistory. Their
 // settings are style keys, so the design-time preview shows them:
-//   hmiTitle      heading ('' for none)
+//   hmiTitle      the heading's text
+//   hmiTitleBar   '1' or '0': whether the heading bar is shown at all
 //   hmiColumns    comma-separated column keys, in order
 //   hmiMaxEvents  history only: how many events to show (default 200)
 //   fontSize      as for any shape
@@ -577,6 +578,25 @@ HmiAlarms.titleOf = function(style, kind)
 		((kind === 'history') ? 'Alarm History' : 'Active Alarms');
 };
 
+/**
+ * Whether the object shows its title bar, which the Title bar check box
+ * sets. Without the key, a title of its own means a bar: that is how these
+ * objects behaved before the check box, when emptying the Title was the only
+ * way to take the bar off the design-time preview -- and at Run the bar
+ * stayed even then, which this also puts right.
+ */
+HmiAlarms.titleBarOf = function(style, kind)
+{
+	var key = (style != null && style.hmiTitleBar != null) ? String(style.hmiTitleBar) : '';
+
+	if (key !== '')
+	{
+		return key !== '0' && key.toLowerCase() !== 'false';
+	}
+
+	return HmiAlarms.titleOf(style, kind) !== '';
+};
+
 HmiAlarms.install = function()
 {
 	HmiAlarms.installShapes();
@@ -613,7 +633,7 @@ HmiAlarms.installShapes = function()
 		c.setFontSize(fs);
 		c.setFontFamily('Helvetica');
 
-		if (title !== '')
+		if (HmiAlarms.titleBarOf(style, this.kind))
 		{
 			c.setFillColor('#263238');
 			c.rect(x, top, w, rowH);
@@ -849,18 +869,24 @@ HmiAlarmView.prototype.render = function()
 
 	var that = this;
 	var node = this.node;
-	var title = HmiAlarms.titleOf(this.style, this.kind);
 	node.innerHTML = '';
 
-	var head = document.createElement('div');
-	head.className = 'hmiAlarmHead';
+	// With the title bar off there is no heading at all, so the list's counts
+	// and its Ack All button go with it; each unacknowledged row keeps its own
+	// Ack button, and _AckAll acknowledges from a script.
+	var head = HmiAlarms.titleBarOf(this.style, this.kind) ? document.createElement('div') : null;
 
-	var label = document.createElement('span');
-	label.className = 'hmiAlarmTitle';
-	mxUtils.write(label, title);
-	head.appendChild(label);
+	if (head != null)
+	{
+		head.className = 'hmiAlarmHead';
 
-	if (this.kind === 'list' && this.alarms != null)
+		var label = document.createElement('span');
+		label.className = 'hmiAlarmTitle';
+		mxUtils.write(label, HmiAlarms.titleOf(this.style, this.kind));
+		head.appendChild(label);
+	}
+
+	if (head != null && this.kind === 'list' && this.alarms != null)
 	{
 		var c = this.alarms.counts();
 		var counts = document.createElement('span');
@@ -882,7 +908,10 @@ HmiAlarmView.prototype.render = function()
 		head.appendChild(ackAll);
 	}
 
-	node.appendChild(head);
+	if (head != null)
+	{
+		node.appendChild(head);
+	}
 
 	var scroll = document.createElement('div');
 	scroll.className = 'hmiAlarmScroll';

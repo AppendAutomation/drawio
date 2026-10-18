@@ -710,13 +710,36 @@ HmiFormatPanel.prototype.addAlarmObjectSection = function(kind)
 
 	content.appendChild(HmiDialogs.el('div', 'hmiHint', (kind === 'list') ?
 		'At Run, lists the alarms that are active or not yet acknowledged, newest first, ' +
-		'with Ack and Ack All buttons.' :
+		'with an Ack button on each. The title bar carries the counts and the Ack All ' +
+		'button, so with it off a script acknowledges through _AckAll.' :
 		'At Run, lists alarm events newest first, starting with those already logged on this PC.'));
 
-	this.addRow(content, 'Title', input('hmiTitle', HmiAlarms.titleOf(style, kind), function(v)
+	var titleInput = input('hmiTitle', HmiAlarms.titleOf(style, kind), function(v)
 	{
 		setStyle('hmiTitle', v);
-	}));
+	});
+
+	// The title bar is a key of its own, so a title can be kept while the bar
+	// is off and come back with it.
+	var barLabel = document.createElement('label');
+	barLabel.className = 'hmiCheck';
+	var titleBar = document.createElement('input');
+	titleBar.setAttribute('type', 'checkbox');
+	titleBar.setAttribute('data-hmi-field', 'hmiTitleBar');
+	titleBar.checked = HmiAlarms.titleBarOf(style, kind);
+	titleInput.disabled = !titleBar.checked;
+
+	mxEvent.addListener(titleBar, 'change', function()
+	{
+		setStyle('hmiTitleBar', titleBar.checked ? '1' : '0');
+		titleInput.disabled = !titleBar.checked;
+	});
+
+	barLabel.appendChild(titleBar);
+	mxUtils.write(barLabel, 'Show title bar');
+
+	this.addRow(content, '', barLabel);
+	this.addRow(content, 'Title', titleInput);
 
 	this.addRow(content, 'Font size', input('fontSize', String(parseFloat(style[mxConstants.STYLE_FONTSIZE]) || 12),
 		function(v)
