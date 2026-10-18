@@ -1454,6 +1454,64 @@ HmiRecipes.isListCell = function(graph, cell)
 		graph.getCellStyle(cell)[mxConstants.STYLE_SHAPE] === HmiRecipes.LIST_SHAPE;
 };
 
+/**
+ * The colors a Recipe List can be given, each a pair of recipeList fields
+ * with the built-in look as its default. The defaults are what css/hmi.css
+ * draws and must stay in step with it: a field that is empty gets no inline
+ * style at Run, so the style sheet still decides. The frame -- background,
+ * border and font -- comes from the draw.io style instead.
+ */
+HmiRecipes.LIST_COLORS = {
+	title: {label: 'Title bar', fill: 'titleFill', color: 'titleColor',
+		fillDefault: '#263238', colorDefault: '#ffffff'},
+	selected: {label: 'Selected recipe', fill: 'selFill', color: 'selColor',
+		fillDefault: '#1a7fc1', colorDefault: '#ffffff'}
+};
+
+HmiRecipes.LIST_COLOR_KEYS = ['title', 'selected'];
+
+/** One color as the list sets it, or null when it does not. */
+HmiRecipes.listColorOf = function(cfg, group, which)
+{
+	var def = HmiRecipes.LIST_COLORS[group];
+	var c = (cfg != null && def != null) ? cfg[def[which]] : null;
+
+	return (c != null && c !== '' && c !== mxConstants.NONE) ? String(c) : null;
+};
+
+/** The same, falling back to the built-in default: what the preview draws. */
+HmiRecipes.listColorOr = function(cfg, group, which)
+{
+	return HmiRecipes.listColorOf(cfg, group, which) ||
+		HmiRecipes.LIST_COLORS[group][(which === 'fill') ? 'fillDefault' : 'colorDefault'];
+};
+
+/**
+ * The recipeList link of a cell, read straight from the model: the
+ * design-time shape has no graph to ask, as a Trend's has not either
+ * (HmiTrend.cellConfig).
+ */
+HmiRecipes.cellConfig = function(cell)
+{
+	if (cell == null || cell.value == null || typeof cell.value.getAttribute !== 'function')
+	{
+		return {};
+	}
+
+	try
+	{
+		var raw = cell.value.getAttribute(HmiProject.CELL_ATTRIBUTE);
+		var data = (raw) ? JSON.parse(raw) : null;
+
+		return (data != null && data.links != null && data.links.recipeList != null) ?
+			data.links.recipeList : {};
+	}
+	catch (e)
+	{
+		return {};
+	}
+};
+
 HmiRecipes.install = function()
 {
 	function RecipeListShape()
@@ -1466,34 +1524,62 @@ HmiRecipes.install = function()
 	RecipeListShape.prototype.paintVertexShape = function(c, x, y, w, h)
 	{
 		var style = this.style || {};
+		var cfg = (this.state != null) ? HmiRecipes.cellConfig(this.state.cell) : {};
+		var frame = HmiRuntime.stateFrame(this.state);
 		var fs = parseFloat(style[mxConstants.STYLE_FONTSIZE]) || 14;
+		var rows = (frame.fill != null) ? frame.fill : '#ffffff';
+		var text = (frame.text != null) ? frame.text : '#263238';
 		var rowH = fs * 2;
 		var top = y;
 
-		c.setFillColor('#ffffff');
-		c.setStrokeColor('#607d8b');
-		c.rect(x, y, w, h);
-		c.fillAndStroke();
-		c.setFontSize(fs);
-		c.setFontFamily('Helvetica');
+		c.setStrokeWidth(frame.width);
 
-		c.setFillColor('#263238');
+		if (frame.fill != null)
+		{
+			c.setFillColor(frame.fill);
+		}
+
+		if (frame.stroke != null)
+		{
+			c.setStrokeColor(frame.stroke);
+		}
+
+		c.rect(x, y, w, h);
+
+		if (frame.fill != null && frame.stroke != null)
+		{
+			c.fillAndStroke();
+		}
+		else if (frame.fill != null)
+		{
+			c.fill();
+		}
+		else if (frame.stroke != null)
+		{
+			c.stroke();
+		}
+
+		c.setFontSize(fs);
+		c.setFontFamily(frame.family);
+
+		c.setFillColor(HmiRecipes.listColorOr(cfg, 'title', 'fill'));
 		c.rect(x, top, w, rowH);
 		c.fill();
-		c.setFontColor('#ffffff');
+		c.setFontColor(HmiRecipes.listColorOr(cfg, 'title', 'color'));
 		c.setFontStyle(mxConstants.FONT_BOLD);
-		c.text(x + 8, top + rowH / 2, 0, 0, 'Recipes', mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE,
-			false, '', null, false, 0, null);
+		c.text(x + 8, top + rowH / 2, 0, 0, (cfg.title) ? cfg.title : ((cfg.book) ? cfg.book : 'Recipes'),
+			mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE, false, '', null, false, 0, null);
 		top += rowH;
 
 		c.setFontStyle(0);
 
 		for (var r = 0; top + rowH <= y + h && r < 20; r++)
 		{
-			c.setFillColor((r === 1) ? '#1a7fc1' : ((r % 2) ? '#f4f6f8' : '#ffffff'));
+			var picked = r === 1;
+			c.setFillColor((picked) ? HmiRecipes.listColorOr(cfg, 'selected', 'fill') : rows);
 			c.rect(x + 1, top, w - 2, rowH);
 			c.fill();
-			c.setFontColor((r === 1) ? '#ffffff' : '#90a4ae');
+			c.setFontColor((picked) ? HmiRecipes.listColorOr(cfg, 'selected', 'color') : text);
 			c.text(x + 8, top + rowH / 2, 0, 0, 'Recipe ' + (r + 1), mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE,
 				false, '', null, false, 0, null);
 			top += rowH;
@@ -1517,6 +1603,7 @@ HmiRecipeListView = function(runtime, cell, cfg)
 	this.cell = cell;
 	this.cfg = cfg || {};
 	this.style = this.graph.getCellStyle(cell);
+	this.frame = HmiRuntime.objectFrame(this.graph, cell);
 	this.recipes = runtime.recipes;
 	this.edges = {};
 	this.selected = '';
@@ -1529,6 +1616,7 @@ HmiRecipeListView.prototype.start = function()
 	this.node = document.createElement('div');
 	this.node.className = 'hmiRecipeView';
 	this.node.setAttribute('data-hmi-recipe-view', this.cfg.book || '');
+	HmiRuntime.applyObjectStyle(this.node, this.frame);
 	this.graph.container.appendChild(this.node);
 
 	// Pointer presses stay in the list: the window's touch links must not
@@ -1594,6 +1682,29 @@ HmiRecipeListView.prototype.place = function()
 	s.width = Math.round(state.width) + 'px';
 	s.height = Math.round(state.height) + 'px';
 	s.fontSize = ((parseFloat(this.style[mxConstants.STYLE_FONTSIZE]) || 14) * this.graph.view.scale) + 'px';
+	HmiRuntime.placeObjectBorder(this.node, this.frame, this.graph.view.scale);
+};
+
+/**
+ * One of the list's own colors onto an element, and nothing at all when it
+ * is not set: css/hmi.css then keeps its say.
+ */
+HmiRecipeListView.prototype.paint = function(node, group)
+{
+	var fill = HmiRecipes.listColorOf(this.cfg, group, 'fill');
+	var color = HmiRecipes.listColorOf(this.cfg, group, 'color');
+
+	if (fill != null)
+	{
+		node.style.backgroundColor = fill;
+	}
+
+	if (color != null)
+	{
+		node.style.color = color;
+	}
+
+	return node;
 };
 
 HmiRecipeListView.prototype.value = function(tag)
@@ -1724,7 +1835,7 @@ HmiRecipeListView.prototype.render = function()
 
 	this.node.innerHTML = '';
 
-	var head = document.createElement('div');
+	var head = this.paint(document.createElement('div'), 'title');
 	head.className = 'hmiRecipeHead';
 	var title = document.createElement('span');
 	title.className = 'hmiRecipeTitle';
@@ -1768,6 +1879,11 @@ HmiRecipeListView.prototype.render = function()
 			var row = document.createElement('div');
 			row.className = 'hmiRecipeRow' + ((name === that.selected) ? ' hmiRecipeSelected' : '');
 			row.setAttribute('data-hmi-recipe', name);
+
+			if (name === that.selected)
+			{
+				that.paint(row, 'selected');
+			}
 			mxUtils.write(row, name);
 			mxEvent.addListener(row, 'click', function(evt)
 			{

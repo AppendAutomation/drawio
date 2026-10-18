@@ -190,6 +190,105 @@ HmiRuntime.prototype.startAlarmViews = function()
 	}
 };
 
+/**
+ * The built-in frame of the Alarm List, Alarm History and Recipe List
+ * objects: what they drew before the Style and Text tabs reached them, and
+ * what css/hmi.css still draws. Keep the two in step.
+ */
+HmiRuntime.OBJECT_FRAME = {fill: '#ffffff', stroke: '#607d8b', text: '#263238',
+	family: 'Helvetica, Arial, sans-serif', width: 1};
+
+/**
+ * The same as a style string, for a palette entry and for the command line,
+ * so a new object carries its colors and the Style and Text tabs show them
+ * rather than "default". A Trend's entry does the same (HmiTrend.STYLE).
+ */
+HmiRuntime.objectFrameStyle = function()
+{
+	var f = HmiRuntime.OBJECT_FRAME;
+
+	return 'fillColor=' + f.fill + ';strokeColor=' + f.stroke + ';strokeWidth=' + f.width +
+		';fontColor=' + f.text + ';';
+};
+
+/**
+ * The frame one of those objects draws: background, border, border width,
+ * text color and font family, each the cell's own or the built-in default. A
+ * null color is Fill or Line set to None: transparent, and no border.
+ *
+ * The **unresolved** style is what is read. getCellStyle resolves a color of
+ * 'default' -- which is what the default vertex style gives a cell that has
+ * never been colored -- to the app's own shape colors, and deletes a key set
+ * to 'none' (mxStylesheet.getCellStyle). Read that way, an object drawn
+ * before these settings existed would follow the theme instead of keeping
+ * the look it has always had, and None could not be told from unset.
+ */
+HmiRuntime.objectFrame = function(graph, cell, defaults)
+{
+	var style = (graph != null && cell != null) ? graph.getCellStyle(cell, false) : {};
+	var base = defaults || HmiRuntime.OBJECT_FRAME;
+	var pick = function(key, fallback)
+	{
+		var v = style[key];
+
+		return (v == null || v === '' || v === 'default') ? fallback :
+			((v === mxConstants.NONE) ? null : String(v));
+	};
+	var w = parseFloat(style[mxConstants.STYLE_STROKEWIDTH]);
+
+	return {
+		fill: pick(mxConstants.STYLE_FILLCOLOR, base.fill),
+		stroke: pick(mxConstants.STYLE_STROKECOLOR, base.stroke),
+		text: pick(mxConstants.STYLE_FONTCOLOR, base.text),
+		family: pick(mxConstants.STYLE_FONTFAMILY, base.family),
+		width: (!isNaN(w) && w >= 0) ? w : base.width
+	};
+};
+
+/**
+ * That frame onto an HTML overlay. The border width follows the zoom, so it
+ * is set in the view's place() through placeObjectBorder, not here.
+ */
+HmiRuntime.applyObjectStyle = function(node, frame)
+{
+	node.style.backgroundColor = (frame.fill != null) ? frame.fill : 'transparent';
+
+	if (frame.stroke != null)
+	{
+		node.style.borderColor = frame.stroke;
+	}
+	else
+	{
+		node.style.borderStyle = 'none';
+	}
+
+	if (frame.text != null)
+	{
+		node.style.color = frame.text;
+	}
+
+	if (frame.family != null)
+	{
+		node.style.fontFamily = frame.family;
+	}
+};
+
+/** The same frame for a preview shape, which has only its state to ask. */
+HmiRuntime.stateFrame = function(state, defaults)
+{
+	return HmiRuntime.objectFrame((state != null && state.view != null) ? state.view.graph : null,
+		(state != null) ? state.cell : null, defaults);
+};
+
+/** The zoomed border width of such an overlay. */
+HmiRuntime.placeObjectBorder = function(node, frame, scale)
+{
+	if (frame.stroke != null)
+	{
+		node.style.borderWidth = Math.max(0, frame.width * scale) + 'px';
+	}
+};
+
 HmiRuntime.prototype.stop = function()
 {
 	if (!this.running)

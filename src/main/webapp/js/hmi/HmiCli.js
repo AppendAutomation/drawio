@@ -212,9 +212,9 @@ HmiCli.TYPES = {
 	arrow: 'shape=singleArrow;whiteSpace=wrap;html=1;',
 	triangle: 'triangle;whiteSpace=wrap;html=1;',
 	cylinder: 'shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;',
-	alarmList: 'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;',
-	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;',
-	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;',
+	alarmList: 'html=1;noLabel=1;shape=hmiAlarmList;fontSize=12;' + HmiRuntime.objectFrameStyle(),
+	alarmHistory: 'html=1;noLabel=1;shape=hmiAlarmHistory;fontSize=12;' + HmiRuntime.objectFrameStyle(),
+	recipeList: 'html=1;noLabel=1;shape=hmiRecipeList;fontSize=14;' + HmiRuntime.objectFrameStyle(),
 	trend: HmiTrend.STYLE,
 	arc: HmiArc.ELLIPSE_STYLE,
 	circleArc: HmiArc.CIRCLE_STYLE

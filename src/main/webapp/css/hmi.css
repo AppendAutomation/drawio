@@ -176,6 +176,14 @@
 	flex: 0 0 auto;
 }
 
+/* A background swatch and a text swatch for one color of an object */
+.hmiColorPair
+{
+	display: flex;
+	gap: 4px;
+	flex: 0 0 auto;
+}
+
 .hmiCheck
 {
 	display: inline-flex;
@@ -1234,17 +1242,22 @@
 .hmiAlarmTable td
 {
 	padding: 0.15em 0.4em;
-	border-bottom: 1px solid #eceff1;
+	border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 	white-space: nowrap;
 }
 
 .hmiAlarmEmpty
 {
 	padding: 0.6em;
-	color: #78909c;
+	opacity: 0.7;
 }
 
-/* Alarm List: unacknowledged red, acknowledged amber, cleared grey */
+/*
+ * Alarm List: unacknowledged red, acknowledged amber, cleared grey. These
+ * are the built-in look, used wherever the object sets no color of its own;
+ * HmiAlarms.COLORS holds the same values for the preview and the swatches,
+ * so the two must be changed together.
+ */
 .hmiAlarm-unacked { background-color: #ffcdd2; color: #b71c1c; font-weight: bold; }
 .hmiAlarm-unacked.hmiAlarm-severe { background-color: #e53935; color: #ffffff; }
 .hmiAlarm-acked { background-color: #fff3cd; color: #7a5b00; }
@@ -1384,7 +1397,7 @@
 .hmiRecipeRow
 {
 	padding: 0.45em 0.6em;
-	border-bottom: 1px solid #eceff1;
+	border-bottom: 1px solid rgba(0, 0, 0, 0.07);
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
@@ -1393,7 +1406,7 @@
 
 .hmiRecipeRow:nth-child(even)
 {
-	background-color: #f4f6f8;
+	background-color: rgba(0, 0, 0, 0.04);
 }
 
 .hmiRecipeRow.hmiRecipeSelected
@@ -1405,7 +1418,7 @@
 .hmiRecipeEmpty
 {
 	padding: 0.6em;
-	color: #90a4ae;
+	opacity: 0.7;
 	font-style: italic;
 }
 

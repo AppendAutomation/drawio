@@ -3411,6 +3411,91 @@ HmiSelfTest.testAlarms = function(ui)
 		titled.querySelector('.hmiAlarmTitle') != null ? titled.querySelector('.hmiAlarmTitle').textContent : 'no title');
 	rt5.stop();
 
+	// --- colors ---------------------------------------------------------
+	//
+	// The object's own colors are style keys, and a key that is not set gets
+	// no inline style at Run, so css/hmi.css keeps its say.
+	check('alarm.colorTables', HmiAlarms.LIST_COLOR_KEYS.concat(HmiAlarms.HISTORY_COLOR_KEYS)
+		.every(function(k) { return HmiAlarms.COLORS[k] != null; }) &&
+		HmiAlarms.colorKeysOf('list').length === 5 && HmiAlarms.colorKeysOf('history').length === 6 &&
+		HmiAlarms.ROW_COLORS.unacked === 'actUnack' && HmiAlarms.EVENT_COLORS.ALM === 'alm');
+	check('alarm.colorOf', HmiAlarms.colorOf({}, 'head', 'fill') == null &&
+		HmiAlarms.colorOf({hmiHeadFill: ''}, 'head', 'fill') == null &&
+		HmiAlarms.colorOf({hmiHeadFill: mxConstants.NONE}, 'head', 'fill') == null &&
+		HmiAlarms.colorOf({hmiHeadFill: '#112233'}, 'head', 'fill') === '#112233' &&
+		HmiAlarms.colorOr({}, 'head', 'fill') === HmiAlarms.COLORS.head.fillDefault &&
+		HmiAlarms.colorOr({hmiActUnackColor: '#112233'}, 'actUnack', 'color') === '#112233');
+
+	// A fresh unacknowledged alarm, so the list has one row of each state
+	set('Tank_Level', 50);
+	set('Tank_Level', 91);
+
+	var rgb = function(color)
+	{
+		var probe = document.createElement('div');
+		probe.style.color = color;
+
+		return probe.style.color;
+	};
+
+	graph.setCellStyles('hmiActUnackFill', '#102030', [listCell]);
+	graph.setCellStyles('hmiActUnackColor', '#f0f1f2', [listCell]);
+	graph.setCellStyles('hmiHeadFill', '#203040', [listCell]);
+	graph.setCellStyles('hmiTitleFill', '#304050', [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, '#fafbfc', [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKECOLOR, '#010203', [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKEWIDTH, 3, [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_FONTFAMILY, 'Verdana', [listCell]);
+	graph.setCellStyles('hmiAlmFill', '#405060', [histCell]);
+
+	var rt6 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt6.start();
+
+	var colored = graph.container.querySelector('[data-hmi-alarm-view="list"]');
+	var coloredHist = graph.container.querySelector('[data-hmi-alarm-view="history"]');
+	var unacked = colored.querySelector('[data-hmi-alarm="Tank_Level"]');
+	var acked = colored.querySelector('[data-hmi-alarm="Pump1_Run"]');
+
+	check('alarm.rowColorSet', unacked.style.backgroundColor === rgb('#102030') &&
+		unacked.style.color === rgb('#f0f1f2'),
+		unacked.style.backgroundColor + ' / ' + unacked.style.color);
+	check('alarm.rowColorUnset', acked != null && acked.style.backgroundColor === '' &&
+		acked.style.color === '', (acked != null) ? acked.style.backgroundColor : 'no acked row');
+	check('alarm.headColor', colored.querySelector('thead th').style.backgroundColor === rgb('#203040') &&
+		colored.querySelector('thead th').style.color === '');
+	check('alarm.titleColor', colored.querySelector('.hmiAlarmHead').style.backgroundColor === rgb('#304050'));
+	check('alarm.eventColor', coloredHist.querySelector('tbody tr').style.backgroundColor === rgb('#405060'),
+		coloredHist.querySelector('tbody tr').style.backgroundColor);
+	check('alarm.objectFrame', colored.style.backgroundColor === rgb('#fafbfc') &&
+		colored.style.borderColor === rgb('#010203') &&
+		colored.style.fontFamily.indexOf('Verdana') >= 0 &&
+		colored.style.borderWidth === (3 * graph.view.scale) + 'px',
+		colored.style.borderWidth + ' ' + colored.style.borderColor);
+
+	// An object that was never given a color keeps the built-in frame, not
+	// the theme's shape colors that getCellStyle would resolve 'default' to
+	check('alarm.frameDefault', coloredHist.style.backgroundColor === rgb(HmiRuntime.OBJECT_FRAME.fill) &&
+		coloredHist.style.borderColor === rgb(HmiRuntime.OBJECT_FRAME.stroke) &&
+		coloredHist.style.color === rgb(HmiRuntime.OBJECT_FRAME.text),
+		coloredHist.style.backgroundColor + ' / ' + coloredHist.style.borderColor);
+	rt6.stop();
+
+	// Fill and Line set to None mean transparent and no border, as the Style
+	// tab says
+	graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, mxConstants.NONE, [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKECOLOR, mxConstants.NONE, [listCell]);
+	var rt7 = new HmiRuntime({graph: graph, project: project, driver: sim, alarms: mgr});
+	rt7.start();
+	var bare2 = graph.container.querySelector('[data-hmi-alarm-view="list"]');
+	check('alarm.frameNone', bare2.style.backgroundColor === 'transparent' &&
+		bare2.style.borderStyle === 'none' && bare2.style.borderWidth === '',
+		bare2.style.backgroundColor + ' / ' + bare2.style.borderStyle + ' / ' + bare2.style.borderWidth);
+	rt7.stop();
+	graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, null, [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKECOLOR, null, [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKEWIDTH, null, [listCell]);
+	graph.setCellStyles(mxConstants.STYLE_FONTFAMILY, null, [listCell]);
+
 	// Settings in the Animation tab
 	if (ui.format != null)
 	{
@@ -3440,6 +3525,20 @@ HmiSelfTest.testAlarms = function(ui)
 			graph.getCellStyle(histCell).hmiTitle === 'Plant events',
 			String(graph.getCellStyle(histCell).hmiTitleBar));
 		graph.setCellStyles('hmiTitleBar', null, [histCell]);
+
+		// A swatch shows the color in force, set or built in, and Default
+		// colors clears every key at once
+		ui.format.immediateRefresh();
+		var swatch = function(key) { return ui.format.container.querySelector('[data-hmi-color="' + key + '"]'); };
+		check('alarm.settingsColorSwatches', swatch('hmiAlmFill') != null &&
+			swatch('hmiAlmFill').style.backgroundColor === rgb('#405060') &&
+			swatch('hmiRtnFill').style.backgroundColor === rgb(HmiAlarms.COLORS.rtn.fillDefault) &&
+			swatch('hmiActUnackFill') == null,
+			(swatch('hmiAlmFill') != null) ? swatch('hmiAlmFill').style.backgroundColor : 'no swatch');
+		ui.format.container.querySelector('[data-hmi-field="hmiDefaultColors"]').click();
+		check('alarm.settingsDefaultColors', graph.getCellStyle(histCell).hmiAlmFill == null &&
+			graph.getCellStyle(histCell).hmiTitle === 'Plant events',
+			String(graph.getCellStyle(histCell).hmiAlmFill));
 		graph.clearSelection();
 	}
 
@@ -4144,9 +4243,58 @@ HmiSelfTest.testRecipes = function(ui)
 	}
 
 	rt.stop();
+	graph.zoomActual();
+
+	// Colors: the title bar and the selected row are the list's own fields,
+	// the frame is the cell's draw.io style, and an empty field is left to
+	// css/hmi.css
+	check('recipe.listColorOf', HmiRecipes.listColorOf({}, 'title', 'fill') == null &&
+		HmiRecipes.listColorOf({titleFill: mxConstants.NONE}, 'title', 'fill') == null &&
+		HmiRecipes.listColorOf({selColor: '#112233'}, 'selected', 'color') === '#112233' &&
+		HmiRecipes.listColorOr({}, 'selected', 'fill') === HmiRecipes.LIST_COLORS.selected.fillDefault);
+
+	HmiProject.setCellLinks(graph, cell, {recipeList: {book: 'Mix', title: 'Batches', selectedTag: 'Sel',
+		upTag: 'Up', downTag: 'Down', arrows: true, titleFill: '#102030', titleColor: '#f0f1f2',
+		selFill: '#203040', selColor: ''}});
+	graph.setCellStyles(mxConstants.STYLE_FILLCOLOR, '#fafbfc', [cell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKECOLOR, '#010203', [cell]);
+	graph.setCellStyles(mxConstants.STYLE_STROKEWIDTH, 2, [cell]);
+	check('recipe.cellConfig', HmiRecipes.cellConfig(cell).titleFill === '#102030' &&
+		HmiRecipes.cellConfig(null).titleFill == null);
+
+	var rt8 = new HmiRuntime({graph: graph, project: p, driver: sim, recipes: rm});
+	rt8.start();
+	sim.write({Sel: 'Script'});
+	var coloredList = document.querySelector('[data-hmi-recipe-view="Mix"]');
+	var pickRgb = function(color)
+	{
+		var probe = document.createElement('div');
+		probe.style.color = color;
+
+		return probe.style.color;
+	};
+
+	if (coloredList != null)
+	{
+		var selRow = coloredList.querySelector('.hmiRecipeSelected');
+		var plainRow = coloredList.querySelector('[data-hmi-recipe="Start A"]');
+
+		check('recipe.listTitleColor', coloredList.querySelector('.hmiRecipeHead').style.backgroundColor ===
+			pickRgb('#102030') &&
+			coloredList.querySelector('.hmiRecipeHead').style.color === pickRgb('#f0f1f2') &&
+			coloredList.querySelector('.hmiRecipeTitle').textContent === 'Batches');
+		check('recipe.listSelectedColor', selRow != null && selRow.style.backgroundColor === pickRgb('#203040') &&
+			selRow.style.color === '' && plainRow.style.backgroundColor === '',
+			(selRow != null) ? selRow.style.backgroundColor + ' / ' + selRow.style.color : 'nothing selected');
+		check('recipe.listFrame', coloredList.style.backgroundColor === pickRgb('#fafbfc') &&
+			coloredList.style.borderColor === pickRgb('#010203') &&
+			coloredList.style.borderWidth === (2 * graph.view.scale) + 'px',
+			coloredList.style.borderWidth + ' ' + coloredList.style.borderColor);
+	}
+
+	rt8.stop();
 	rm.stop();
 	check('recipe.listRemoved', document.querySelector('[data-hmi-recipe-view]') == null);
-	graph.zoomActual();
 	check('recipe.listValidated', HmiMenus.checkLink(p, {book: 'Gone', selectedTag: 'Nope'}).length === 2);
 
 	// HMI > Recipes

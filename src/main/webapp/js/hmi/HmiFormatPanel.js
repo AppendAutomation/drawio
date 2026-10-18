@@ -601,9 +601,14 @@ HmiFormatPanel.prototype.createSelectField = function(cfg, field, options)
  * variant, so the picker is in single color mode (no Advanced section). A
  * light-dark() value saved before that keeps its light color.
  */
-HmiFormatPanel.prototype.createColorField = function(cfg, field, title)
+/**
+ * A swatch bound to cfg[field]. fallback is what an empty field means, which
+ * for a Recipe List's colors is the built-in one from css/hmi.css.
+ */
+HmiFormatPanel.prototype.createColorField = function(cfg, field, title, fallback)
 {
 	var that = this;
+	var none = fallback || '#ffffff';
 
 	if (mxUtils.isLightDarkColor(cfg[field]))
 	{
@@ -612,13 +617,14 @@ HmiFormatPanel.prototype.createColorField = function(cfg, field, title)
 
 	var btn = document.createElement('div');
 	btn.className = 'hmiColor';
-	btn.style.backgroundColor = cfg[field] || '#ffffff';
+	btn.setAttribute('data-hmi-color', field);
+	btn.style.backgroundColor = cfg[field] || none;
 
 	mxEvent.addListener(btn, 'click', function(evt)
 	{
 		mxEvent.consume(evt);
 
-		that.editorUi.pickColor(cfg[field] || '#ffffff', function(color)
+		that.editorUi.pickColor(cfg[field] || none, function(color)
 		{
 			if (mxUtils.isLightDarkColor(color))
 			{
@@ -626,12 +632,59 @@ HmiFormatPanel.prototype.createColorField = function(cfg, field, title)
 			}
 
 			cfg[field] = color;
-			btn.style.backgroundColor = color;
+			btn.style.backgroundColor = color || none;
 			that.commit();
 		}, null, null, true, title || mxResources.get('color'));
 	});
 
 	return btn;
+};
+
+/**
+ * A swatch pair -- background then text -- for one color of an object whose
+ * settings are style keys, as an alarm object's are. An unset key is left
+ * unset, so css/hmi.css keeps its say and the built-in look, the stronger
+ * shade of an unacknowledged HiHi or LoLo row included, survives.
+ */
+HmiFormatPanel.prototype.createStyleColorPair = function(def, group)
+{
+	var that = this;
+	var graph = this.editorUi.editor.graph;
+	var cell = this.cell;
+	var style = graph.getCellStyle(cell);
+	var wrap = document.createElement('div');
+	wrap.className = 'hmiColorPair';
+
+	['fill', 'color'].forEach(function(which)
+	{
+		var key = def[which];
+		var shown = HmiAlarms.colorOr(style, group, which);
+		var btn = document.createElement('div');
+		btn.className = 'hmiColor';
+		btn.setAttribute('data-hmi-color', key);
+		btn.setAttribute('title', def.label + ((which === 'fill') ? ' background' : ' text'));
+		btn.style.backgroundColor = shown;
+
+		mxEvent.addListener(btn, 'click', function(evt)
+		{
+			mxEvent.consume(evt);
+
+			that.editorUi.pickColor(shown, function(color)
+			{
+				if (mxUtils.isLightDarkColor(color))
+				{
+					color = mxUtils.getLightDarkColor(color).light;
+				}
+
+				graph.setCellStyles(key, color, [cell]);
+				btn.style.backgroundColor = color;
+			}, null, null, true, btn.getAttribute('title'));
+		});
+
+		wrap.appendChild(btn);
+	});
+
+	return wrap;
 };
 
 HmiFormatPanel.prototype.createCheckField = function(cfg, field, labelText)
@@ -664,7 +717,9 @@ HmiFormatPanel.prototype.createCheckField = function(cfg, field, labelText)
 
 /**
  * Settings of an Alarm List or Alarm History object, kept as style keys
- * (hmiTitle, hmiColumns, hmiMaxEvents, fontSize) so the preview shows them.
+ * (hmiTitle, hmiColumns, hmiMaxEvents, fontSize and the colors) so the
+ * preview shows them. The frame -- background, border and font -- is the
+ * cell's own, from the Style and Text tabs.
  */
 HmiFormatPanel.prototype.addAlarmObjectSection = function(kind)
 {
@@ -708,11 +763,12 @@ HmiFormatPanel.prototype.addAlarmObjectSection = function(kind)
 		return el;
 	};
 
-	content.appendChild(HmiDialogs.el('div', 'hmiHint', (kind === 'list') ?
+	content.appendChild(HmiDialogs.el('div', 'hmiHint', ((kind === 'list') ?
 		'At Run, lists the alarms that are active or not yet acknowledged, newest first, ' +
 		'with an Ack button on each. The title bar carries the counts and the Ack All ' +
 		'button, so with it off a script acknowledges through _AckAll.' :
-		'At Run, lists alarm events newest first, starting with those already logged on this PC.'));
+		'At Run, lists alarm events newest first, starting with those already logged on this PC.') +
+		' Background, border and font are in the Style and Text tabs.'));
 
 	var titleInput = input('hmiTitle', HmiAlarms.titleOf(style, kind), function(v)
 	{
@@ -806,6 +862,45 @@ HmiFormatPanel.prototype.addAlarmObjectSection = function(kind)
 	}
 
 	this.addRow(content, 'Columns', box);
+
+	// The object's own colors: a background and a text swatch each. A row
+	// state's color covers every priority, so it also replaces the stronger
+	// shade a HiHi or LoLo row has by default.
+	var keys = HmiAlarms.colorKeysOf(kind);
+
+	content.appendChild(HmiDialogs.el('div', 'hmiHint', 'Colors: background, then text.'));
+
+	for (var k = 0; k < keys.length; k++)
+	{
+		var def = HmiAlarms.COLORS[keys[k]];
+		this.addRow(content, def.label, this.createStyleColorPair(def, keys[k]));
+	}
+
+	var reset = mxUtils.button('Default colors', mxUtils.bind(this, function()
+	{
+		var model = graph.getModel();
+
+		model.beginUpdate();
+
+		try
+		{
+			for (var i = 0; i < keys.length; i++)
+			{
+				graph.setCellStyles(HmiAlarms.COLORS[keys[i]].fill, null, [cell]);
+				graph.setCellStyles(HmiAlarms.COLORS[keys[i]].color, null, [cell]);
+			}
+		}
+		finally
+		{
+			model.endUpdate();
+		}
+
+		this.editorUi.format.immediateRefresh();
+	}));
+	reset.className = 'geBtn';
+	reset.setAttribute('data-hmi-field', 'hmiDefaultColors');
+	this.addRow(content, '', reset);
+
 	this.container.appendChild(section.wrapper);
 };
 

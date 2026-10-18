@@ -154,13 +154,27 @@
 
 		content.appendChild(HmiDialogs.el('div', 'hmiHint',
 			'At Run, lists the recipes in the book. Touching one selects it and writes its name to ' +
-			'Selected recipe. Define books in HMI > Recipes.'));
+			'Selected recipe. Define books in HMI > Recipes. Background, border and font are in ' +
+			'the Style and Text tabs.'));
 		this.addRow(content, 'Recipe book', this.createSelectField(cfg, 'book', options));
 		this.addRow(content, 'Title', this.createTextField(cfg, 'title', 'the book name'));
 		this.addRow(content, 'Selected recipe (message tag)', this.createTagField(cfg, 'selectedTag'));
 		this.addRow(content, 'Select up (discrete tag)', this.createTagField(cfg, 'upTag'));
 		this.addRow(content, 'Select down (discrete tag)', this.createTagField(cfg, 'downTag'));
 		this.addRow(content, '', this.createCheckField(cfg, 'arrows', 'Up and down arrow buttons'));
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint', 'Colors: background, then text.'));
+
+		for (var c = 0; c < HmiRecipes.LIST_COLOR_KEYS.length; c++)
+		{
+			var def = HmiRecipes.LIST_COLORS[HmiRecipes.LIST_COLOR_KEYS[c]];
+			var pair = HmiDialogs.el('div', 'hmiColorPair');
+			pair.appendChild(this.createColorField(cfg, def.fill, def.label + ' background',
+				def.fillDefault));
+			pair.appendChild(this.createColorField(cfg, def.color, def.label + ' text',
+				def.colorDefault));
+			this.addRow(content, def.label, pair);
+		}
 	};
 
 	// The Trend object (HmiTrend.js)

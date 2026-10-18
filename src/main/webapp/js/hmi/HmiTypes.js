@@ -406,7 +406,8 @@ HmiTypes.defineLink = function(key, def)
 		refs: {selectedTag: 'tag', upTag: 'tag', downTag: 'tag'},
 		defaults: function()
 		{
-			return {book: '', title: '', selectedTag: '', upTag: '', downTag: '', arrows: false};
+			return {book: '', title: '', selectedTag: '', upTag: '', downTag: '', arrows: false,
+				titleFill: '', titleColor: '', selFill: '', selColor: ''};
 		}});
 
 	// The Trend object's settings (HmiTrend.js): edited in its own section,

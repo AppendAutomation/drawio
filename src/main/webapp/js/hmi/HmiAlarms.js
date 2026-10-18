@@ -527,8 +527,10 @@ HmiAlarms.loadRecent = function(store, limit, fn)
 //   hmiTitleBar   '1' or '0': whether the heading bar is shown at all
 //   hmiColumns    comma-separated column keys, in order
 //   hmiMaxEvents  history only: how many events to show (default 200)
-//   fontSize      as for any shape
-// At Run an HTML table replaces the preview (HmiAlarmView).
+//   the color keys in HmiAlarms.COLORS
+// The frame comes from the draw.io style as it does for a Trend: fillColor
+// is the background, strokeColor and strokeWidth the border, and the font
+// keys the text. At Run an HTML table replaces the preview (HmiAlarmView).
 
 HmiAlarms.LIST_SHAPE = 'hmiAlarmList';
 HmiAlarms.HISTORY_SHAPE = 'hmiAlarmHistory';
@@ -544,6 +546,79 @@ HmiAlarms.HISTORY_COLUMNS = ['time', 'event', 'tag', 'description', 'condition',
 HmiAlarms.EVENT_LABELS = {ALM: 'Alarm', RTN: 'Return', ACK: 'Ack', CHG: 'Change'};
 
 HmiAlarms.DEFAULT_MAX_EVENTS = 200;
+
+/**
+ * The colors an alarm object can be given, each a pair of style keys with
+ * the built-in look as its default.
+ *
+ * The defaults are what css/hmi.css draws, and the two must stay in step: a
+ * key that is not set gets no inline style at Run, so the style sheet still
+ * decides. That is what keeps an existing project looking as it did,
+ * including the stronger shade of an unacknowledged HiHi or LoLo row, which
+ * a color set here deliberately covers.
+ */
+HmiAlarms.COLORS = {
+	title: {label: 'Title bar', fill: 'hmiTitleFill', color: 'hmiTitleColor',
+		fillDefault: '#263238', colorDefault: '#ffffff'},
+	head: {label: 'Column header', fill: 'hmiHeadFill', color: 'hmiHeadColor',
+		fillDefault: '#cfd8dc', colorDefault: '#263238'},
+	actUnack: {label: 'Active unack', fill: 'hmiActUnackFill', color: 'hmiActUnackColor',
+		fillDefault: '#ffcdd2', colorDefault: '#b71c1c'},
+	actAck: {label: 'Active acked', fill: 'hmiActAckFill', color: 'hmiActAckColor',
+		fillDefault: '#fff3cd', colorDefault: '#7a5b00'},
+	clrUnack: {label: 'Cleared unack', fill: 'hmiClrUnackFill', color: 'hmiClrUnackColor',
+		fillDefault: '#eceff1', colorDefault: '#455a64'},
+	alm: {label: 'Alarm', fill: 'hmiAlmFill', color: 'hmiAlmColor',
+		fillDefault: '#fdecea', colorDefault: '#b71c1c'},
+	rtn: {label: 'Return', fill: 'hmiRtnFill', color: 'hmiRtnColor',
+		fillDefault: '#e8f5e9', colorDefault: '#1b5e20'},
+	ack: {label: 'Ack', fill: 'hmiAckFill', color: 'hmiAckColor',
+		fillDefault: '#e3f2fd', colorDefault: '#0d47a1'},
+	chg: {label: 'Change', fill: 'hmiChgFill', color: 'hmiChgColor',
+		fillDefault: '#fff8e1', colorDefault: '#7a5b00'}
+};
+
+/**
+ * The colors each kind offers, in the order they are edited and previewed.
+ *
+ * A listed alarm has three states, not four: ISA-18.2 keeps an alarm until
+ * it has both returned to normal and been acknowledged, so cleared and
+ * acknowledged is never a listed row. Alarm History rows are events, so
+ * they are colored by event.
+ */
+HmiAlarms.LIST_COLOR_KEYS = ['title', 'head', 'actUnack', 'actAck', 'clrUnack'];
+HmiAlarms.HISTORY_COLOR_KEYS = ['title', 'head', 'alm', 'rtn', 'ack', 'chg'];
+
+/** The row colors of a listed alarm's state, and of an event. */
+HmiAlarms.ROW_COLORS = {unacked: 'actUnack', acked: 'actAck', cleared: 'clrUnack'};
+HmiAlarms.EVENT_COLORS = {ALM: 'alm', RTN: 'rtn', ACK: 'ack', CHG: 'chg'};
+
+HmiAlarms.colorKeysOf = function(kind)
+{
+	return (kind === 'history') ? HmiAlarms.HISTORY_COLOR_KEYS : HmiAlarms.LIST_COLOR_KEYS;
+};
+
+/**
+ * One color as the cell sets it, or null when it does not: at Run that means
+ * no inline style, leaving it to css/hmi.css.
+ *
+ * @param which  'fill' or 'color'
+ */
+HmiAlarms.colorOf = function(style, group, which)
+{
+	var def = HmiAlarms.COLORS[group];
+	var c = (style != null && def != null) ? style[def[which]] : null;
+
+	return (c != null && c !== '' && c !== mxConstants.NONE) ? String(c) : null;
+};
+
+/** The same, falling back to the built-in default: what the preview draws. */
+HmiAlarms.colorOr = function(style, group, which)
+{
+	return HmiAlarms.colorOf(style, group, which) ||
+		HmiAlarms.COLORS[group][(which === 'fill') ? 'fillDefault' : 'colorDefault'];
+};
+
 
 /** 'list', 'history' or null for any other cell. */
 HmiAlarms.objectKind = function(graph, cell)
@@ -622,23 +697,46 @@ HmiAlarms.installShapes = function()
 		var fs = parseFloat(style[mxConstants.STYLE_FONTSIZE]) || 12;
 		var cols = HmiAlarms.columnsOf(style, this.kind);
 		var title = HmiAlarms.titleOf(style, this.kind);
+		var frame = HmiRuntime.stateFrame(this.state);
 		var rowH = fs * 1.8;
 		var top = y;
 
-		c.setFillColor('#ffffff');
-		c.setStrokeColor('#607d8b');
+		c.setStrokeWidth(frame.width);
+
+		if (frame.fill != null)
+		{
+			c.setFillColor(frame.fill);
+		}
+
+		if (frame.stroke != null)
+		{
+			c.setStrokeColor(frame.stroke);
+		}
+
 		c.rect(x, y, w, h);
-		c.fillAndStroke();
+
+		if (frame.fill != null && frame.stroke != null)
+		{
+			c.fillAndStroke();
+		}
+		else if (frame.fill != null)
+		{
+			c.fill();
+		}
+		else if (frame.stroke != null)
+		{
+			c.stroke();
+		}
 
 		c.setFontSize(fs);
-		c.setFontFamily('Helvetica');
+		c.setFontFamily(frame.family);
 
 		if (HmiAlarms.titleBarOf(style, this.kind))
 		{
-			c.setFillColor('#263238');
+			c.setFillColor(HmiAlarms.colorOr(style, 'title', 'fill'));
 			c.rect(x, top, w, rowH);
 			c.fill();
-			c.setFontColor('#ffffff');
+			c.setFontColor(HmiAlarms.colorOr(style, 'title', 'color'));
 			c.setFontStyle(mxConstants.FONT_BOLD);
 			c.text(x + 6, top + rowH / 2, 0, 0, title, mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE,
 				false, '', null, false, 0, null);
@@ -646,10 +744,10 @@ HmiAlarms.installShapes = function()
 		}
 
 		// Column headings
-		c.setFillColor('#cfd8dc');
+		c.setFillColor(HmiAlarms.colorOr(style, 'head', 'fill'));
 		c.rect(x, top, w, rowH);
 		c.fill();
-		c.setFontColor('#263238');
+		c.setFontColor(HmiAlarms.colorOr(style, 'head', 'color'));
 		c.setFontStyle(mxConstants.FONT_BOLD);
 
 		var colW = w / Math.max(1, cols.length);
@@ -662,17 +760,19 @@ HmiAlarms.installShapes = function()
 
 		top += rowH;
 
-		// Sample rows, colored as they would be
-		var samples = (this.kind === 'history') ? ['#fdecea', '#e8f5e9', '#e3f2fd'] :
-			['#fdecea', '#fff8e1', '#eceff1'];
+		// Sample rows, in the object's own row colors
+		var samples = HmiAlarms.colorKeysOf(this.kind).slice(2);
 		c.setFontStyle(0);
-		c.setFontColor('#90a4ae');
 
 		for (var r = 0; top + rowH <= y + h && r < 12; r++)
 		{
-			c.setFillColor(samples[r % samples.length]);
+			var group = samples[r % samples.length];
+			c.setFillColor(HmiAlarms.colorOr(style, group, 'fill'));
 			c.rect(x + 1, top, w - 2, rowH);
 			c.fill();
+			c.setFontColor(HmiAlarms.colorOr(style, group, 'color'));
+			c.text(x + 5, top + rowH / 2, 0, 0, HmiAlarms.COLORS[group].label,
+				mxConstants.ALIGN_LEFT, mxConstants.ALIGN_MIDDLE, false, '', null, false, 0, null);
 			top += rowH;
 		}
 	};
@@ -703,14 +803,16 @@ HmiAlarms.installPalette = function()
 		HmiLog.guard('alarms.palette', mxUtils.bind(this, function()
 		{
 			var sb = this;
-			var base = 'html=1;fontSize=12;noLabel=1;';
+			var frame = HmiRuntime.objectFrameStyle();
+			var base = 'html=1;fontSize=12;noLabel=1;' + frame;
 
 			this.addPaletteFunctions('hmi', 'HMI', true, [
 				this.createVertexTemplateEntry(base + 'shape=' + HmiAlarms.LIST_SHAPE + ';',
 					480, 200, '', 'Alarm List', null, null, 'alarm list active alarms summary hmi'),
 				this.createVertexTemplateEntry(base + 'shape=' + HmiAlarms.HISTORY_SHAPE + ';',
 					560, 240, '', 'Alarm History', null, null, 'alarm history events log hmi'),
-				this.createVertexTemplateEntry('html=1;fontSize=14;noLabel=1;shape=' + HmiRecipes.LIST_SHAPE + ';',
+				this.createVertexTemplateEntry('html=1;fontSize=14;noLabel=1;' + frame + 'shape=' +
+					HmiRecipes.LIST_SHAPE + ';',
 					280, 300, '', 'Recipe List', null, null, 'recipe list book select hmi'),
 				this.createVertexTemplateEntry(HmiTrend.STYLE, 480, 260, '', 'Trend', null, null,
 					'trend chart plot pens history hmi')
@@ -733,6 +835,7 @@ HmiAlarmView = function(graph, cell, kind, alarms)
 	this.kind = kind;
 	this.alarms = alarms;
 	this.style = graph.getCellStyle(cell);
+	this.frame = HmiRuntime.objectFrame(graph, cell);
 	this.columns = HmiAlarms.columnsOf(this.style, kind);
 	this.maxEvents = parseInt(this.style.hmiMaxEvents, 10) || HmiAlarms.DEFAULT_MAX_EVENTS;
 	this.diskEvents = [];
@@ -745,6 +848,7 @@ HmiAlarmView.prototype.start = function()
 	this.node = document.createElement('div');
 	this.node.className = 'hmiAlarmView hmiAlarmView-' + this.kind;
 	this.node.setAttribute('data-hmi-alarm-view', this.kind);
+	HmiRuntime.applyObjectStyle(this.node, this.frame);
 	this.graph.container.appendChild(this.node);
 
 	this.onView = function() { that.place(); };
@@ -810,6 +914,29 @@ HmiAlarmView.prototype.place = function()
 	s.width = Math.round(state.width) + 'px';
 	s.height = Math.round(state.height) + 'px';
 	s.fontSize = ((parseFloat(this.style[mxConstants.STYLE_FONTSIZE]) || 12) * this.graph.view.scale) + 'px';
+	HmiRuntime.placeObjectBorder(this.node, this.frame, this.graph.view.scale);
+};
+
+/**
+ * One of the object's own colors onto an element, and nothing at all when the
+ * cell does not set it: css/hmi.css then keeps its say.
+ */
+HmiAlarmView.prototype.paint = function(node, group)
+{
+	var fill = HmiAlarms.colorOf(this.style, group, 'fill');
+	var color = HmiAlarms.colorOf(this.style, group, 'color');
+
+	if (fill != null)
+	{
+		node.style.backgroundColor = fill;
+	}
+
+	if (color != null)
+	{
+		node.style.color = color;
+	}
+
+	return node;
 };
 
 HmiAlarmView.pad = function(n)
@@ -879,6 +1006,7 @@ HmiAlarmView.prototype.render = function()
 	if (head != null)
 	{
 		head.className = 'hmiAlarmHead';
+		this.paint(head, 'title');
 
 		var label = document.createElement('span');
 		label.className = 'hmiAlarmTitle';
@@ -923,14 +1051,15 @@ HmiAlarmView.prototype.render = function()
 
 	for (var i = 0; i < this.columns.length; i++)
 	{
-		var th = document.createElement('th');
+		var th = this.paint(document.createElement('th'), 'head');
 		mxUtils.write(th, HmiAlarms.COLUMNS[this.columns[i]]);
 		tr.appendChild(th);
 	}
 
 	if (this.kind === 'list')
 	{
-		tr.appendChild(document.createElement('th'));
+		// The Ack button's column has no heading of its own
+		tr.appendChild(this.paint(document.createElement('th'), 'head'));
 	}
 
 	var thead = document.createElement('thead');
@@ -979,6 +1108,10 @@ HmiAlarmView.prototype.listRow = function(rec)
 		((rec.bad) ? ' hmiAlarm-bad' : '');
 	tr.setAttribute('data-hmi-alarm', rec.tag);
 
+	// A color set for the state covers every priority, so it also replaces
+	// the stronger shade of a HiHi or LoLo row
+	this.paint(tr, HmiAlarms.ROW_COLORS[state]);
+
 	var values = {
 		time: HmiAlarmView.formatTime(rec.alarmTime, false),
 		tag: rec.tag,
@@ -1019,6 +1152,7 @@ HmiAlarmView.prototype.historyRow = function(e)
 {
 	var tr = document.createElement('tr');
 	tr.className = 'hmiAlarmRow hmiAlarmEvent-' + e.event;
+	this.paint(tr, HmiAlarms.EVENT_COLORS[e.event]);
 
 	var values = {
 		time: HmiAlarmView.formatTime(e.time, true),
