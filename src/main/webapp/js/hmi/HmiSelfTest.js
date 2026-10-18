@@ -6432,6 +6432,35 @@ HmiSelfTest.testWindows = function(ui)
 	check('win.unsetSizeFollowsResolution',
 		back.getWindow('a').width === 800, '' + back.getWindow('a').width);
 
+	check('win.titleDefaults', d.movable === false &&
+		d.titleHeight === HmiProject.TITLE_BAR_HEIGHT && d.titleFont === '' &&
+		d.titleFontSize === '' && d.titleFill === '' && d.titleColor === '',
+		JSON.stringify(d));
+
+	p.setWindow('m', {titleBar: true, movable: true, type: 'popup', x: 40,
+		y: 50, width: 400, height: 300, titleHeight: 40, titleFont: 'Verdana',
+		titleFontSize: 18, titleFill: '#204060', titleColor: '#f0f0f0'});
+	p.setWindow('n', {titleBar: true, type: 'popup', x: 5, y: 5, width: 200,
+		height: 100, titleHeight: HmiProject.TITLE_BAR_HEIGHT,
+		titleFont: '  ', titleFill: ''});
+
+	var wtitle = HmiProject.fromXml(
+		p.toXml(mxUtils.createXmlDocument())).getWindow('m');
+
+	check('win.roundTripTitle', wtitle.movable === true &&
+		wtitle.titleHeight === 40 && wtitle.titleFont === 'Verdana' &&
+		wtitle.titleFontSize === 18 && wtitle.titleFill === '#204060' &&
+		wtitle.titleColor === '#f0f0f0', JSON.stringify(wtitle));
+	check('win.titleDefaultsNotStored', p.windows['n'].titleHeight == null &&
+		p.windows['n'].titleFont == null && p.windows['n'].titleFill == null,
+		JSON.stringify(p.windows['n']));
+	check('win.isMovable', HmiWindowManager.isMovable(p.getWindow('m')) &&
+		!HmiWindowManager.isMovable(p.getWindow('n')) &&
+		!HmiWindowManager.isMovable({movable: true, titleBar: true,
+			type: 'overlay'}) &&
+		!HmiWindowManager.isMovable({movable: true, titleBar: false,
+			type: 'popup'}));
+
 	p.setWindow('s', {onShow: 'A = 1;\nB = 2;', whileShowing: '', onHide: 'C = 3;',
 		everyMs: '250'});
 	var ws = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument())).getWindow('s');
@@ -6810,6 +6839,127 @@ HmiSelfTest.testWindows = function(ui)
 		check('showWin.stopDropsWait', sim.get('Recipe_Name').value !== 'after stop', JSON.stringify(sim.get('Recipe_Name')));
 		project.settings.startup = [];
 
+		// --- a movable popup, and the title bar's own look ----------------
+
+		project.setWindow(pc.getId(), {titleBar: true, movable: true,
+			type: 'popup', x: 300, y: 200, width: 200, height: 100,
+			titleHeight: 40, titleFontSize: 20, titleFill: '#204060',
+			titleColor: '#f0f0f0', titleFont: 'Verdana'});
+		project.setWindow(pb.getId(), {titleBar: true, movable: true,
+			type: 'overlay', x: 600, y: 300, width: 200, height: 150});
+		project.settings.startup = [pb.getId()];
+		HmiMenus.start(ui);
+
+		var wm3 = ui.hmiRuntime;
+		var res3 = project.settings;
+		var mov = wm3.show('WinC');
+		var s3 = wm3.scale;
+		var movBar = mov.title;
+		var plainBar = wm3.windowFor(pb).title;
+
+		check('wm.titleHeightDrawn', movBar != null &&
+			movBar.style.height === Math.round(40 * s3) + 'px' &&
+			mov.content.style.top === Math.round(40 * s3) + 'px' &&
+			movBar.style.fontSize === Math.max(9, Math.round(20 * s3)) + 'px',
+			(movBar != null) ? movBar.style.height + ' ' +
+				mov.content.style.top + ' ' + movBar.style.fontSize : 'n/a');
+		check('wm.titleColors',
+			movBar.style.backgroundColor === 'rgb(32, 64, 96)' &&
+			movBar.style.color === 'rgb(240, 240, 240)' &&
+			movBar.style.fontFamily === 'Verdana',
+			movBar.style.backgroundColor + ' ' + movBar.style.color + ' ' +
+				movBar.style.fontFamily);
+		check('wm.titleHeightTranslate',
+			mov.graph.view.translate.y === -(200 + 40),
+			JSON.stringify(mov.graph.view.translate));
+
+		// A window that sets nothing gets no inline style at all, so
+		// css/hmi.css still draws it.
+		check('wm.titleUnsetNoStyle', plainBar.style.backgroundColor === '' &&
+			plainBar.style.color === '' && plainBar.style.fontFamily === '' &&
+			plainBar.style.height ===
+				Math.round(HmiProject.TITLE_BAR_HEIGHT * s3) + 'px',
+			plainBar.style.backgroundColor + '|' + plainBar.style.height);
+		check('wm.movableClass',
+			movBar.className.indexOf('hmiWindowTitleMovable') >= 0 &&
+			plainBar.className.indexOf('hmiWindowTitleMovable') < 0,
+			movBar.className + ' | ' + plainBar.className);
+
+		var pointer = function(node, type, x, y)
+		{
+			var name = (mxClient.IS_POINTER) ? 'pointer' + type :
+				'mouse' + type;
+			var evt = document.createEvent('MouseEvent');
+			evt.initMouseEvent(name, true, true, window, 0, x, y, x, y,
+				false, false, false, false, 0, null);
+			node.dispatchEvent(evt);
+		};
+
+		var dragBy = function(node, dx, dy)
+		{
+			pointer(node, 'down', 100, 100);
+			pointer(document, 'move', 100 + dx * s3, 100 + dy * s3);
+			pointer(document, 'up', 100 + dx * s3, 100 + dy * s3);
+		};
+
+		dragBy(movBar, 60, 40);
+
+		check('wm.dragMovesWindow', Math.abs(mov.props.x - 360) <= 1 &&
+			Math.abs(mov.props.y - 240) <= 1 &&
+			mov.div.style.left === Math.round(mov.props.x * s3) + 'px',
+			mov.props.x + ', ' + mov.props.y + ' @' + s3);
+
+		// The window moves; what it shows does not.
+		check('wm.dragKeepsContent',
+			mov.graph.view.translate.x === -300 &&
+			mov.graph.view.translate.y === -(200 + 40),
+			JSON.stringify(mov.graph.view.translate));
+
+		// The fill view stretches the whole screen with a CSS transform, so a
+		// pointer distance is divided by that as well as by the scale.
+		wm3.screen.hmiStretch = {x: 2, y: 4};
+		var beforeStretch = {x: mov.props.x, y: mov.props.y};
+		dragBy(movBar, 40, 40);
+		wm3.screen.hmiStretch = null;
+
+		check('wm.dragUnderStretch',
+			Math.abs(mov.props.x - (beforeStretch.x + 20)) <= 1 &&
+			Math.abs(mov.props.y - (beforeStretch.y + 10)) <= 1,
+			mov.props.x + ', ' + mov.props.y + ' from ' +
+				JSON.stringify(beforeStretch));
+
+		// A drag may hang off an edge, but the title bar stays grabbable.
+		dragBy(movBar, -5000, -5000);
+		check('wm.dragClampedToScreen',
+			mov.props.x === HmiWindowManager.MIN_ON_SCREEN - 200 &&
+			mov.props.y === 0, mov.props.x + ', ' + mov.props.y);
+		dragBy(movBar, 5000, 5000);
+		check('wm.dragClampedFarSide',
+			mov.props.x === res3.width - HmiWindowManager.MIN_ON_SCREEN &&
+			mov.props.y === res3.height - 40, mov.props.x + ', ' + mov.props.y);
+
+		// A press on the close button is not a drag.
+		var atX = mov.props.x;
+		dragBy(mov.div.querySelector('.hmiWindowClose'), -100, -100);
+		check('wm.closeDoesNotDrag', mov.props.x === atX, mov.props.x);
+
+		// movable on an overlay does nothing: only a popup can be moved.
+		var plainWin = wm3.windowFor(pb);
+		dragBy(plainBar, -100, -100);
+		check('wm.overlayNotMovable', plainWin.props.x === 600 &&
+			plainWin.props.y === 300 && plainWin.dragListeners == null,
+			plainWin.props.x + ', ' + plainWin.props.y);
+
+		// Nothing is remembered: the next showing opens where it is defined.
+		wm3.hide('WinC');
+		check('wm.dragListenersRemoved', mov.dragListeners == null);
+		var again = wm3.show('WinC');
+		check('wm.reopensWhereDefined', again.props.x === 300 &&
+			again.props.y === 200, again.props.x + ', ' + again.props.y);
+
+		HmiMenus.stop(ui);
+		project.settings.startup = [];
+
 		project.setWindow(pc.getId(), {type: 'popup', x: 300, y: 200,
 			width: 200, height: 100, onShow: 'Pump1_Run = ;'});
 		check('script.validateReports',
@@ -6824,6 +6974,36 @@ HmiSelfTest.testWindows = function(ui)
 			HmiMenus.checkWindow(project, pb.getId()) != null);
 		check('win.validateFits',
 			HmiMenus.checkWindow(project, pd.getId()) == null);
+
+		var pdCheck = function(props)
+		{
+			project.setWindow(pd.getId(), props);
+
+			return HmiMenus.checkWindow(project, pd.getId()) || '';
+		};
+
+		check('win.validateTitleHeight', /between 8 and 400/.test(pdCheck(
+			{titleBar: true, x: 0, y: 0, width: 700, height: 500,
+				titleHeight: 500})), pdCheck({titleBar: true, x: 0, y: 0,
+				width: 700, height: 500, titleHeight: 500}));
+		check('win.validateTitleTallerThanWindow', /taller than the 100/.test(
+			pdCheck({titleBar: true, x: 0, y: 0, width: 300, height: 100,
+				titleHeight: 200})));
+		check('win.validateTitleFontSize', /font size must be/.test(pdCheck(
+			{titleBar: true, x: 0, y: 0, width: 300, height: 200,
+				titleFontSize: 200})));
+		check('win.validateMovablePopupOnly', /popup windows only/.test(pdCheck(
+			{titleBar: true, movable: true, type: 'overlay', x: 0, y: 0,
+				width: 300, height: 200})));
+		check('win.validateMovableNeedsBar', /needs a title bar/.test(pdCheck(
+			{movable: true, type: 'popup', x: 0, y: 0, width: 300,
+				height: 200})));
+		check('win.validateMovableOk', pdCheck({titleBar: true, movable: true,
+			type: 'popup', x: 0, y: 0, width: 300, height: 200,
+			titleHeight: 40, titleFontSize: 18}) === '');
+
+		project.setWindow(pd.getId(), {type: 'replace', x: 0, y: 0,
+			width: 700, height: 500});
 
 		// --- dialogs ------------------------------------------------------
 
@@ -6942,6 +7122,65 @@ HmiSelfTest.testWindows = function(ui)
 			wa2.height === 480, JSON.stringify(wa2));
 		check('dlg.scriptApplied', wa2.onShow === 'Pump1_Run = 1;' &&
 			wa2.onHide === '', JSON.stringify(wa2));
+
+		// The title bar's look, and Movable, which only a popup offers.
+		HmiDialogs.showWindowProps(ui, pd);
+		dlg = ui.dialog.container;
+
+		var rowOf = function(prop)
+		{
+			return dlg.querySelector('[data-hmi-prop="' + prop + '"]').parentNode;
+		};
+		var disabled = function(prop)
+		{
+			return rowOf(prop).className.indexOf('hmiDisabled') >= 0;
+		};
+
+		check('dlg.titleFieldsNeedBar', disabled('titleHeight') &&
+			disabled('titleFont') && disabled('titleFill') &&
+			disabled('movable'), rowOf('titleHeight').className);
+
+		dlg.querySelector('[data-hmi-prop="titleBar"]').click();
+		check('dlg.titleFieldsEnabled', !disabled('titleHeight') &&
+			!disabled('titleFill') && disabled('movable'),
+			rowOf('movable').className);
+
+		dlg.querySelector('input[type="radio"][value="popup"]').click();
+		check('dlg.movableForPopup', !disabled('movable'),
+			rowOf('movable').className);
+
+		var hInput = dlg.querySelector('[data-hmi-prop="titleHeight"]');
+		hInput.value = '36';
+		hInput.dispatchEvent(new Event('input'));
+
+		var fsInput = dlg.querySelector('[data-hmi-prop="titleFontSize"]');
+		fsInput.value = '16';
+		fsInput.dispatchEvent(new Event('input'));
+
+		var fontSel = dlg.querySelector('[data-hmi-prop="titleFont"]');
+		fontSel.value = 'Verdana';
+		fontSel.dispatchEvent(new Event('change'));
+
+		dlg.querySelector('[data-hmi-prop="movable"]').click();
+
+		var previewBar = dlg.querySelector('.hmiScreenPreviewTitle');
+		var previewScale = 240 / project.settings.width;
+		check('dlg.previewShowsTitleBar', previewBar.style.display !== 'none' &&
+			previewBar.style.height === Math.max(2,
+				Math.round(36 * previewScale)) + 'px' &&
+			previewBar.style.backgroundColor === 'rgb(31, 78, 140)',
+			previewBar.style.height + ' ' + previewBar.style.backgroundColor);
+
+		dlg.querySelector('.hmiOk').click();
+
+		var wd2 = project.getWindow(pd.getId());
+		check('dlg.titleApplied', wd2.titleBar === true &&
+			wd2.type === 'popup' && wd2.titleHeight === 36 &&
+			wd2.titleFontSize === 16 && wd2.titleFont === 'Verdana' &&
+			wd2.movable === true, JSON.stringify(wd2));
+		check('dlg.windowSummary',
+			HmiDialogs.windowSummary(wd2).indexOf('movable') > 0,
+			HmiDialogs.windowSummary(wd2));
 
 		// --- canvas frame -------------------------------------------------
 

@@ -246,7 +246,8 @@ HmiCli.DEVICE_FIELDS = ['host', 'port', 'timeoutMs', 'scanMs', 'enabled', 'optio
 
 HmiCli.USER_FIELDS = ['name', 'level', 'password', 'salt', 'hash', 'iterations'];
 
-HmiCli.WINDOW_FIELDS = ['titleBar', 'type', 'x', 'y', 'width', 'height', 'onShow', 'whileShowing',
+HmiCli.WINDOW_FIELDS = ['titleBar', 'movable', 'titleHeight', 'titleFont', 'titleFontSize',
+	'titleFill', 'titleColor', 'type', 'x', 'y', 'width', 'height', 'onShow', 'whileShowing',
 	'onHide', 'everyMs'];
 
 HmiCli.OBJECT_FIELDS = ['id', 'type', 'style', 'x', 'y', 'width', 'height', 'label', 'links', 'children'];

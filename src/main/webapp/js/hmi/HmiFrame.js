@@ -156,7 +156,7 @@ HmiFrame.draw = function(ui)
 	var tr = view.translate;
 	var res = project.settings;
 	var w = project.getWindow(ui.currentPage.getId());
-	var tb = (w.titleBar) ? HmiProject.TITLE_BAR_HEIGHT : 0;
+	var tb = (w.titleBar) ? HmiWindowManager.titleHeightOf(w) : 0;
 
 	var at = function(x, y)
 	{

@@ -1581,6 +1581,53 @@ HmiMenus.checkWindow = function(project, pageId)
 			res.height + ' screen';
 	}
 
+	if (w.titleBar)
+	{
+		// An empty height is the built-in one: the Window Properties draft
+		// has nothing in the field while it is being retyped.
+		var bar = (w.titleHeight == null || w.titleHeight === '') ?
+			HmiProject.TITLE_BAR_HEIGHT : parseInt(w.titleHeight, 10);
+
+		if (isNaN(bar) || bar < HmiProject.MIN_TITLE_BAR_HEIGHT ||
+			bar > HmiProject.MAX_TITLE_BAR_HEIGHT)
+		{
+			return 'Title bar height must be between ' +
+				HmiProject.MIN_TITLE_BAR_HEIGHT + ' and ' +
+				HmiProject.MAX_TITLE_BAR_HEIGHT + ' px';
+		}
+
+		if (bar > w.height)
+		{
+			return 'Title bar (' + bar + ' px) is taller than the ' +
+				w.height + ' px window';
+		}
+
+		if (w.titleFontSize !== '' && w.titleFontSize != null)
+		{
+			var size = parseInt(w.titleFontSize, 10);
+
+			if (isNaN(size) || size < HmiProject.MIN_TITLE_FONT_SIZE ||
+				size > HmiProject.MAX_TITLE_FONT_SIZE)
+			{
+				return 'Title font size must be between ' +
+					HmiProject.MIN_TITLE_FONT_SIZE + ' and ' +
+					HmiProject.MAX_TITLE_FONT_SIZE + ' px';
+			}
+		}
+	}
+
+	// The operator drags a popup aside; a replace window's overlap rule and an
+	// overlay's place in the stack are the design's business.
+	if (w.movable && w.type !== 'popup')
+	{
+		return 'Movable applies to popup windows only, not ' + w.type;
+	}
+
+	if (w.movable && !w.titleBar)
+	{
+		return 'Movable needs a title bar to drag';
+	}
+
 	return null;
 };
 

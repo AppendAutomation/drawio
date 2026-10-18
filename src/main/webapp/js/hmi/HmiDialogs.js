@@ -2653,7 +2653,8 @@ HmiDialogs.windowSummary = function(w)
 {
 	var type = {replace: 'Replace', overlay: 'Overlay', popup: 'Popup'}[w.type];
 
-	return type + ((w.titleBar) ? ', title bar' : '') + ', ' +
+	return type + ((w.titleBar) ? ', title bar' : '') +
+		((HmiWindowManager.isMovable(w)) ? ', movable' : '') + ', ' +
 		w.width + ' \u00D7 ' + w.height + ' at ' + w.x + ', ' + w.y;
 };
 
@@ -2678,6 +2679,83 @@ HmiDialogs.okCancel = function(ui, div, apply)
 	ok.className += ' hmiOk';
 	footer.appendChild(ok);
 	div.appendChild(footer);
+};
+
+/**
+ * A color swatch and a Default button, for a dialog field whose color may be
+ * unset. An unset color is not stored and gets no inline style at Run, so
+ * css/hmi.css keeps its say; the swatch shows the built-in color meanwhile,
+ * and the button reads Default when nothing is set.
+ */
+HmiDialogs.colorField = function(ui, parent, label, prop, get, set, fallback)
+{
+	var row = HmiDialogs.el('div', 'hmiFormRow');
+	row.appendChild(HmiDialogs.el('label', 'hmiFormLabel', label));
+
+	var swatch = HmiDialogs.el('div', 'hmiColor');
+	swatch.setAttribute('data-hmi-prop', prop);
+
+	var clear = HmiDialogs.button('Default', function()
+	{
+		set('');
+		refresh();
+	});
+	clear.setAttribute('data-hmi-prop', prop + 'Default');
+
+	var refresh = function()
+	{
+		var color = get();
+		swatch.style.backgroundColor = (color !== '') ? color : fallback;
+		clear.style.visibility = (color !== '') ? 'visible' : 'hidden';
+	};
+
+	mxEvent.addListener(swatch, 'click', function(evt)
+	{
+		mxEvent.consume(evt);
+
+		ui.pickColor(get() || fallback, function(color)
+		{
+			if (mxUtils.isLightDarkColor(color))
+			{
+				color = mxUtils.getLightDarkColor(color).light;
+			}
+
+			set((color == null || color === mxConstants.NONE) ? '' : color);
+			refresh();
+		}, null, null, true, label);
+	});
+
+	row.appendChild(swatch);
+	row.appendChild(clear);
+	parent.appendChild(row);
+	refresh();
+
+	return row;
+};
+
+/** Greys a form row out and stops its fields being used. */
+HmiDialogs.enableRow = function(row, on)
+{
+	if (row == null)
+	{
+		return;
+	}
+
+	if (on)
+	{
+		row.className = row.className.replace(/ ?hmiDisabled/, '');
+	}
+	else if (row.className.indexOf('hmiDisabled') < 0)
+	{
+		row.className += ' hmiDisabled';
+	}
+
+	var fields = row.querySelectorAll('input, select, button, textarea');
+
+	for (var i = 0; i < fields.length; i++)
+	{
+		fields[i].disabled = !on;
+	}
 };
 
 // ------------------------------------------------------ window properties
@@ -2777,6 +2855,79 @@ HmiDialogs.showWindowProps = function(ui, page)
 		}, 'checkbox');
 		tb.setAttribute('data-hmi-prop', 'titleBar');
 
+		// Everything the title bar is drawn with, and whether the operator may
+		// drag it. They are kept while the bar is off and come back with it.
+		var titleRows = [];
+
+		var number = function(label, key, placeholder)
+		{
+			var input = HmiDialogs.field(fields, label, d[key], function() {},
+				'number');
+			input.setAttribute('data-hmi-prop', key);
+
+			if (placeholder != null)
+			{
+				input.setAttribute('placeholder', '' + placeholder);
+			}
+
+			mxEvent.addListener(input, 'input', function()
+			{
+				var n = parseInt(input.value, 10);
+				d[key] = (isNaN(n)) ? '' : n;
+				update();
+			});
+
+			titleRows.push(input.parentNode);
+
+			return input;
+		};
+
+		number('Height (px)', 'titleHeight', HmiProject.TITLE_BAR_HEIGHT);
+
+		var fonts = [{value: '', label: 'Default'}];
+		var known = (ui.menus != null && ui.menus.defaultFonts != null) ?
+			ui.menus.defaultFonts : [];
+
+		for (var i = 0; i < known.length; i++)
+		{
+			fonts.push({value: known[i], label: known[i]});
+		}
+
+		if (d.titleFont !== '' && mxUtils.indexOf(known, d.titleFont) < 0)
+		{
+			fonts.push({value: d.titleFont, label: d.titleFont});
+		}
+
+		var font = HmiDialogs.select(fields, 'Font', d.titleFont, fonts,
+			function(v) { d.titleFont = v; });
+		font.setAttribute('data-hmi-prop', 'titleFont');
+		titleRows.push(font.parentNode);
+
+		number('Font size (px)', 'titleFontSize', HmiProject.TITLE_FONT_SIZE);
+
+		titleRows.push(HmiDialogs.colorField(ui, fields, 'Text color',
+			'titleColor', function() { return d.titleColor; },
+			function(v) { d.titleColor = v; update(); },
+			HmiProject.TITLE_BAR_COLOR));
+
+		titleRows.push(HmiDialogs.colorField(ui, fields, 'Background',
+			'titleFill', function() { return d.titleFill; },
+			function(v) { d.titleFill = v; update(); },
+			HmiProject.TITLE_BAR_FILL));
+
+		var mv = HmiDialogs.field(fields, 'Movable', d.movable, function(v)
+		{
+			d.movable = v;
+		}, 'checkbox');
+		mv.setAttribute('data-hmi-prop', 'movable');
+		var movableRow = mv.parentNode;
+
+		fields.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'An empty font size or color leaves the built-in one. Movable ' +
+			'lets the operator move the window at Run by dragging its title ' +
+			'bar; it is for popup windows, and the window opens where it is ' +
+			'defined every time.'));
+
 		fields.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Type'));
 
 		var types = [
@@ -2810,6 +2961,7 @@ HmiDialogs.showWindowProps = function(ui, page)
 					if (radio.checked)
 					{
 						d.type = t.value;
+						update();
 					}
 				});
 
@@ -2876,7 +3028,7 @@ HmiDialogs.showWindowProps = function(ui, page)
 
 			if (b != null)
 			{
-				var tb = (d.titleBar) ? HmiProject.TITLE_BAR_HEIGHT : 0;
+				var tb = (d.titleBar) ? titleHeight() : 0;
 				d.x = Math.floor(b.x);
 				d.y = Math.floor(b.y) - tb;
 				d.width = Math.ceil(b.x + b.width) - d.x;
@@ -2896,6 +3048,8 @@ HmiDialogs.showWindowProps = function(ui, page)
 
 		var preview = HmiDialogs.el('div', 'hmiScreenPreview');
 		var rect = HmiDialogs.el('div', 'hmiScreenPreviewWindow');
+		var bar = HmiDialogs.el('div', 'hmiScreenPreviewTitle');
+		rect.appendChild(bar);
 		preview.appendChild(rect);
 		fields.appendChild(preview);
 
@@ -2930,6 +3084,13 @@ HmiDialogs.showWindowProps = function(ui, page)
 			update();
 		};
 
+		var titleHeight = function()
+		{
+			var n = parseInt(d.titleHeight, 10);
+
+			return (!isNaN(n) && n > 0) ? n : HmiProject.TITLE_BAR_HEIGHT;
+		};
+
 		var update = function()
 		{
 			var pw = 240;
@@ -2940,9 +3101,19 @@ HmiDialogs.showWindowProps = function(ui, page)
 			rect.style.top = Math.round(d.y * scale) + 'px';
 			rect.style.width = Math.max(1, Math.round(d.width * scale)) + 'px';
 			rect.style.height = Math.max(1, Math.round(d.height * scale)) + 'px';
-			rect.style.borderTopWidth = (d.titleBar) ?
-				Math.max(2, Math.round(HmiProject.TITLE_BAR_HEIGHT * scale)) +
-				'px' : '1px';
+			bar.style.display = (d.titleBar) ? '' : 'none';
+			bar.style.height = Math.max(2,
+				Math.round(titleHeight() * scale)) + 'px';
+			bar.style.backgroundColor = (d.titleFill !== '') ? d.titleFill :
+				HmiProject.TITLE_BAR_FILL;
+
+			for (var i = 0; i < titleRows.length; i++)
+			{
+				HmiDialogs.enableRow(titleRows[i], d.titleBar);
+			}
+
+			HmiDialogs.enableRow(movableRow,
+				d.titleBar && d.type === 'popup');
 
 			var msg = HmiMenus.checkWindow({settings: res,
 				getWindow: function() { return d; }}, current.getId());

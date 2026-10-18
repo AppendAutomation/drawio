@@ -1225,18 +1225,26 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	div.setAttribute('data-hmi-window', name);
 
 	var title = null;
+	var close = null;
 
 	if (props.titleBar)
 	{
 		title = document.createElement('div');
-		title.className = 'hmiWindowTitle';
+		title.className = 'hmiWindowTitle' +
+			(HmiWindowManager.isMovable(props) ? ' hmiWindowTitleMovable' : '');
+
+		// A color or font the window does not set is left to css/hmi.css, so
+		// a window drawn before these settings existed keeps its look.
+		if (props.titleFill) { title.style.backgroundColor = props.titleFill; }
+		if (props.titleColor) { title.style.color = props.titleColor; }
+		if (props.titleFont) { title.style.fontFamily = props.titleFont; }
 
 		var label = document.createElement('span');
 		label.className = 'hmiWindowTitleText';
 		mxUtils.write(label, name);
 		title.appendChild(label);
 
-		var close = document.createElement('span');
+		close = document.createElement('span');
 		close.className = 'hmiWindowClose';
 		close.setAttribute('title', mxResources.get('close'));
 		mxUtils.write(close, '\u00D7');
@@ -1271,6 +1279,11 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 		content: content, graph: graph, runtime: null};
 
 	this.place(win);
+
+	if (HmiWindowManager.isMovable(props))
+	{
+		this.installWindowDrag(win, close);
+	}
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
@@ -1325,6 +1338,102 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	return win;
 };
 
+/** A window's title bar height, its own or the built-in one. */
+HmiWindowManager.titleHeightOf = function(props)
+{
+	var h = parseInt(props.titleHeight, 10);
+
+	return (!isNaN(h) && h > 0) ? h : HmiProject.TITLE_BAR_HEIGHT;
+};
+
+/**
+ * Whether the operator may move this window by its title bar. Only a popup
+ * can be moved: a replace window's overlap rule and an overlay's place in the
+ * stack belong to the design, while a popup is the one window the operator
+ * may want out of the way.
+ */
+HmiWindowManager.isMovable = function(props)
+{
+	return props.movable === true && props.titleBar === true &&
+		props.type === 'popup';
+};
+
+/**
+ * How much of a dragged window stays on the screen. A window may hang off an
+ * edge, but its title bar stays grabbable.
+ */
+HmiWindowManager.MIN_ON_SCREEN = 48;
+
+/**
+ * Dragging a popup by its title bar.
+ *
+ * The window moves; what it shows does not, because pageX and pageY are left
+ * alone -- the same as a ShowWindow with coordinates. Nothing is remembered:
+ * the window's properties are copied for each showing, so the next one opens
+ * where the window is defined.
+ *
+ * Pointer distances are divided by the screen's scale and, in the fill view,
+ * by its CSS stretch, both read on every move: atDesignSize and a resize lay
+ * the screen out again mid-drag.
+ */
+HmiWindowManager.prototype.installWindowDrag = function(win, close)
+{
+	var that = this;
+	var drag = null;
+
+	var down = function(evt)
+	{
+		if (drag != null || (close != null && mxEvent.getSource(evt) === close))
+		{
+			return;
+		}
+
+		drag = {x: mxEvent.getClientX(evt), y: mxEvent.getClientY(evt),
+			winX: win.props.x, winY: win.props.y};
+		mxEvent.consume(evt);
+	};
+
+	var move = function(evt)
+	{
+		if (drag == null)
+		{
+			return;
+		}
+
+		var stretch = (that.screen != null) ? that.screen.hmiStretch : null;
+		var sx = that.scale * ((stretch != null) ? stretch.x : 1);
+		var sy = that.scale * ((stretch != null) ? stretch.y : 1);
+		var res = that.project.settings;
+		var keep = Math.min(HmiWindowManager.MIN_ON_SCREEN, win.props.width);
+		var bar = HmiWindowManager.titleHeightOf(win.props);
+		var x = drag.winX + (mxEvent.getClientX(evt) - drag.x) / sx;
+		var y = drag.winY + (mxEvent.getClientY(evt) - drag.y) / sy;
+
+		win.props.x = Math.round(Math.max(keep - win.props.width,
+			Math.min(res.width - keep, x)));
+		win.props.y = Math.round(Math.max(0,
+			Math.min(Math.max(0, res.height - bar), y)));
+		that.place(win);
+		mxEvent.consume(evt);
+	};
+
+	var up = function(evt)
+	{
+		if (drag != null)
+		{
+			drag = null;
+			mxEvent.consume(evt);
+		}
+	};
+
+	mxEvent.addGestureListeners(win.title, down, null, null);
+	mxEvent.addGestureListeners(document, null, move, up);
+
+	// Removed when the window closes, so an application that opens and closes
+	// a faceplate all day does not pile up listeners on the document.
+	win.dragListeners = {move: move, up: up};
+};
+
 /** Positions a window on the screen at the current scale. */
 HmiWindowManager.prototype.place = function(win)
 {
@@ -1338,14 +1447,21 @@ HmiWindowManager.prototype.place = function(win)
 	style.height = Math.round(p.height * s) + 'px';
 
 	// The title bar is part of the window's height, as it is on the device.
-	var tb = (win.title != null) ?
-		Math.round(HmiProject.TITLE_BAR_HEIGHT * s) : 0;
+	var bar = HmiWindowManager.titleHeightOf(p);
+	var tb = (win.title != null) ? Math.round(bar * s) : 0;
 
 	if (win.title != null)
 	{
+		var size = parseInt(p.titleFontSize, 10);
+
+		if (isNaN(size))
+		{
+			size = HmiProject.TITLE_FONT_SIZE;
+		}
+
 		win.title.style.height = tb + 'px';
 		win.title.style.lineHeight = tb + 'px';
-		win.title.style.fontSize = Math.max(9, Math.round(13 * s)) + 'px';
+		win.title.style.fontSize = Math.max(9, Math.round(size * s)) + 'px';
 	}
 
 	win.content.style.top = tb + 'px';
@@ -1355,7 +1471,7 @@ HmiWindowManager.prototype.place = function(win)
 	if (win.graph != null)
 	{
 		var tx = -((p.pageX != null) ? p.pageX : p.x);
-		var ty = -(((p.pageY != null) ? p.pageY : p.y) + ((win.title != null) ? HmiProject.TITLE_BAR_HEIGHT : 0));
+		var ty = -(((p.pageY != null) ? p.pageY : p.y) + ((win.title != null) ? bar : 0));
 		var view = win.graph.view;
 
 		if (view.scale !== s || view.translate.x !== tx || view.translate.y !== ty)
@@ -1375,6 +1491,13 @@ HmiWindowManager.prototype.close = function(win)
 	}
 
 	this.windows.splice(i, 1);
+
+	if (win.dragListeners != null)
+	{
+		mxEvent.removeGestureListeners(document, null, win.dragListeners.move,
+			win.dragListeners.up);
+		win.dragListeners = null;
+	}
 
 	if (win.whileTimer != null)
 	{

@@ -158,6 +158,24 @@ HmiProject.WINDOW_TYPES = ['replace', 'overlay', 'popup'];
 
 HmiProject.TITLE_BAR_HEIGHT = 24;
 
+/** The title's font size at scale 1, when the window sets none. */
+HmiProject.TITLE_FONT_SIZE = 13;
+
+/**
+ * What css/hmi.css draws a title bar in. A window that sets no color of its
+ * own gets no inline style at all, so these are only what the Window
+ * Properties swatches and its preview show meanwhile -- they and the style
+ * sheet have to be changed together.
+ */
+HmiProject.TITLE_BAR_FILL = '#1f4e8c';
+HmiProject.TITLE_BAR_COLOR = '#ffffff';
+
+/** What a title bar height and font size are allowed to be. */
+HmiProject.MIN_TITLE_BAR_HEIGHT = 8;
+HmiProject.MAX_TITLE_BAR_HEIGHT = 400;
+HmiProject.MIN_TITLE_FONT_SIZE = 6;
+HmiProject.MAX_TITLE_FONT_SIZE = 72;
+
 /** Window scripts, stored as child elements so multi-line text stays legible. */
 HmiProject.WINDOW_SCRIPTS = ['onShow', 'whileShowing', 'onHide'];
 
@@ -185,6 +203,13 @@ HmiProject.prototype.getWindow = function(pageId)
 
 	return {
 		titleBar: w.titleBar === true,
+		movable: w.movable === true,
+		titleHeight: (w.titleHeight != null) ? w.titleHeight :
+			HmiProject.TITLE_BAR_HEIGHT,
+		titleFont: w.titleFont || '',
+		titleFontSize: (w.titleFontSize != null) ? w.titleFontSize : '',
+		titleFill: w.titleFill || '',
+		titleColor: w.titleColor || '',
 		type: (mxUtils.indexOf(HmiProject.WINDOW_TYPES, w.type) >= 0) ?
 			w.type : 'replace',
 		x: (w.x != null) ? w.x : 0,
@@ -204,7 +229,38 @@ HmiProject.prototype.setWindow = function(pageId, props)
 	var w = {};
 
 	if (props.titleBar) { w.titleBar = true; }
+	if (props.movable) { w.movable = true; }
 	if (props.type != null && props.type !== 'replace') { w.type = props.type; }
+
+	// The title bar's own look. An unset color or font is left unset, so
+	// css/hmi.css keeps its say and a window drawn before these settings
+	// existed looks exactly as it did. They are kept while the bar is off,
+	// so turning it back on brings them with it.
+	var titleStrings = ['titleFont', 'titleFill', 'titleColor'];
+
+	for (var i = 0; i < titleStrings.length; i++)
+	{
+		var text = props[titleStrings[i]];
+
+		if (text != null && ('' + text).trim() !== '')
+		{
+			w[titleStrings[i]] = ('' + text).trim();
+		}
+	}
+
+	var height = parseInt(props.titleHeight, 10);
+
+	if (!isNaN(height) && height !== HmiProject.TITLE_BAR_HEIGHT)
+	{
+		w.titleHeight = height;
+	}
+
+	var fontSize = parseInt(props.titleFontSize, 10);
+
+	if (!isNaN(fontSize))
+	{
+		w.titleFontSize = fontSize;
+	}
 
 	var dims = ['x', 'y', 'width', 'height'];
 
@@ -1000,7 +1056,9 @@ HmiProject.prototype.toXml = function(doc)
 		var node = doc.createElement('window');
 		node.setAttribute('page', ids[i]);
 
-		var keys = ['titleBar', 'type', 'x', 'y', 'width', 'height', 'everyMs'];
+		var keys = ['titleBar', 'movable', 'type', 'x', 'y', 'width', 'height',
+			'titleHeight', 'titleFont', 'titleFontSize', 'titleFill', 'titleColor',
+			'everyMs'];
 
 		for (var j = 0; j < keys.length; j++)
 		{
@@ -1440,8 +1498,31 @@ HmiProject.fromXml = function(node)
 		var w = {};
 
 		if (n.getAttribute('titleBar') === '1') { w.titleBar = true; }
+		if (n.getAttribute('movable') === '1') { w.movable = true; }
 		if (n.getAttribute('type')) { w.type = n.getAttribute('type'); }
 		if (n.getAttribute('everyMs')) { w.everyMs = n.getAttribute('everyMs'); }
+
+		var titleStrings = ['titleFont', 'titleFill', 'titleColor'];
+
+		for (var j = 0; j < titleStrings.length; j++)
+		{
+			if (n.getAttribute(titleStrings[j]))
+			{
+				w[titleStrings[j]] = n.getAttribute(titleStrings[j]);
+			}
+		}
+
+		var titleNumbers = ['titleHeight', 'titleFontSize'];
+
+		for (var j = 0; j < titleNumbers.length; j++)
+		{
+			var tn = parseInt(n.getAttribute(titleNumbers[j]), 10);
+
+			if (!isNaN(tn))
+			{
+				w[titleNumbers[j]] = tn;
+			}
+		}
 
 		for (var j = 0; j < HmiProject.WINDOW_SCRIPTS.length; j++)
 		{

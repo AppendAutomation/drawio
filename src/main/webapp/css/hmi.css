@@ -490,6 +490,13 @@
 	font-size: 12px;
 }
 
+/* A form row whose fields do not apply just now */
+.hmiDisabled
+{
+	opacity: 0.45;
+	pointer-events: none;
+}
+
 .hmiFormSection
 {
 	margin: 14px 0 4px 0;
@@ -811,6 +818,15 @@
 	border-top-color: #1a73e8;
 }
 
+/* The window's title bar in that preview, at its height and in its color */
+.hmiScreenPreviewTitle
+{
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+}
+
 /* The simulated device screen covering the diagram area in run mode. Below
    dialogs, so user input and the log still appear over it. */
 .hmiScreenBackdrop
@@ -891,6 +907,12 @@
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
+}
+
+.hmiWindowTitleMovable
+{
+	cursor: move;
+	touch-action: none;
 }
 
 .hmiWindowClose
