@@ -6034,6 +6034,7 @@ HmiDialogs.functionErrorTitle = function(items)
 	var windows = 0;
 	var screen = 0;
 	var database = 0;
+	var lists = 0;
 
 	for (var i = 0; i < items.length; i++)
 	{
@@ -6057,13 +6058,18 @@ HmiDialogs.functionErrorTitle = function(items)
 		{
 			database++;
 		}
+		else if (/^List/.test(items[i].call || ''))
+		{
+			lists++;
+		}
 	}
 
 	return (recipe === items.length) ? 'Recipe Error' :
 		((indirect === items.length) ? 'Indirect Tag Error' :
 		((windows === items.length) ? 'Window Error' :
 		((screen === items.length) ? 'Screen to PDF Error' :
-		((database === items.length) ? 'Database Error' : 'Script Error'))));
+		((database === items.length) ? 'Database Error' :
+		((lists === items.length) ? 'List Error' : 'Script Error')))));
 };
 
 /** Shows queued recipe errors now rather than after the running script. */

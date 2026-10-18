@@ -410,6 +410,16 @@ HmiTypes.defineLink = function(key, def)
 				titleFill: '', titleColor: '', selFill: '', selColor: ''};
 		}});
 
+	// The List Box object's settings (HmiList.js): edited in its own section,
+	// never offered as a link
+	def('list', {code: 9003, family: 'display', label: 'List Box', milestone: 99,
+		refs: {selectedTag: 'tag', upTag: 'tag', downTag: 'tag'},
+		defaults: function()
+		{
+			return {name: '', title: '', titleBar: false, items: '', selectedTag: '', upTag: '',
+				downTag: '', arrows: false, titleFill: '', titleColor: '', selFill: '', selColor: ''};
+		}});
+
 	// The Trend object's settings (HmiTrend.js): edited in its own section,
 	// never offered as a link
 	def('trend', {code: 9002, family: 'display', label: 'Trend', milestone: 99,

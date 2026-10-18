@@ -336,7 +336,16 @@ HmiExpr.FUNCTIONS = {
 	'TrendPause': {arity: 1, action: true},
 	'TrendPlay': {arity: 1, action: true},
 	'TrendScrollBack': {arity: 1, action: true},
-	'TrendScrollForward': {arity: 1, action: true}
+	'TrendScrollForward': {arity: 1, action: true},
+
+	// List Boxes (HmiList.js), by the list's name. The item, the comma
+	// separated text and the sort order are text too
+	'ListClear': {arity: 1, action: true},
+	'ListAdd': {arity: 2, action: true},
+	'ListRemove': {arity: 2, action: true},
+	'ListSelect': {arity: 2, action: true},
+	'ListLoad': {arity: 2, action: true},
+	'ListSort': {arity: 2, action: true}
 };
 
 /** A function's accepted argument counts. */
@@ -1849,6 +1858,10 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		this.checkTrendCall(name, args, token);
 	}
+	else if (HmiList.isFunction(name) && this.project != null)
+	{
+		this.checkListCall(name, args, token);
+	}
 
 	if (def != null && def.action)
 	{
@@ -2073,6 +2086,45 @@ HmiExpr.Parser.prototype.checkTrendCall = function(name, args, token)
 
 			return;
 		}
+	}
+};
+
+/**
+ * The list functions take the list's name as text: a bare tag reference is a
+ * likely mistake unless it is a message tag holding the name. Literal names
+ * are checked against the pages by Validate (HmiMenus), and a literal sort
+ * order has to be one ListSort knows.
+ */
+HmiExpr.Parser.prototype.checkListCall = function(name, args, token)
+{
+	var a = args[0];
+
+	if (a != null && a.type === 'ref' && a.field == null)
+	{
+		var tag = this.project.getTag(a.name);
+
+		if (tag != null && !HmiTypes.isMessage(tag.type))
+		{
+			this.error(name + ' takes the list name as text: write "' + tag.name +
+				'" in quotes, or use a message tag', token);
+
+			return;
+		}
+	}
+	else if (a != null && a.type === 'literal' &&
+		(typeof a.value !== 'string' || a.value.trim() === ''))
+	{
+		this.error(name + ': the list name is empty', token);
+
+		return;
+	}
+
+	var order = (name === 'ListSort') ? args[1] : null;
+
+	if (order != null && order.type === 'literal' &&
+		(typeof order.value !== 'string' || HmiList.ORDERS[String(order.value).trim().toLowerCase()] == null))
+	{
+		this.error('ListSort: the sort order must be ASC, DESC, A or D', token);
 	}
 };
 

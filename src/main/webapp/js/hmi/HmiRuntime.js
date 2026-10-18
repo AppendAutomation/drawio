@@ -44,6 +44,9 @@ HmiRuntime = function(config)
 	// The Run's HmiTrendManager (TrendSetPen() ..., Trend objects)
 	this.trends = config.trends || null;
 
+	// The Run's HmiListManager (ListAdd() ..., List Box objects)
+	this.lists = config.lists || null;
+
 	// The Run's HmiSqlManager (SQLConnect() ...): the connections and the
 	// rows a selection fetched, shared by every window of the Run
 	this.sql = config.sql || null;
@@ -154,8 +157,9 @@ HmiRuntime.prototype.stopScripts = function()
 };
 
 /**
- * Live views over the Alarm List, Alarm History, Recipe List and Trend objects.
- * Recipe lists also follow tag values (applyBatch).
+ * Live views over the Alarm List, Alarm History, Recipe List, Trend and List
+ * Box objects. Recipe lists and list boxes also follow tag values
+ * (applyBatch).
  */
 HmiRuntime.prototype.startAlarmViews = function()
 {
@@ -180,6 +184,10 @@ HmiRuntime.prototype.startAlarmViews = function()
 		else if (HmiTrend.isTrendCell(graph, cell))
 		{
 			view = new HmiTrendView(this, cell, HmiProject.getCellLinks(graph, cell).trend);
+		}
+		else if (HmiList.isListCell(graph, cell))
+		{
+			view = new HmiListView(this, cell, HmiProject.getCellLinks(graph, cell).list);
 		}
 
 		if (view != null)
@@ -673,7 +681,8 @@ HmiRuntime.prototype.context = function()
 				var owner = HmiRecipes.isFunction(name) ? that.recipes :
 					((name === HmiIndirect.FUNCTION) ? that.indirect :
 					(HmiTrend.isFunction(name) ? that.trends :
-					(HmiSql.isFunction(name) ? that.sql : that.security)));
+					(HmiList.isFunction(name) ? that.lists :
+					(HmiSql.isFunction(name) ? that.sql : that.security))));
 
 				return (owner != null) ? owner.call(name, args) : null;
 			},

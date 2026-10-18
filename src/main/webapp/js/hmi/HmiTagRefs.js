@@ -29,7 +29,7 @@ HmiTagRefs.IGNORED_FIELDS = {
 	'name': true, 'spanSec': true, 'sampleMs': true, 'refreshMs': true,
 	'gridColor': true, 'anchor': true, 'pivot': true, 'pivotDx': true,
 	'pivotDy': true, 'titleFill': true, 'titleColor': true, 'selFill': true,
-	'selColor': true
+	'selColor': true, 'titleBar': true, 'items': true
 };
 
 /**

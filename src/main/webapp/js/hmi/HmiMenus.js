@@ -877,6 +877,7 @@ HmiMenus.collectProblems = function(ui, fn)
 
 	var model = graph.getModel();
 	var trendDuplicates = HmiTrend.duplicates(HmiTrend.collect(ui));
+	var listDuplicates = HmiList.duplicates(HmiList.collect(ui));
 
 	var walk = function(parent, pageName)
 	{
@@ -890,6 +891,11 @@ HmiMenus.collectProblems = function(ui, fn)
 			if (links.trend == null && HmiTrend.isTrendCell(graph, cell))
 			{
 				problems.push({page: pageName, cell: cell, link: 'Trend', message: 'The trend has no name or pens'});
+			}
+
+			if (links.list == null && HmiList.isListCell(graph, cell))
+			{
+				problems.push({page: pageName, cell: cell, link: 'List Box', message: 'The list box has no name'});
 			}
 
 			for (var key in links)
@@ -914,6 +920,25 @@ HmiMenus.collectProblems = function(ui, fn)
 						if (trendDuplicates[d].name.toLowerCase() === trendName.toLowerCase())
 						{
 							errors.push(trendDuplicates[d].count + ' trends are named "' + trendName + '"; trend names must be unique');
+						}
+					}
+				}
+
+				if (key === 'list')
+				{
+					var listName = HmiList.normalize(links[key]).name;
+
+					if (!HmiList.validName(listName))
+					{
+						errors.push('A list box needs a name of up to 64 characters');
+					}
+
+					for (var l = 0; l < listDuplicates.length; l++)
+					{
+						if (listDuplicates[l].name.toLowerCase() === listName.toLowerCase())
+						{
+							errors.push(listDuplicates[l].count + ' list boxes are named "' + listName +
+								'"; list names must be unique');
 						}
 					}
 				}
@@ -1114,6 +1139,17 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 			if (problem != null)
 			{
 				out.push(problem);
+			}
+		}
+
+		if (n.type === 'call' && HmiList.isFunction(n.name) && n.args.length > 0 && n.args[0].type === 'literal' &&
+			typeof n.args[0].value === 'string' && n.args[0].value.trim() !== '')
+		{
+			var listProblem = HmiMenus.listCallProblem(ui, n);
+
+			if (listProblem != null)
+			{
+				out.push(listProblem);
 			}
 		}
 
@@ -1334,6 +1370,23 @@ HmiMenus.trendCallProblem = function(ui, n)
 	}
 
 	return null;
+};
+
+/** A list function's literal list name checked against the pages. */
+HmiMenus.listCallProblem = function(ui, n)
+{
+	var name = n.args[0].value.trim();
+	var lists = HmiList.collect(ui);
+
+	for (var i = 0; i < lists.length; i++)
+	{
+		if (HmiList.normalize(lists[i].cfg).name.toLowerCase() === name.toLowerCase())
+		{
+			return null;
+		}
+	}
+
+	return n.name + ': no list box named "' + name + '"';
 };
 
 HmiMenus.tagProblem = function(tag, message)

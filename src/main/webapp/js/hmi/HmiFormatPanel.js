@@ -71,13 +71,25 @@ HmiFormatPanel.prototype.init = function()
 		this.addLinkSection('trend', HmiTypes.LINKS['trend']);
 	}
 
+	// A List Box's settings are its list link, likewise
+	if (HmiList.isListCell(graph, this.cell))
+	{
+		if (this.links.list == null)
+		{
+			this.links.list = HmiTypes.LINKS['list'].defaults();
+		}
+
+		ui.hmiUiState.expanded['list'] = true;
+		this.addLinkSection('list', HmiTypes.LINKS['list']);
+	}
+
 	this.container.appendChild(this.addLauncher(this.createPanel()));
 
 	for (var key in this.links)
 	{
 		var def = HmiTypes.LINKS[key];
 
-		if (def != null && key !== 'recipeList' && key !== 'trend')
+		if (def != null && key !== 'recipeList' && key !== 'trend' && key !== 'list')
 		{
 			this.addLinkSection(key, def);
 		}

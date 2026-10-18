@@ -815,7 +815,9 @@ HmiAlarms.installPalette = function()
 					HmiRecipes.LIST_SHAPE + ';',
 					280, 300, '', 'Recipe List', null, null, 'recipe list book select hmi'),
 				this.createVertexTemplateEntry(HmiTrend.STYLE, 480, 260, '', 'Trend', null, null,
-					'trend chart plot pens history hmi')
+					'trend chart plot pens history hmi'),
+				this.createVertexTemplateEntry(HmiList.STYLE, 240, 300, '', 'List Box', null, null,
+					'list box items select pick hmi')
 			]);
 		}));
 	};

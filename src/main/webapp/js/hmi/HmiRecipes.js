@@ -1464,7 +1464,7 @@ HmiRecipes.isListCell = function(graph, cell)
 HmiRecipes.LIST_COLORS = {
 	title: {label: 'Title bar', fill: 'titleFill', color: 'titleColor',
 		fillDefault: '#263238', colorDefault: '#ffffff'},
-	selected: {label: 'Selected recipe', fill: 'selFill', color: 'selColor',
+	selected: {label: 'Selected row', fill: 'selFill', color: 'selColor',
 		fillDefault: '#1a7fc1', colorDefault: '#ffffff'}
 };
 

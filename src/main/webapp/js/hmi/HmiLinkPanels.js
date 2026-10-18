@@ -177,6 +177,68 @@
 		}
 	};
 
+	// The List Box object (HmiList.js)
+	B['list'] = function(content, cfg)
+	{
+		var ui = this.editorUi;
+		var cell = this.cell;
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint',
+			'At Run, shows the items scripts put in it. Touching one selects it and writes it to ' +
+			'Selected item. Scripts use the name: ListClear, ListAdd, ListRemove, ListSelect, ' +
+			'ListLoad and ListSort. Background, border and font are in the Style and Text tabs.'));
+
+		var name = this.createTextField(cfg, 'name', 'List1');
+		name.setAttribute('data-hmi-field', 'listName');
+
+		var checkName = function()
+		{
+			var value = name.value.trim();
+			var clash = HmiList.collect(ui).some(function(l)
+			{
+				return l.cell !== cell && HmiList.normalize(l.cfg).name.toLowerCase() === value.toLowerCase();
+			});
+			var problem = (!HmiList.validName(value)) ? 'A list needs a name of up to 64 characters' :
+				((clash) ? 'Another list has this name' : null);
+
+			name.classList.toggle('hmiInvalid', problem != null);
+
+			if (problem != null)
+			{
+				name.setAttribute('title', problem);
+			}
+			else
+			{
+				name.removeAttribute('title');
+			}
+		};
+
+		mxEvent.addListener(name, 'input', checkName);
+		checkName();
+
+		this.addRow(content, 'Name', name);
+		this.addRow(content, 'Title', this.createTextField(cfg, 'title', 'the list name'));
+		this.addRow(content, '', this.createCheckField(cfg, 'titleBar', 'Show title bar'));
+		this.addRow(content, 'Items', this.createLinesField(cfg, 'items', 'one per line; scripts add the rest'));
+		this.addRow(content, 'Selected item (message tag)', this.createTagField(cfg, 'selectedTag'));
+		this.addRow(content, 'Select up (discrete tag)', this.createTagField(cfg, 'upTag'));
+		this.addRow(content, 'Select down (discrete tag)', this.createTagField(cfg, 'downTag'));
+		this.addRow(content, '', this.createCheckField(cfg, 'arrows', 'Up and down arrow buttons'));
+
+		content.appendChild(HmiDialogs.el('div', 'hmiHint', 'Colors: background, then text.'));
+
+		for (var c = 0; c < HmiList.COLOR_KEYS.length; c++)
+		{
+			var def = HmiList.COLORS[HmiList.COLOR_KEYS[c]];
+			var pair = HmiDialogs.el('div', 'hmiColorPair');
+			pair.appendChild(this.createColorField(cfg, def.fill, def.label + ' background',
+				def.fillDefault));
+			pair.appendChild(this.createColorField(cfg, def.color, def.label + ' text',
+				def.colorDefault));
+			this.addRow(content, def.label, pair);
+		}
+	};
+
 	// The Trend object (HmiTrend.js)
 	B['trend'] = function(content, cfg)
 	{
@@ -784,6 +846,36 @@ HmiFormatPanel.prototype.createPageField = function(cfg, field)
 	}
 
 	return this.createSelectField(cfg, field, options);
+};
+
+/**
+ * A plain multi-line field, one value per line (the List Box's starting
+ * items). Committed on blur, so one edit is one undo entry.
+ */
+HmiFormatPanel.prototype.createLinesField = function(cfg, field, placeholder, rows)
+{
+	var that = this;
+	var area = document.createElement('textarea');
+	area.className = 'hmiInput hmiLines';
+	area.setAttribute('rows', String(rows || 4));
+
+	if (placeholder != null)
+	{
+		area.setAttribute('placeholder', placeholder);
+	}
+
+	area.value = (cfg[field] != null) ? cfg[field] : '';
+
+	mxEvent.addListener(area, 'blur', function()
+	{
+		if (cfg[field] !== area.value)
+		{
+			cfg[field] = area.value;
+			that.commit();
+		}
+	});
+
+	return area;
 };
 
 /**

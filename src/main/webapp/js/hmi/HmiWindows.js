@@ -367,6 +367,12 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.trends = new HmiTrendManager(project, this.hub.client(), {ui: ui, store: store,
 		trends: HmiTrend.collect(ui).map(function(t) { return t.cfg; })});
 
+	// Every List Box of the project: its items and selection belong to the
+	// Run, so a script can fill a list before a window shows it and two
+	// windows showing one list agree
+	this.lists = new HmiListManager(project, this.hub.client(), {ui: ui,
+		lists: HmiList.collect(ui).map(function(l) { return l.cfg; })});
+
 	// Databases: the connections belong to the Run, not to a window, so a
 	// connection one window's script opened is the one another addresses
 	// A bind list may carry a tag's dotfields, and .InAlarm and .Acked are
@@ -400,6 +406,7 @@ HmiWindowManager.prototype.start = function()
 	this.security.start();
 	this.recipes.start();
 	this.trends.start();
+	this.lists.start();
 	this.sql.start();
 	this.startClock();
 
@@ -447,6 +454,8 @@ HmiWindowManager.prototype.stop = function()
 	this.sql.driver.disconnect();
 	this.trends.stop();
 	this.trends.driver.disconnect();
+	this.lists.stop();
+	this.lists.driver.disconnect();
 	this.recipes.stop();
 	this.recipes.driver.disconnect();
 
@@ -500,7 +509,7 @@ HmiWindowManager.prototype.startAppScripts = function()
 
 	this.app = new HmiRuntime({graph: null, project: this.project, driver: this.hub.client(),
 		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect, trends: this.trends,
-		sql: this.sql, scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
+		lists: this.lists, sql: this.sql, scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
 	this.app.startScripts();
 
 	var app = this.app;
@@ -1265,7 +1274,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
-		indirect: this.indirect, trends: this.trends, sql: this.sql,
+		indirect: this.indirect, trends: this.trends, lists: this.lists, sql: this.sql,
 		scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
 
 	runtime.onUserInput = function(cfg, binding)

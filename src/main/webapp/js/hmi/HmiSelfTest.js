@@ -59,6 +59,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testDatabaseDialog(ui);
 		HmiSelfTest.testSqlValidate(ui);
 		HmiSelfTest.testTrends(ui);
+		HmiSelfTest.testLists(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testTouchLayers(ui);
 		HmiSelfTest.testArcs(ui);
@@ -4343,6 +4344,173 @@ HmiSelfTest.testRecipes = function(ui)
 		built.recipeBooks[0].recipes.R1.A === 1 && errors.length === 2 &&
 		errors.some(function(e) { return e.indexOf('color') > 0; }) && errors.some(function(e) { return e.indexOf('Gone') > 0; }),
 		JSON.stringify(errors));
+};
+
+/** List Boxes and the List* script functions. */
+HmiSelfTest.testLists = function(ui)
+{
+	var check = HmiSelfTest.check;
+	var graph = ui.editor.graph;
+	var p = HmiSelfTest.sampleProject();
+	var add = function(name, type) { return p.addTag(HmiProject.createTag(name, type)); };
+	add('LbSel', 'MemoryMessage');
+	add('LbSel2', 'MemoryMessage');
+	add('LbUp', 'MemoryDiscrete');
+	add('LbDown', 'MemoryDiscrete');
+	add('LbName', 'MemoryMessage');
+	add('LbLevel', 'MemoryReal');
+
+	// Settings
+	check('list.shapeRegistered', mxCellRenderer.defaultShapes[HmiList.SHAPE] != null);
+	check('list.linkHidden', HmiTypes.LINKS['list'] != null && mxUtils.indexOf(HmiTypes.availableLinks(), 'list') < 0);
+	var n = HmiList.normalize({name: ' L1 ', titleBar: 'true', arrows: 1});
+	check('list.normalize', n.name === 'L1' && n.titleBar === true && n.arrows === true && n.title === '' &&
+		n.items === '' && n.selFill === '', JSON.stringify(n));
+	check('list.startingItems', JSON.stringify(HmiList.startingItems({items: ' A \n\n B\r\nC '})) === '["A","B","C"]',
+		JSON.stringify(HmiList.startingItems({items: ' A \n\n B\r\nC '})));
+	check('list.splitItems', JSON.stringify(HmiList.splitItems(' Red , Green ,, Blue, ')) === '["Red","Green","Blue"]' &&
+		HmiList.splitItems('').length === 0, JSON.stringify(HmiList.splitItems(' Red , Green ,, Blue, ')));
+	check('list.indexOf', HmiList.indexOf(['Red', 'Green'], 'GREEN') === 1 && HmiList.indexOf(['Red'], 'Blue') < 0);
+	check('list.compare', ['banana', 'Apple', 'cherry'].sort(HmiList.compare).join(',') === 'Apple,banana,cherry');
+	check('list.uniqueName', HmiList.uniqueName('', []) === 'List1' && HmiList.uniqueName('', ['list1']) === 'List2' &&
+		HmiList.uniqueName('List1', ['List1', 'List2']) === 'List3' && HmiList.uniqueName('Mine', ['List1']) === 'Mine');
+	check('list.colors', HmiList.colorOf({selFill: ''}, 'selected', 'fill') == null &&
+		HmiList.colorOf({selFill: '#102030'}, 'selected', 'fill') === '#102030' &&
+		HmiList.colorOr({}, 'selected', 'color') === HmiList.COLORS.selected.colorDefault);
+
+	// Script functions: the list name is text, and so is the sort order
+	var errs = function(src) { return HmiExpr.compile(src, {project: p, mode: 'script'}).errors.map(function(e) { return e.message; }); };
+	check('list.compile', errs('ListClear("L1"); ListAdd("L1", "Red"); ListAdd(LbName, LbName); ListRemove("L1", LbName); ' +
+		'ListSelect("L1", "Red"); ListLoad("L1", LbName); ListSort("L1", "desc"); ListSort(LbName, LbName);').length === 0,
+		errs('ListClear("L1"); ListAdd("L1", "Red");').join('|'));
+	check('list.compileBareTag', (errs('ListClear(LbLevel);')[0] || '').indexOf('write "LbLevel" in quotes') >= 0 &&
+		errs('ListClear("");').length === 1 && errs('ListAdd("L1");').length === 1,
+		errs('ListClear(LbLevel);').join('|'));
+	check('list.compileSortOrder', errs('ListSort("L1", "sideways");').length === 1 &&
+		errs('ListSort("L1", "A"); ListSort("L1", "d");').length === 0);
+	check('list.scriptOnly', HmiExpr.compile('ListClear("L1")', {project: p}).errors.length === 1);
+
+	// The manager: items, selection and the Selected item tags
+	var failures = [];
+	var written = [];
+	var driver = {write: function(w) { written.push(w); }};
+	var lm = new HmiListManager(p, driver, {lists: [
+		{name: 'L1', items: 'Pear\nApple', selectedTag: 'LbSel'},
+		{name: 'l1', selectedTag: 'LbSel2'},
+		{name: 'Empty'}
+	], report: function(call, message) { failures.push(message); }});
+	lm.start();
+	check('list.startingState', JSON.stringify(lm.items('L1')) === '["Pear","Apple"]' && lm.selected('L1') === '' &&
+		lm.items('Empty').length === 0, JSON.stringify(lm.items('L1')));
+	check('list.sharedByName', lm.state('L1').tags.join(',') === 'LbSel,LbSel2' &&
+		lm.state('L1') === lm.state('l1'), JSON.stringify(lm.state('L1').tags));
+	check('list.startWritesTags', written.length === 1 && written[0].LbSel === '' && written[0].LbSel2 === '');
+
+	check('list.add', lm.call('ListAdd', ['L1', ' Cherry ']) === 1 &&
+		JSON.stringify(lm.items('L1')) === '["Pear","Apple","Cherry"]', JSON.stringify(lm.items('L1')));
+	check('list.load', lm.call('ListLoad', ['l1', ' Fig , Date ,, ']) === 1 &&
+		JSON.stringify(lm.items('L1')) === '["Pear","Apple","Cherry","Fig","Date"]', JSON.stringify(lm.items('L1')));
+	written = [];
+	check('list.select', lm.call('ListSelect', ['L1', 'cherry']) === 1 && lm.selected('L1') === 'Cherry' &&
+		written.length === 1 && written[0].LbSel === 'Cherry', JSON.stringify(written));
+	written = [];
+	check('list.selectMissing', lm.call('ListSelect', ['L1', 'Kiwi']) === 1 && lm.selected('L1') === 'Cherry' &&
+		written.length === 0, 'silent, and the selection stands');
+	check('list.removeMissing', lm.call('ListRemove', ['L1', 'Kiwi']) === 1 &&
+		lm.items('L1').length === 5 && written.length === 0);
+	check('list.sortAsc', lm.call('ListSort', ['L1', 'a']) === 1 &&
+		JSON.stringify(lm.items('L1')) === '["Apple","Cherry","Date","Fig","Pear"]', JSON.stringify(lm.items('L1')));
+	check('list.sortKeepsSelection', lm.selected('L1') === 'Cherry');
+	check('list.sortDesc', lm.call('ListSort', ['L1', 'DESC']) === 1 &&
+		JSON.stringify(lm.items('L1')) === '["Pear","Fig","Date","Cherry","Apple"]', JSON.stringify(lm.items('L1')));
+	written = [];
+	check('list.removeSelected', lm.call('ListRemove', ['L1', 'CHERRY']) === 1 && lm.selected('L1') === '' &&
+		lm.items('L1').length === 4 && written.length === 1 && written[0].LbSel === '');
+	check('list.clear', lm.call('ListClear', ['L1']) === 1 && lm.items('L1').length === 0 && lm.selected('L1') === '');
+	check('list.errorTitle', HmiDialogs.functionErrorTitle([{call: 'ListAdd("L1", "x")'}]) === 'List Error' &&
+		HmiDialogs.functionErrorTitle([{call: 'ListAdd("L1", "x")'}, {call: 'RecipeLoad("A", "")'}]) === 'Script Error');
+
+	// Refusals: the name, the order, an empty item and the cap
+	check('list.unknownList', lm.call('ListClear', ['Nope']) === 0 && lm.call('ListAdd', ['', 'x']) === 0 &&
+		failures.length === 2 && failures[0].indexOf('no list named "Nope"') > 0, failures.join('|'));
+	check('list.badOrder', lm.call('ListSort', ['Empty', 'sideways']) === 0 &&
+		failures[failures.length - 1].indexOf('ASC, DESC, A or D') > 0, failures[failures.length - 1]);
+	check('list.emptyItem', lm.call('ListAdd', ['Empty', '  ']) === 0);
+	var cap = lm.state('Empty');
+
+	for (var i = 0; i < HmiList.MAX_ITEMS; i++)
+	{
+		cap.items.push('I' + i);
+	}
+
+	check('list.cap', lm.call('ListAdd', ['Empty', 'One too many']) === 0 &&
+		lm.call('ListLoad', ['Empty', 'a,b']) === 0 &&
+		failures[failures.length - 1].indexOf('more than ' + HmiList.MAX_ITEMS) > 0, failures[failures.length - 1]);
+	cap.items = [];
+
+	// The Run view
+	HmiSelfTest.resetGraph(ui);
+	var savedProject = ui.hmiProject;
+	ui.hmiProject = p;
+	var cell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 200, 240, HmiList.STYLE);
+	var autoName = (HmiProject.getCellLinks(graph, cell).list || {}).name;
+	check('list.autoNamed', autoName === 'List1', autoName);
+	var copy = graph.importCells([cell], 20, 20, graph.getDefaultParent())[0];
+	check('list.copyRenamed', (HmiProject.getCellLinks(graph, copy).list || {}).name === 'List2');
+	graph.removeCells([copy]);
+	HmiProject.setCellLinks(graph, cell, {list: {name: 'L1', title: 'Colors', titleBar: true, items: '',
+		selectedTag: 'LbSel', upTag: 'LbUp', downTag: 'LbDown', arrows: true,
+		selFill: '#102030', selColor: '#fefefe'}});
+
+	var sim = new HmiSimulator(p);
+	var rt = new HmiRuntime({graph: graph, project: p, driver: sim, lists: lm});
+	rt.start();
+	var view = document.querySelector('div[data-hmi-list="L1"]');
+	check('list.viewShown', view != null && view.querySelector('.hmiListHead') != null);
+
+	if (view != null)
+	{
+		lm.call('ListLoad', ['L1', 'Red,Green,Blue']);
+		check('list.viewRows', view.querySelectorAll('.hmiListRow').length === 3,
+			String(view.querySelectorAll('.hmiListRow').length));
+		var rows = view.querySelectorAll('.hmiListRow');
+		rows[1].click();
+		check('list.touchSelects', lm.selected('L1') === 'Green' &&
+			view.querySelector('.hmiListSelected') != null &&
+			view.querySelector('.hmiListSelected').style.backgroundColor === 'rgb(16, 32, 48)',
+			lm.selected('L1') + ' / ' + (view.querySelector('.hmiListSelected') || {}).style);
+		var downBtn = view.querySelector('button[data-hmi-list-move="down"]');
+		downBtn.click();
+		check('list.arrowMoves', lm.selected('L1') === 'Blue', lm.selected('L1'));
+		rt.applyBatch({LbUp: {value: 1, quality: 'good'}});
+		check('list.upTagEdge', lm.selected('L1') === 'Green', lm.selected('L1'));
+		graph.zoomIn();
+		var st = graph.view.getState(cell);
+		check('list.followsZoom', Math.abs(parseFloat(view.style.width) - st.width) < 1.5);
+		graph.zoomActual();
+	}
+
+	// Validate: a literal name checked against the pages, duplicates reported
+	check('list.validateScript', HmiMenus.scriptWindowProblems(ui, 'ListClear("Nope"); ListAdd("l1", "x");').join('|') ===
+		'ListClear: no list box named "Nope"',
+		HmiMenus.scriptWindowProblems(ui, 'ListClear("Nope"); ListAdd("l1", "x");').join('|'));
+	var dup = graph.insertVertex(graph.getDefaultParent(), null, '', 300, 40, 200, 240, HmiList.STYLE);
+	HmiProject.setCellLinks(graph, dup, {list: {name: 'l1'}});
+	var found = null;
+	var available = HmiComms.available;
+	HmiComms.available = function() { return false; };
+	HmiMenus.collectProblems(ui, function(list) { found = list; });
+	HmiComms.available = available;
+	check('list.validateDuplicate', found != null && found.some(function(x)
+	{
+		return x.cell === dup && x.message.indexOf('2 list boxes are named') === 0;
+	}), JSON.stringify((found || []).map(function(x) { return x.message; })));
+
+	rt.stop();
+	check('list.viewRemoved', document.querySelector('div[data-hmi-list]') == null);
+	lm.stop();
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
 };
 
 /** Indirect tags and LinkIndirectTag. */
