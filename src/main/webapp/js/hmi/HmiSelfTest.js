@@ -4404,15 +4404,17 @@ HmiSelfTest.testLists = function(ui)
 		lm.items('Empty').length === 0, JSON.stringify(lm.items('L1')));
 	check('list.sharedByName', lm.state('L1').tags.join(',') === 'LbSel,LbSel2' &&
 		lm.state('L1') === lm.state('l1'), JSON.stringify(lm.state('L1').tags));
-	check('list.startWritesTags', written.length === 1 && written[0].LbSel === '' && written[0].LbSel2 === '');
+	check('list.quietStart', written.length === 0, 'a Run must not write a Selected item tag on its own');
 
 	check('list.add', lm.call('ListAdd', ['L1', ' Cherry ']) === 1 &&
 		JSON.stringify(lm.items('L1')) === '["Pear","Apple","Cherry"]', JSON.stringify(lm.items('L1')));
+	check('list.addWritesNothing', written.length === 0, 'filling a list must not write its tag per item');
 	check('list.load', lm.call('ListLoad', ['l1', ' Fig , Date ,, ']) === 1 &&
 		JSON.stringify(lm.items('L1')) === '["Pear","Apple","Cherry","Fig","Date"]', JSON.stringify(lm.items('L1')));
 	written = [];
 	check('list.select', lm.call('ListSelect', ['L1', 'cherry']) === 1 && lm.selected('L1') === 'Cherry' &&
-		written.length === 1 && written[0].LbSel === 'Cherry', JSON.stringify(written));
+		written.length === 1 && written[0].LbSel === 'Cherry' && written[0].LbSel2 === 'Cherry',
+		JSON.stringify(written));
 	written = [];
 	check('list.selectMissing', lm.call('ListSelect', ['L1', 'Kiwi']) === 1 && lm.selected('L1') === 'Cherry' &&
 		written.length === 0, 'silent, and the selection stands');

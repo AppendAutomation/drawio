@@ -503,6 +503,7 @@ HmiListManager = function(project, driver, options)
 	this.options = options || {};
 	this.listeners = {change: []};
 	this.lists = {};
+	this.running = false;
 
 	var defined = this.options.lists || [];
 
@@ -561,19 +562,19 @@ HmiListManager.prototype.selected = function(name)
 
 HmiListManager.prototype.start = function()
 {
-	// Every list starts with its selection written out, so a screen opened
-	// later and a script reading the tag agree with what is drawn
-	for (var key in this.lists)
-	{
-		this.writeTags(this.lists[key]);
-	}
+	this.running = true;
 };
 
 HmiListManager.prototype.stop = function()
 {
+	this.running = false;
 };
 
-/** The selection to the cells' Selected item tags. */
+/**
+ * The selection to the cells' Selected item tags. Called only when the
+ * selection has moved: a Selected item tag may be an I/O tag, and filling a
+ * list must not write it item by item.
+ */
 HmiListManager.prototype.writeTags = function(state)
 {
 	if (this.driver == null || state.tags.length === 0)
@@ -643,6 +644,7 @@ HmiListManager.prototype.call = function(name, args)
 	if (problem == null)
 	{
 		var changed = true;
+		var was = state.selected;
 
 		switch (name)
 		{
@@ -694,18 +696,20 @@ HmiListManager.prototype.call = function(name, args)
 			}
 
 			case 'ListSelect':
-				// Silent too: an item the list has not got leaves it alone
-				if (HmiList.indexOf(state.items, texts[1].trim()) < 0)
+			{
+				// Silent too: an item the list has not got leaves it alone.
+				// The tail writes the tag and fires the change, as it does
+				// for every other call
+				var found = HmiList.indexOf(state.items, texts[1].trim());
+				changed = found >= 0 && state.items[found] !== state.selected;
+
+				if (changed)
 				{
-					changed = false;
-				}
-				else
-				{
-					this.select(state.name, texts[1].trim());
-					changed = false;
+					state.selected = state.items[found];
 				}
 
 				break;
+			}
 
 			case 'ListLoad':
 			{
@@ -750,9 +754,13 @@ HmiListManager.prototype.call = function(name, args)
 				state.selected = '';
 			}
 
-			if (changed)
+			if (state.selected !== was)
 			{
 				this.writeTags(state);
+			}
+
+			if (changed)
+			{
 				this.fire('change', state.name);
 			}
 
