@@ -62,6 +62,7 @@ HmiSelfTest.run = function(ui)
 		HmiSelfTest.testLists(ui);
 		HmiSelfTest.testIndirect(ui);
 		HmiSelfTest.testTouchLayers(ui);
+		HmiSelfTest.testTouchFill(ui);
 		HmiSelfTest.testArcs(ui);
 		HmiSelfTest.testFlip(ui);
 		HmiSelfTest.testViews(ui);
@@ -5311,6 +5312,188 @@ HmiSelfTest.testTouchLayers = function(ui)
 	sim.disconnect();
 };
 
+/**
+ * The touch background color: an object with a touch animation is drawn in it
+ * while the operator holds it down, and only then.
+ */
+HmiSelfTest.testTouchFill = function(ui)
+{
+	var check = HmiSelfTest.check;
+
+	// The setting: unset by default, and not written when it is unset
+	var d = HmiProject.defaultSettings();
+	check('touchFill.defaultIsUnset', d.touchFill === '');
+
+	var p = HmiSelfTest.sampleProject();
+	var empty = new HmiProject();
+	check('touchFill.emptyProject', empty.isEmpty());
+	empty.settings.touchFill = '#ff8000';
+	check('touchFill.setMakesItNotEmpty', !empty.isEmpty());
+
+	var bare = mxUtils.getXml(p.toXml(mxUtils.createXmlDocument()));
+	check('touchFill.unsetNotWritten', bare.indexOf('touchFill') < 0);
+
+	p.settings.touchFill = '#ff8000';
+	var back = HmiProject.fromXml(p.toXml(mxUtils.createXmlDocument()));
+	check('touchFill.roundTrip', back.settings.touchFill === '#ff8000',
+		back.settings.touchFill);
+
+	// The command line builds it and dumps it back
+	var errors = [];
+	var built = HmiCli.buildProject({settings: {touchFill: '#102030'}}, errors);
+	check('touchFill.cliBuilds', errors.length === 0 && built.settings.touchFill === '#102030',
+		JSON.stringify(errors) + ' ' + built.settings.touchFill);
+
+	if (ui.hmiProject != null)
+	{
+		var was = ui.hmiProject.settings.touchFill || '';
+		ui.hmiProject.settings.touchFill = '';
+		check('touchFill.cliDumpsNothingWhenUnset', HmiCli.dump(ui).settings.touchFill == null);
+		ui.hmiProject.settings.touchFill = '#102030';
+		check('touchFill.cliDumps', HmiCli.dump(ui).settings.touchFill === '#102030',
+			JSON.stringify(HmiCli.dump(ui).settings));
+		ui.hmiProject.settings.touchFill = was;
+	}
+
+	// At Run: a press colors the button, a release puts it back
+	var rp = HmiSelfTest.sampleProject();
+	rp.addTag(HmiProject.createTag('Disc1', 'MemoryDiscrete'));
+	rp.addTag(HmiProject.createTag('N', 'MemoryInteger'));
+	rp.settings.touchFill = '#ff8000';
+
+	var sim = new HmiSimulator(rp);
+	sim.connect();
+
+	var graph = ui.editor.graph;
+	HmiSelfTest.resetGraph(ui);
+	var btn = graph.insertVertex(graph.getDefaultParent(), null, 'button', 20, 20, 120, 40,
+		'html=1;fillColor=#cccccc;');
+	HmiProject.setCellLinks(graph, btn, {pushbutton: {kind: 'discrete', tag: 'Disc1',
+		action: 'direct', enableExpr: ''}});
+	var plain = graph.insertVertex(graph.getDefaultParent(), null, 'label', 20, 100, 120, 40,
+		'html=1;fillColor=#cccccc;');
+
+	var trt = new HmiRuntime({graph: graph, project: rp, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0, N: 0});
+	trt.flush();
+
+	var fillOf = function(cell)
+	{
+		return mxUtils.getValue(graph.getCellStyle(cell), mxConstants.STYLE_FILLCOLOR, null);
+	};
+
+	// What the shape is actually drawing from: the press color is written into
+	// the live state, so letting go has to take it off there, not only in the
+	// style getCellStyle builds afresh
+	var paintedFill = function(cell)
+	{
+		var st = graph.view.getState(cell);
+
+		return (st != null && st.style != null) ?
+			mxUtils.getValue(st.style, mxConstants.STYLE_FILLCOLOR, null) : null;
+	};
+
+	var state = graph.view.getState(btn);
+	var at = function(cell)
+	{
+		return {getCell: function() { return cell; },
+			getGraphX: function() { return state.getCenterX(); },
+			getGraphY: function() { return state.getCenterY(); }};
+	};
+
+	check('touchFill.runtimeReadsTheSetting', trt.touchFill() === '#ff8000');
+	check('touchFill.plainBefore', fillOf(btn) === '#cccccc', '' + fillOf(btn));
+
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.pressedIsColored', trt.pressedCell === btn && fillOf(btn) === '#ff8000',
+		'' + fillOf(btn));
+	check('touchFill.othersUntouched', fillOf(plain) === '#cccccc', '' + fillOf(plain));
+
+	check('touchFill.pressedIsPainted', paintedFill(btn) === '#ff8000', '' + paintedFill(btn));
+
+	trt.mouseListener.mouseUp(graph, at(btn));
+	check('touchFill.releasedPutsItBack', trt.pressedCell == null && fillOf(btn) === '#cccccc',
+		'' + fillOf(btn));
+	check('touchFill.releasedRepaintsTheShape', paintedFill(btn) === '#cccccc',
+		'' + paintedFill(btn));
+
+	// It wins over a Fill Color link while it is held
+	HmiProject.setCellLinks(graph, btn, {pushbutton: {kind: 'discrete', tag: 'Disc1',
+		action: 'direct', enableExpr: ''},
+		'fillColor.analog': {expr: 'N', bands: [{max: '50', color: '#00ff00'},
+			{max: null, color: '#ff0000'}]}});
+	trt.stop();
+	trt = new HmiRuntime({graph: graph, project: rp, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0, N: 1});
+	trt.flush();
+	check('touchFill.linkColorFirst', fillOf(btn) === '#00ff00', '' + fillOf(btn));
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.winsOverTheLink', fillOf(btn) === '#ff8000', '' + fillOf(btn));
+	trt.mouseListener.mouseUp(graph, at(btn));
+	check('touchFill.linkColorAgain', fillOf(btn) === '#00ff00' && paintedFill(btn) === '#00ff00',
+		'' + fillOf(btn) + ' ' + paintedFill(btn));
+
+	// A color that has gone bad holds its last good value, and a press that
+	// comes and goes leaves it holding it
+	sim.write({N: 60});
+	trt.flush();
+	check('touchFill.secondBandPainted', paintedFill(btn) === '#ff0000', '' + paintedFill(btn));
+	trt.applyBatch({'N': {value: 1, quality: HmiTypes.QUALITY_BAD, timestamp: Date.now()}});
+	trt.flush();
+	check('touchFill.badQualityHolds', paintedFill(btn) === '#ff0000', '' + paintedFill(btn));
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.pressedOverAHeldColor', paintedFill(btn) === '#ff8000', '' + paintedFill(btn));
+	trt.mouseListener.mouseUp(graph, at(btn));
+	check('touchFill.releaseKeepsTheHeldColor', paintedFill(btn) === '#ff0000', '' + paintedFill(btn));
+	sim.write({N: 1});
+	trt.flush();
+
+	// An object the operator may not use just now gives no feedback
+	trt.bindings[btn.id].visual.disabled = true;
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.disabledNotColored', trt.pressedCell == null && fillOf(btn) === '#00ff00',
+		'' + fillOf(btn));
+	trt.mouseListener.mouseUp(graph, at(btn));
+	trt.bindings[btn.id].visual.disabled = false;
+
+	// An object with no touch animation is never colored
+	var plainState = graph.view.getState(plain);
+	var onPlain = {getCell: function() { return plain; },
+		getGraphX: function() { return plainState.getCenterX(); },
+		getGraphY: function() { return plainState.getCenterY(); }};
+	trt.mouseListener.mouseDown(graph, onPlain);
+	check('touchFill.plainNotColored', trt.pressedCell == null && fillOf(plain) === '#cccccc',
+		trt.pressedCell + ' ' + fillOf(plain));
+	trt.mouseListener.mouseUp(graph, onPlain);
+
+	// Stopping while held lets it go
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.heldAtStop', trt.pressedCell === btn);
+	trt.stop();
+	check('touchFill.stopClearsIt', trt.pressedCell == null);
+
+	// With no color set, nothing is held and nothing repaints
+	rp.settings.touchFill = '';
+	trt = new HmiRuntime({graph: graph, project: rp, driver: sim});
+	trt.start();
+	sim.write({Disc1: 0, N: 1});
+	trt.flush();
+	trt.mouseListener.mouseDown(graph, at(btn));
+	check('touchFill.unsetHoldsNothing', trt.pressedCell == null && fillOf(btn) === '#00ff00',
+		'' + fillOf(btn));
+	check('touchFill.pressStillActs', sim.get('Disc1').value === 1, JSON.stringify(sim.get('Disc1')));
+	trt.mouseListener.mouseUp(graph, at(btn));
+	trt.stop();
+
+	// A runtime with no project at all answers no color
+	check('touchFill.noProject', HmiRuntime.prototype.touchFill.call({}) === '');
+
+	sim.disconnect();
+	HmiSelfTest.resetGraph(ui);
+};
+
 HmiSelfTest.testFlip = function(ui)
 {
 	var check = HmiSelfTest.check;
@@ -7382,6 +7565,32 @@ HmiSelfTest.testWindows = function(ui)
 			project.settings.startup.join(',') === pc.getId(),
 			JSON.stringify(project.settings));
 		check('dlg.settingsMarkModified', ui.editor.modified === true);
+
+		// The touch background color, picked through the color dialog
+		HmiDialogs.showAppSettings(ui);
+		dlg = ui.dialog.container;
+		var swatch = dlg.querySelector('[data-hmi-prop="touchFill"]');
+		var swatchDefault = dlg.querySelector('[data-hmi-prop="touchFillDefault"]');
+		check('dlg.touchFillUnset', swatch != null && swatchDefault != null &&
+			swatchDefault.style.visibility === 'hidden');
+
+		var pickColor = ui.pickColor;
+		ui.pickColor = function(color, apply) { apply('#ff8000'); };
+		swatch.click();
+		ui.pickColor = pickColor;
+		check('dlg.touchFillPicked', swatchDefault.style.visibility === 'visible' &&
+			swatch.style.backgroundColor === 'rgb(255, 128, 0)', swatch.style.backgroundColor);
+		dlg.querySelector('.hmiOk').click();
+		check('dlg.touchFillApplied', project.settings.touchFill === '#ff8000',
+			project.settings.touchFill);
+
+		// Default takes it off again
+		HmiDialogs.showAppSettings(ui);
+		dlg = ui.dialog.container;
+		dlg.querySelector('[data-hmi-prop="touchFillDefault"]').click();
+		dlg.querySelector('.hmiOk').click();
+		check('dlg.touchFillCleared', project.settings.touchFill === '',
+			project.settings.touchFill);
 
 		HmiDialogs.showAppSettings(ui);
 		dlg = ui.dialog.container;

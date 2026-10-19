@@ -418,6 +418,7 @@ HmiCli.buildProject = function(spec, errors)
 
 	if (s.width != null) { hmi.settings.width = parseInt(s.width, 10) || hmi.settings.width; }
 	if (s.height != null) { hmi.settings.height = parseInt(s.height, 10) || hmi.settings.height; }
+	if (s.touchFill != null) { hmi.settings.touchFill = '' + s.touchFill; }
 
 	var rt = s.runtime || {};
 
@@ -1187,6 +1188,11 @@ HmiCli.dump = function(ui)
 	var spec = {version: HmiCli.SPEC_VERSION, settings: {width: hmi.settings.width,
 		height: hmi.settings.height, startup: [], runtime: JSON.parse(JSON.stringify(hmi.settings.runtime)),
 		publish: JSON.parse(JSON.stringify(hmi.settings.publish))}, devices: [], tags: [], pages: []};
+
+	if (hmi.settings.touchFill)
+	{
+		spec.settings.touchFill = hmi.settings.touchFill;
+	}
 
 	if (!spec.settings.runtime.hash)
 	{

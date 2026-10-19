@@ -57,6 +57,13 @@ HmiRuntime = function(config)
 	this.clock = config.clock || null;
 
 	this.running = false;
+
+	// The object the operator is holding down, drawn in the project's touch
+	// background color while it is (null when nothing is, or when the project
+	// sets no color), and the fill it had when the touch landed
+	this.pressedCell = null;
+	this.pressedFill = null;
+
 	this.bindings = {};
 	this.reverseIndex = {};
 	this.values = {};
@@ -1676,6 +1683,19 @@ HmiRuntime.prototype.decorateStyle = function(cell, style)
 	// Rotation is a style key, so orientation needs no separate mechanism.
 	if (v.rotation != null) { style[mxConstants.STYLE_ROTATION] = v.rotation; }
 
+	// The touch background color wins while the object is held down: it is the
+	// operator's feedback that the screen took the touch, so it has to show
+	// over whatever a Fill Color link is painting.
+	if (cell === this.pressedCell)
+	{
+		var touch = this.touchFill();
+
+		if (touch !== '')
+		{
+			style[mxConstants.STYLE_FILLCOLOR] = touch;
+		}
+	}
+
 	return style;
 };
 
@@ -2089,6 +2109,8 @@ HmiRuntime.prototype.installInput = function()
 			that.downCell = cell;
 			that.downAt = {x: me.getGraphX(), y: me.getGraphY()};
 
+			that.setPressed(cell);
+
 			if (cell != null)
 			{
 				that.beginDrag(cell, me);
@@ -2116,6 +2138,7 @@ HmiRuntime.prototype.installInput = function()
 			}
 
 			that.downCell = null;
+			that.setPressed(null);
 			that.stopWhileDown();
 		}
 	};
@@ -2254,6 +2277,88 @@ HmiRuntime.prototype.removeInput = function()
 	}
 
 	this.downCell = null;
+	this.setPressed(null);
+};
+
+/**
+ * The touch background color, or '' when the project sets none. One color for
+ * the whole application (HmiProject.defaultSettings); a runtime built without
+ * a project -- a bare test, a preview -- has none.
+ */
+HmiRuntime.prototype.touchFill = function()
+{
+	return (this.project != null && this.project.settings != null) ?
+		(this.project.settings.touchFill || '') : '';
+};
+
+/**
+ * Hold the object the operator is pressing, so decorateStyle draws it in the
+ * touch background color. Only an object a touch would actually do something
+ * to is colored -- one whose Enable when refuses it just now gives no
+ * feedback, as it does nothing -- and with no color set nothing is held, so a
+ * project that sets none repaints nothing on a press.
+ */
+HmiRuntime.prototype.setPressed = function(cell)
+{
+	var next = (cell != null && this.touchFill() !== '' && this.isTouchable(cell)) ? cell : null;
+
+	if (next === this.pressedCell)
+	{
+		return;
+	}
+
+	var was = this.pressedCell;
+	var fill = this.pressedFill;
+
+	this.pressedCell = next;
+	this.pressedFill = (next != null) ? this.paintedFill(next) : null;
+
+	if (was != null)
+	{
+		this.restoreFill(was, fill);
+		this.repaint(was);
+	}
+
+	if (next != null)
+	{
+		this.repaint(next);
+	}
+};
+
+/** The fill the cell's shape is drawing from, or null when it has none. */
+HmiRuntime.prototype.paintedFill = function(cell)
+{
+	var state = this.graph.view.getState(cell);
+
+	return (state != null && state.style != null) ?
+		mxUtils.getValue(state.style, mxConstants.STYLE_FILLCOLOR, null) : null;
+};
+
+/**
+ * Put back the fill the object was drawn in before the touch landed.
+ * state.style is the live object the shape draws from and decorateStyle only
+ * adds keys, so the press color has to be taken off by hand -- and what was
+ * there is what goes back, which is also how a color of bad quality goes on
+ * holding its last good value. An animation link that moved on meanwhile wins
+ * anyway: repaint decorates afterwards.
+ */
+HmiRuntime.prototype.restoreFill = function(cell, fill)
+{
+	var state = this.graph.view.getState(cell);
+
+	if (state == null || state.style == null)
+	{
+		return;
+	}
+
+	if (fill != null)
+	{
+		state.style[mxConstants.STYLE_FILLCOLOR] = fill;
+	}
+	else
+	{
+		delete state.style[mxConstants.STYLE_FILLCOLOR];
+	}
 };
 
 HmiRuntime.prototype.handleTouch = function(cell, phase)

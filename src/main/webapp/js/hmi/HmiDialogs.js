@@ -2565,6 +2565,21 @@ HmiDialogs.showAppSettings = function(ui)
 
 	body.appendChild(list);
 
+	// What the operator sees while a touch is held (HmiRuntime.setPressed)
+	var touchFill = project.settings.touchFill || '';
+
+	body.appendChild(HmiDialogs.el('div', 'hmiFormSection', 'Touch'));
+	body.appendChild(HmiDialogs.el('div', 'hmiHint',
+		'While the operator holds down an object that has a touch animation ' +
+		'(a pushbutton, an action script, a user input, a window link or a ' +
+		'slider), the object is drawn in this color. Default leaves every ' +
+		'object its own color, so a touch changes nothing. An object the ' +
+		'operator may not use just now is not colored.'));
+
+	HmiDialogs.colorField(ui, body, 'Touch background color', 'touchFill',
+		function() { return touchFill; },
+		function(v) { touchFill = v; }, mxConstants.NONE);
+
 	// How a published package runs on the target PC (HMI > Publish)
 	var rt = project.settings.runtime;
 	var windowMode = rt.windowMode;
@@ -2697,7 +2712,8 @@ HmiDialogs.showAppSettings = function(ui)
 			s.width !== w || s.height !== h ||
 			s.startup.join('\n') !== ids.join('\n') ||
 			rt.windowMode !== windowMode || rt.exit !== exitMode ||
-			(sec.autoLogoutMin || 0) !== logout;
+			(sec.autoLogoutMin || 0) !== logout ||
+			(s.touchFill || '') !== touchFill;
 
 		sec.autoLogoutMin = logout;
 		s.scripts = scripts;
@@ -2707,6 +2723,7 @@ HmiDialogs.showAppSettings = function(ui)
 		s.width = w;
 		s.height = h;
 		s.startup = ids;
+		s.touchFill = touchFill;
 		rt.windowMode = windowMode;
 		rt.exit = exitMode;
 

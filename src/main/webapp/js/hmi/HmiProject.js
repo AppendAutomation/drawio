@@ -63,7 +63,7 @@ HmiProject.prototype.isEmpty = function()
 
 	return this.tags.length === 0 && this.devices.length === 0 &&
 		this.settings.width === d.width && this.settings.height === d.height &&
-		this.settings.startup.length === 0 &&
+		this.settings.startup.length === 0 && this.settings.touchFill === d.touchFill &&
 		JSON.stringify(this.settings.runtime) === JSON.stringify(d.runtime) &&
 		JSON.stringify(this.settings.publish) === JSON.stringify(d.publish) &&
 		JSON.stringify(this.settings.security) === JSON.stringify(d.security) &&
@@ -83,9 +83,17 @@ HmiProject.RESOLUTIONS = [
 	[1280, 720], [1280, 800], [1280, 1024], [1366, 768], [1440, 900],
 	[1600, 900], [1680, 1050], [1920, 1080], [1920, 1200]];
 
+/**
+ * touchFill is the touch background color: what an object carrying a touch
+ * animation is drawn in while the operator holds it down. It is one color for
+ * the whole application, since the feedback a touch screen gives should not
+ * change from one button to the next, and it is unset by default -- then
+ * nothing is drawn differently, which is how every project built before it
+ * behaved.
+ */
 HmiProject.defaultSettings = function()
 {
-	return {width: 1024, height: 768, startup: [],
+	return {width: 1024, height: 768, startup: [], touchFill: '',
 		runtime: HmiProject.defaultRuntime(), publish: {}, security: {autoLogoutMin: 0},
 		scripts: HmiProject.defaultAppScripts()};
 };
@@ -674,6 +682,12 @@ HmiProject.prototype.toXml = function(doc)
 	settings.setAttribute('width', this.settings.width);
 	settings.setAttribute('height', this.settings.height);
 
+	// An unset touch color is not written, so a file round trips unchanged.
+	if (this.settings.touchFill)
+	{
+		settings.setAttribute('touchFill', this.settings.touchFill);
+	}
+
 	for (var i = 0; i < this.settings.startup.length; i++)
 	{
 		var node = doc.createElement('startup');
@@ -1241,6 +1255,8 @@ HmiProject.fromXml = function(node)
 
 		if (w > 0) { project.settings.width = w; }
 		if (h > 0) { project.settings.height = h; }
+
+		project.settings.touchFill = settings[0].getAttribute('touchFill') || '';
 
 		var startup = settings[0].getElementsByTagName('startup');
 
