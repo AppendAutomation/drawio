@@ -1180,6 +1180,63 @@ HmiMenus.scriptWindowProblems = function(ui, src)
 		}
 	})(compiled.ast);
 
+	return out.concat(HmiMenus.timeFormatProblems(compiled.ast));
+};
+
+/**
+ * Literal time formats that mean nothing: Now("Batch report") and
+ * _TimeFormat = "nope".
+ *
+ * Reported rather than refused, because the specified behavior is to fall
+ * back to HH:mm:ss -- a compile error would blank the object instead, and a
+ * format built from tag values cannot be judged at design time anyway.
+ */
+HmiMenus.timeFormatProblems = function(ast)
+{
+	var out = [];
+
+	var literal = function(n)
+	{
+		return (n != null && n.type === 'literal' && typeof n.value === 'string') ?
+			n.value : null;
+	};
+
+	(function find(n)
+	{
+		if (n == null || typeof n !== 'object')
+		{
+			return;
+		}
+
+		if (n.type === 'call' && n.name === 'Now' && n.args.length > 0)
+		{
+			var arg = literal(n.args[0]);
+
+			if (arg != null && !HmiTypes.validTimeFormat(arg))
+			{
+				out.push('Now: "' + arg + '" is not a time format; ' +
+					HmiTypes.DEFAULT_TIME_FORMAT + ' would be used');
+			}
+		}
+
+		if (n.type === 'assign' && n.target != null && n.target.type === 'ref' &&
+			HmiTypes.systemTag(n.target.name) === '_TimeFormat')
+		{
+			var set = literal(n.value);
+
+			if (set != null && !HmiTypes.validTimeFormat(set))
+			{
+				out.push('_TimeFormat: "' + set + '" is not a time format; ' +
+					HmiTypes.DEFAULT_TIME_FORMAT + ' would be used');
+			}
+		}
+
+		for (var k in n)
+		{
+			find(n[k]);
+		}
+	})(ast);
+
 	return out;
 };
 
@@ -1711,6 +1768,14 @@ HmiMenus.checkLink = function(project, cfg, key)
 			for (var i = 0; i < compiled.errors.length; i++)
 			{
 				errors.push(name + ': ' + compiled.errors[i].message);
+			}
+
+			// A link may show Now("..."), so its format is checked here too
+			var formats = HmiMenus.timeFormatProblems(compiled.ast);
+
+			for (var f = 0; f < formats.length; f++)
+			{
+				errors.push(name + ': ' + formats[f]);
 			}
 
 			return;

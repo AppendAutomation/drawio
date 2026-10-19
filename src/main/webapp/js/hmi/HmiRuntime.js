@@ -51,6 +51,11 @@ HmiRuntime = function(config)
 	// rows a selection fetched, shared by every window of the Run
 	this.sql = config.sql || null;
 
+	// The Run's HmiClockManager, which holds _TimeFormat. Without one -- a
+	// design-time preview, a runtime on its own -- the time reads in the
+	// default format.
+	this.clock = config.clock || null;
+
 	this.running = false;
 	this.bindings = {};
 	this.reverseIndex = {};
@@ -761,8 +766,16 @@ HmiRuntime.prototype.context = function()
 };
 
 /**
- * A script's assignment. _AckAll = 1 acknowledges every alarm and
- * Tag.Acked = 1 the tag's own; everything else goes to the driver.
+ * A write to a tag, from a script's assignment or from a link. _AckAll = 1
+ * acknowledges every alarm, Tag.Acked = 1 the tag's own and _TimeFormat sets
+ * the format the time reads in; everything else goes to the driver.
+ *
+ * Every write path goes through here, links included, so a system tag is
+ * answered wherever it is written rather than only in a script.
+ *
+ * The result is what the driver said about the write, so a caller that
+ * reports a failure (the operator's input dialog) can: {ok: true} for a
+ * system tag this handled, and the reason for a read-only one.
  */
 HmiRuntime.prototype.writeField = function(name, value, field)
 {
@@ -770,6 +783,16 @@ HmiRuntime.prototype.writeField = function(name, value, field)
 
 	if (system != null || field === 'Acked')
 	{
+		if (system === '_TimeFormat')
+		{
+			if (this.clock != null)
+			{
+				this.clock.setFormat(value);
+			}
+
+			return {ok: true};
+		}
+
 		if (this.alarms != null && HmiRuntime.truthy(value))
 		{
 			if (system === '_AckAll')
@@ -782,12 +805,22 @@ HmiRuntime.prototype.writeField = function(name, value, field)
 			}
 		}
 
-		return;
+		return (system != null && HmiTypes.SYSTEM_TAGS[system].readOnly) ?
+			{ok: false, error: system + ' is read-only'} : {ok: true};
 	}
 
 	var writes = {};
 	writes[name] = value;
-	this.driver.write(writes);
+
+	var res = this.driver.write(writes);
+
+	return (res != null && res[name] != null) ? res[name] : {ok: true};
+};
+
+/** The format the time reads in: the Run's, or the default without a Run. */
+HmiRuntime.prototype.timeFormat = function()
+{
+	return (this.clock != null) ? this.clock.format() : HmiTypes.DEFAULT_TIME_FORMAT;
 };
 
 HmiRuntime.prototype.readField = function(name, field)
@@ -810,7 +843,7 @@ HmiRuntime.prototype.readField = function(name, field)
 
 		if (from === 'clock')
 		{
-			return HmiTypes.readClock(system);
+			return HmiTypes.readClock(system, null, this.timeFormat());
 		}
 
 		var provider = (from === 'security') ? this.security : this.alarms;
@@ -2256,13 +2289,7 @@ HmiRuntime.prototype.handleTouch = function(cell, phase)
 
 		if (momentary && (phase === 'down' || phase === 'up'))
 		{
-			this.driver.write(mxUtils.bind(this, function()
-			{
-				var w = {};
-				w[push.tag] = (phase === 'down') ? 1 : 0;
-
-				return w;
-			})());
+			this.writeField(push.tag, (phase === 'down') ? 1 : 0);
 		}
 		else if (!momentary && phase === 'click')
 		{
@@ -2270,9 +2297,8 @@ HmiRuntime.prototype.handleTouch = function(cell, phase)
 			var next = (push.action === 'set') ? 1 :
 				((push.action === 'reset') ? 0 :
 					(HmiRuntime.truthy(current) ? 0 : 1));
-			var w = {};
-			w[push.tag] = next;
-			this.driver.write(w);
+
+			this.writeField(push.tag, next);
 		}
 	}
 
@@ -2434,9 +2460,7 @@ HmiRuntime.prototype.handleDrag = function(me)
 	f = Math.max(0, Math.min(1, f));
 
 	var value = v1 + (v2 - v1) * f;
-	var writes = {};
-	writes[cfg.tag] = value;
-	this.driver.write(writes);
+	this.writeField(cfg.tag, value);
 };
 
 /** Where the slider's travel stood when the press landed. */

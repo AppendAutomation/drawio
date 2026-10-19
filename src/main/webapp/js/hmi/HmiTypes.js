@@ -144,7 +144,11 @@ HmiTypes.SYSTEM_TAGS = {
 	'_Second': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
 		comment: 'The second, 0 to 59'},
 	'_Msec': {type: 'MemoryInteger', readOnly: true, provider: 'clock',
-		comment: 'The millisecond within the second, 0 to 999'}
+		comment: 'The millisecond within the second, 0 to 999'},
+	'_Now': {type: 'MemoryMessage', readOnly: true, provider: 'clock',
+		comment: 'The date and time, in the format _TimeFormat holds'},
+	'_TimeFormat': {type: 'MemoryMessage', readOnly: false, provider: 'clock',
+		comment: 'The format _Now and Now() use; HH:mm:ss at the start of a Run'}
 };
 
 /** The names by their lower-case spelling: systemTag is on every value read. */
@@ -215,6 +219,192 @@ HmiTypes.stampText = function(d)
 };
 
 /**
+ * The format a time is shown in when nothing says otherwise: a 24-hour clock,
+ * which reads the same in every plant. Now() with no argument, _TimeFormat at
+ * the start of every Run, and any format the engine cannot make sense of all
+ * come back to this one.
+ */
+HmiTypes.DEFAULT_TIME_FORMAT = 'HH:mm:ss';
+
+/** Longer than this is not a format, whatever else it is. */
+HmiTypes.MAX_FORMAT = 64;
+
+/** Shorthand for the popular formats. Matched without regard to case. */
+HmiTypes.TIME_PRESETS = {
+	'TIME': 'HH:mm:ss',
+	'TIME12': 'hh:mm:ss tt',
+	'HHMM': 'HH:mm',
+	'DATE': 'yyyy-MM-dd',
+	'US': 'MM/dd/yyyy',
+	'EU': 'dd/MM/yyyy',
+	'DATETIME': 'yyyy-MM-dd HH:mm:ss',
+	'STAMP': 'yyyy-MM-dd HH:mm:ss.fff',
+	'ISO': 'yyyy-MM-ddTHH:mm:ss',
+	'LONG': 'dddd, MMMM d, yyyy'
+};
+
+/**
+ * The month and weekday names. English only: the application has no localized
+ * names, and a project that needs another language builds the text with the
+ * String functions rather than being given half a translation.
+ */
+HmiTypes.MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June',
+	'July', 'August', 'September', 'October', 'November', 'December'];
+
+HmiTypes.DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+	'Friday', 'Saturday'];
+
+/** The hour on a 12-hour clock: midnight and noon are 12, not 0. */
+HmiTypes.hour12 = function(d)
+{
+	var h = d.getHours() % 12;
+
+	return (h === 0) ? 12 : h;
+};
+
+/**
+ * What each format token reads, longest spelling first within its letter: the
+ * scanner takes the first token that matches where it stands, so yyyy is one
+ * year and not two two-digit ones. Case tells M (month) from m (minute) and
+ * H (24-hour) from h (12-hour), as it does everywhere these patterns are
+ * written.
+ */
+HmiTypes.TIME_TOKENS = [
+	['yyyy', function(d) { return '' + d.getFullYear(); }],
+	['yy', function(d) { return HmiTypes.pad(d.getFullYear() % 100); }],
+	['MMMM', function(d) { return HmiTypes.MONTH_NAMES[d.getMonth()]; }],
+	['MMM', function(d) { return HmiTypes.MONTH_NAMES[d.getMonth()].substring(0, 3); }],
+	['MM', function(d) { return HmiTypes.pad(d.getMonth() + 1); }],
+	['M', function(d) { return '' + (d.getMonth() + 1); }],
+	['dddd', function(d) { return HmiTypes.DAY_NAMES[d.getDay()]; }],
+	['ddd', function(d) { return HmiTypes.DAY_NAMES[d.getDay()].substring(0, 3); }],
+	['dd', function(d) { return HmiTypes.pad(d.getDate()); }],
+	['d', function(d) { return '' + d.getDate(); }],
+	['HH', function(d) { return HmiTypes.pad(d.getHours()); }],
+	['H', function(d) { return '' + d.getHours(); }],
+	['hh', function(d) { return HmiTypes.pad(HmiTypes.hour12(d)); }],
+	['h', function(d) { return '' + HmiTypes.hour12(d); }],
+	['mm', function(d) { return HmiTypes.pad(d.getMinutes()); }],
+	['m', function(d) { return '' + d.getMinutes(); }],
+	['ss', function(d) { return HmiTypes.pad(d.getSeconds()); }],
+	['s', function(d) { return '' + d.getSeconds(); }],
+	['fff', function(d) { return HmiTypes.pad(d.getMilliseconds(), 3); }],
+	['tt', function(d) { return (d.getHours() < 12) ? 'AM' : 'PM'; }],
+	['t', function(d) { return (d.getHours() < 12) ? 'A' : 'P'; }]
+];
+
+/**
+ * One pass over a format: a token becomes what it reads from d, and anything
+ * else is a literal. A backslash escapes the next character, so a format can
+ * hold a letter a token would otherwise claim.
+ *
+ * The formatter and the check that a format means anything both read this, so
+ * the two cannot disagree about what counts as a token. With no date it only
+ * counts.
+ *
+ * Letters left over are counted as well, because single-letter tokens are
+ * enough that prose would otherwise pass for a pattern: "Batch report" holds
+ * t, h and s, and would come out as BaPc2 reporP rather than being refused.
+ */
+HmiTypes.scanTimeFormat = function(text, d)
+{
+	var out = '';
+	var found = 0;
+	var letters = 0;
+	var i = 0;
+
+	while (i < text.length)
+	{
+		if (text.charAt(i) === '\\' && i + 1 < text.length)
+		{
+			out += text.charAt(i + 1);
+			i += 2;
+
+			continue;
+		}
+
+		var hit = null;
+
+		for (var t = 0; t < HmiTypes.TIME_TOKENS.length; t++)
+		{
+			if (text.substr(i, HmiTypes.TIME_TOKENS[t][0].length) === HmiTypes.TIME_TOKENS[t][0])
+			{
+				hit = HmiTypes.TIME_TOKENS[t];
+
+				break;
+			}
+		}
+
+		if (hit != null)
+		{
+			found++;
+			out += (d != null) ? hit[1](d) : '';
+			i += hit[0].length;
+		}
+		else
+		{
+			if (/[A-Za-z]/.test(text.charAt(i)))
+			{
+				letters++;
+			}
+
+			out += text.charAt(i);
+			i++;
+		}
+	}
+
+	return {text: out, tokens: found, letters: letters};
+};
+
+/**
+ * The pattern a format argument means: a preset's pattern, the text itself
+ * when it is one, or null when it is neither -- which is what makes a format
+ * invalid.
+ *
+ * A pattern holds at least one token and no letter that is not part of one.
+ * Separators, digits and punctuation are free, and a backslash takes a letter
+ * through, but a word is not a format: text for a screen is built by joining
+ * strings ("Report run " + Now("DATETIME")), which keeps a format a format.
+ */
+HmiTypes.timeFormat = function(text)
+{
+	if (typeof text !== 'string' || text === '' || text.length > HmiTypes.MAX_FORMAT)
+	{
+		return null;
+	}
+
+	var name = text.toUpperCase();
+
+	if (Object.prototype.hasOwnProperty.call(HmiTypes.TIME_PRESETS, name))
+	{
+		return HmiTypes.TIME_PRESETS[name];
+	}
+
+	var scan = HmiTypes.scanTimeFormat(text, null);
+
+	return (scan.tokens > 0 && scan.letters === 0) ? text : null;
+};
+
+/** Whether a format means anything, which is what Validate asks. */
+HmiTypes.validTimeFormat = function(text)
+{
+	return HmiTypes.timeFormat(text) != null;
+};
+
+/**
+ * The date and time as text. An invalid format gives the default rather than
+ * an error: a screen showing the time is no place for a diagnostic, and
+ * Validate has already said so at design time.
+ */
+HmiTypes.formatTime = function(d, text)
+{
+	var pattern = HmiTypes.timeFormat(text);
+
+	return HmiTypes.scanTimeFormat((pattern != null) ? pattern :
+		HmiTypes.DEFAULT_TIME_FORMAT, (d != null) ? d : new Date()).text;
+};
+
+/**
  * What each date and time system tag reads. The values are worked out when
  * they are read rather than held, so a script reading _Msec gets the
  * millisecond it asked in; the once-a-second tick (HmiWindowManager's clock)
@@ -233,14 +423,22 @@ HmiTypes.CLOCK_READERS = {
 	'_Hour': function(d) { return d.getHours(); },
 	'_Minute': function(d) { return d.getMinutes(); },
 	'_Second': function(d) { return d.getSeconds(); },
-	'_Msec': function(d) { return d.getMilliseconds(); }
+	'_Msec': function(d) { return d.getMilliseconds(); },
+	'_Now': function(d, format) { return HmiTypes.formatTime(d, format); },
+	'_TimeFormat': function(d, format) { return format; }
 };
 
 /** The date and time tags, the names a tick re-evaluates. */
 HmiTypes.CLOCK_NAMES = Object.keys(HmiTypes.CLOCK_READERS);
 
-/** A date and time system tag's value, as the expression engine reads it. */
-HmiTypes.readClock = function(name, now)
+/**
+ * A date and time system tag's value, as the expression engine reads it.
+ *
+ * The format is what _Now is shown in and what _TimeFormat reads back: the
+ * Run's clock manager holds it, and a runtime without one (a design-time
+ * preview) passes nothing and gets the default.
+ */
+HmiTypes.readClock = function(name, now, format)
 {
 	var reader = HmiTypes.CLOCK_READERS[name];
 
@@ -250,8 +448,37 @@ HmiTypes.readClock = function(name, now)
 	}
 
 	var when = (now != null) ? now : new Date();
+	var pattern = HmiTypes.timeFormat(format);
 
-	return {value: reader(when), quality: HmiTypes.QUALITY_GOOD, timestamp: when.getTime()};
+	return {value: reader(when, (pattern != null) ? pattern : HmiTypes.DEFAULT_TIME_FORMAT),
+		quality: HmiTypes.QUALITY_GOOD, timestamp: when.getTime()};
+};
+
+/**
+ * The reserved names as read-only pseudo-tags, sorted, for the lists that show
+ * them: the Tag Dictionary and Browse Tags. They are not the project's tags
+ * and nothing may write through them, so each is a fresh object with the
+ * three fields a list and its read-only form need.
+ */
+HmiTypes.systemTagList = function()
+{
+	var list = [];
+
+	for (var name in HmiTypes.SYSTEM_TAGS)
+	{
+		list.push({name: name, type: HmiTypes.SYSTEM_TAGS[name].type,
+			comment: HmiTypes.SYSTEM_TAGS[name].comment, system: true});
+	}
+
+	list.sort(function(a, b)
+	{
+		var x = a.name.toLowerCase();
+		var y = b.name.toLowerCase();
+
+		return (x < y) ? -1 : ((x > y) ? 1 : 0);
+	});
+
+	return list;
 };
 
 // ------------------------------------------------------- link type registry

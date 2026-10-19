@@ -380,6 +380,9 @@ HmiWindowManager = function(ui, project, driver, options)
 	this.sql = new HmiSqlManager(project, this.hub.client(), {ui: ui,
 		store: (options != null) ? options.retentiveStore : null,
 		alarms: this.alarms});
+
+	// The format _Now reads in: the Run's, so every window agrees
+	this.clock = new HmiClockManager(this);
 };
 
 HmiWindowManager.prototype.start = function()
@@ -509,7 +512,8 @@ HmiWindowManager.prototype.startAppScripts = function()
 
 	this.app = new HmiRuntime({graph: null, project: this.project, driver: this.hub.client(),
 		alarms: this.alarms, security: this.security, recipes: this.recipes, indirect: this.indirect, trends: this.trends,
-		lists: this.lists, sql: this.sql, scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
+		lists: this.lists, sql: this.sql, clock: this.clock,
+		scripts: [sc.onStart, sc.whileRunning, sc.onShutdown], windows: this});
 	this.app.startScripts();
 
 	var app = this.app;
@@ -579,18 +583,73 @@ HmiWindowManager.prototype.startClock = function()
 {
 	var that = this;
 
+	this.clock.start();
+
 	this.clockTimer = window.setInterval(function()
 	{
-		for (var i = 0; i < that.windows.length; i++)
-		{
-			var runtime = that.windows[i].runtime;
-
-			if (runtime != null && runtime.running)
-			{
-				runtime.invalidateNames(HmiTypes.CLOCK_NAMES);
-			}
-		}
+		that.invalidateClock();
 	}, 1000);
+};
+
+/**
+ * Re-evaluate the date and time tags in every window: the tick's own job, and
+ * what a change of format asks for so the new text shows at once rather than
+ * up to a second later.
+ */
+HmiWindowManager.prototype.invalidateClock = function()
+{
+	for (var i = 0; i < this.windows.length; i++)
+	{
+		var runtime = this.windows[i].runtime;
+
+		if (runtime != null && runtime.running)
+		{
+			runtime.invalidateNames(HmiTypes.CLOCK_NAMES);
+		}
+	}
+};
+
+/**
+ * The Run's clock format: what _Now is shown in and what _TimeFormat reads.
+ *
+ * One per Run, owned by the window manager and given to every runtime, so
+ * each window shows the time the same way and a format set by an application
+ * script before any window opens is not lost. Nothing survives a Run: a Run
+ * begins in the default format.
+ *
+ * What it holds is the pattern, not the argument it was given, so
+ * _TimeFormat = "US" reads back as MM/dd/yyyy -- the format in use.
+ */
+HmiClockManager = function(manager)
+{
+	this.manager = manager;
+	this.pattern = HmiTypes.DEFAULT_TIME_FORMAT;
+};
+
+HmiClockManager.prototype.start = function()
+{
+	this.pattern = HmiTypes.DEFAULT_TIME_FORMAT;
+};
+
+HmiClockManager.prototype.format = function()
+{
+	return this.pattern;
+};
+
+/**
+ * _TimeFormat = "...". A format that means nothing falls back to the default,
+ * exactly as a bad argument to Now() does.
+ */
+HmiClockManager.prototype.setFormat = function(text)
+{
+	var pattern = HmiTypes.timeFormat((text != null) ? '' + text : null);
+
+	this.pattern = (pattern != null) ? pattern : HmiTypes.DEFAULT_TIME_FORMAT;
+
+	if (this.manager != null)
+	{
+		this.manager.invalidateClock();
+	}
 };
 
 HmiWindowManager.prototype.stopClock = function()
@@ -1288,7 +1347,7 @@ HmiWindowManager.prototype.createWindow = function(page, props)
 	var runtime = new HmiRuntime({graph: graph, project: this.project,
 		driver: this.hub.client(), alarms: this.alarms, security: this.security, recipes: this.recipes,
 		indirect: this.indirect, trends: this.trends, lists: this.lists, sql: this.sql,
-		scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
+		clock: this.clock, scripts: [props.onShow, props.whileShowing, props.onHide], windows: this});
 
 	runtime.onUserInput = function(cfg, binding)
 	{

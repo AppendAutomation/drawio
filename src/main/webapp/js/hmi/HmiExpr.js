@@ -238,6 +238,14 @@ HmiExpr.FUNCTIONS = {
 	'StringToIntg': {arity: 1, fn: function(a) { return Math.trunc(HmiExpr.looseNum(a)); }},
 	'StringToReal': {arity: 1, fn: function(a) { return HmiExpr.looseNum(a); }},
 
+	// The time as text, in a format of the caller's own. Not an action: a
+	// Value Display may show Now("US") with no tag at all, which is why
+	// parseCall gives the call a clock dependency to repaint it.
+	'Now': {minArity: 0, maxArity: 1, fn: function(a)
+	{
+		return HmiTypes.formatTime(new Date(), (a != null) ? HmiExpr.text(a) : null);
+	}},
+
 	// Actions, for scripts only: they run through the runtime (ctx.call) and
 	// have effects, so an expression re-evaluated on every change must not
 	// call them
@@ -1867,6 +1875,16 @@ HmiExpr.Parser.prototype.parseCall = function(name, token)
 	{
 		// What makes a QuickFunction script-only, as it does a built-in
 		this.callsAction = true;
+	}
+
+	if (name === 'Now' && mxUtils.indexOf(this.deps, '_Now') < 0)
+	{
+		// The clock's once-a-second tick is what repaints an object showing
+		// the time, and a tick only re-evaluates what depends on a clock
+		// name. Without this a Value Display reading Now() would paint once
+		// and then stand still. System names are kept out of the driver's
+		// subscriptions, so the dependency costs nothing on the wire.
+		this.deps.push('_Now');
 	}
 
 	// An argument the function writes to rather than reads: it must be a bare

@@ -690,6 +690,15 @@
 	background-color: rgba(255, 255, 255, 0.08);
 }
 
+/* A reserved name in the Tag Dictionary and in Browse Tags: the runtime
+   supplies it, and it is listed so the names are written down somewhere */
+.hmiTagSystem
+{
+	font-size: 11px;
+	color: gray;
+	margin-left: 6px;
+}
+
 /* ------------------------------------------------------------- keypad */
 
 .hmiKeypad
@@ -700,10 +709,13 @@
 	margin-top: 10px;
 }
 
+/* A touch target, not a pointer's: HmiDialogs.KEY_H and KEY_W are these
+   numbers, and the dialogs are sized from them, so the two change together */
 .hmiKeypad button
 {
-	padding: 10px 0;
-	font-size: 16px;
+	height: 74px;
+	padding: 0;
+	font-size: 32px;
 	cursor: pointer;
 }
 
@@ -729,18 +741,23 @@
 	justify-content: center;
 }
 
+/* As the keypad's keys: HmiDialogs.KEY_W / KEY_H. The keys may shrink below
+   that width on a panel narrower than the keyboard wants (min-width: 0), which
+   is what keeps the dialog on the screen */
 .hmiKeyboardRow button
 {
-	flex: 1 1 0;
+	flex: 0 1 104px;
 	min-width: 0;
-	padding: 10px 0;
-	font-size: 14px;
+	height: 74px;
+	padding: 0;
+	font-size: 28px;
 	cursor: pointer;
 }
 
+/* Four keys and the gaps between them */
 .hmiKeyboardRow button.hmiKeySpace
 {
-	flex: 4 1 0;
+	flex: 0 1 428px;
 }
 
 /* ------------------------------------------------ settings and windows */

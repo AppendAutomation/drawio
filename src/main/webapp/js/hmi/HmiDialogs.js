@@ -133,6 +133,10 @@ HmiTagDialog = function(ui)
 	this.project = ui.hmiProject;
 	this.selected = null;
 
+	// Made once, so a selected system tag is still the same object after the
+	// list is re-rendered (the rows compare by identity)
+	this.system = HmiTypes.systemTagList();
+
 	var div = HmiDialogs.el('div', 'hmiDialog');
 
 	div.appendChild(HmiDialogs.el('div', 'hmiDialogTitle',
@@ -237,14 +241,23 @@ HmiTagDialog.prototype.setNote = function(text)
 	this.noteDiv.style.display = (text != null && text !== '') ? '' : 'none';
 };
 
+/**
+ * The list: the project's tags and the reserved system tags together.
+ *
+ * The system tags are shown so that the names the runtime answers are written
+ * down somewhere a designer looks, with their types and what each one means.
+ * They are not the project's and nothing may write through them, so they are
+ * fresh read-only objects rather than anything the project holds.
+ */
 HmiTagDialog.prototype.visibleTags = function()
 {
 	var text = this.filter.value.toLowerCase();
 	var res = [];
+	var all = this.system.concat(this.project.tags);
 
-	for (var i = 0; i < this.project.tags.length; i++)
+	for (var i = 0; i < all.length; i++)
 	{
-		var tag = this.project.tags[i];
+		var tag = all[i];
 
 		if (text === '' || tag.name.toLowerCase().indexOf(text) >= 0 ||
 			(tag.comment != null && tag.comment.toLowerCase().indexOf(text) >= 0))
@@ -275,8 +288,11 @@ HmiTagDialog.prototype.renderList = function()
 
 	if (tags.length === 0)
 	{
-		this.listDiv.appendChild(
-			HmiDialogs.el('div', 'hmiEmpty', 'No tags defined.'));
+		// The system tags are always there, so an empty list is a filter that
+		// matched nothing
+		this.listDiv.appendChild(HmiDialogs.el('div', 'hmiEmpty',
+			(this.filter.value !== '') ? 'No tags match the filter.' :
+				'No tags defined.'));
 
 		return;
 	}
@@ -295,6 +311,12 @@ HmiTagDialog.prototype.createRow = function(tag)
 
 	row.appendChild(HmiDialogs.el('span', 'hmiTagName', tag.name));
 	row.appendChild(HmiDialogs.el('span', 'hmiTagType', tag.type));
+	row.setAttribute('data-hmi-tag', tag.name);
+
+	if (tag.system)
+	{
+		row.appendChild(HmiDialogs.el('span', 'hmiTagSystem', 'System'));
+	}
 
 	mxEvent.addListener(row, 'click', function()
 	{
@@ -322,6 +344,46 @@ HmiTagDialog.prototype.createRow = function(tag)
  * host.formNameReadOnly        true to show the name without editing it
  */
 HmiTagForm = function() {};
+
+/**
+ * A system tag's properties: its name, its type and what it reads, none of
+ * them editable.
+ *
+ * Its own form rather than HmiTagForm.render with every field disabled: that
+ * form writes into the tag object it is handed, and a system tag is not a tag
+ * the project owns -- there is nothing to write into and nothing to save.
+ */
+HmiTagForm.renderSystem = function(host)
+{
+	var tag = host.formTag();
+	host.formDiv.innerText = '';
+
+	var show = function(label, value, prop)
+	{
+		var input = HmiDialogs.field(host.formDiv, label, value, function() {});
+		input.setAttribute('readonly', 'readonly');
+		input.setAttribute('data-hmi-prop', prop);
+
+		return input;
+	};
+
+	show('Name', tag.name, 'name');
+	show('Type', tag.type, 'type');
+	show('Reads', (tag.comment != null) ? tag.comment : '', 'comment');
+
+	var def = HmiTypes.SYSTEM_TAGS[tag.name];
+	var hint = 'A system tag: the runtime supplies it, so it cannot be ' +
+		'edited or deleted, and no tag of the dictionary may take its name.';
+
+	if (def != null && !def.readOnly)
+	{
+		hint += ' A script may write to it.';
+	}
+
+	var note = HmiDialogs.el('div', 'hmiHint', hint);
+	note.setAttribute('data-hmi-field', 'systemTagNote');
+	host.formDiv.appendChild(note);
+};
 
 HmiTagForm.render = function(host)
 {
@@ -623,6 +685,13 @@ HmiTagForm.render = function(host)
 // change is a project change, and a rename moves every reference with it.
 HmiTagDialog.prototype.renderForm = function()
 {
+	if (this.selected != null && this.selected.system)
+	{
+		HmiTagForm.renderSystem(this);
+
+		return;
+	}
+
 	HmiTagForm.render(this);
 };
 
@@ -662,10 +731,24 @@ HmiTagDialog.prototype.createTag = function(type)
 	this.renderForm();
 };
 
+/** What a system tag is told when something is asked of it that it cannot do. */
+HmiTagDialog.prototype.systemNote = function(what)
+{
+	this.setNote('"' + this.selected.name + '" is a system tag: the runtime ' +
+		'supplies it, so it cannot be ' + what + '.');
+};
+
 HmiTagDialog.prototype.duplicate = function()
 {
 	if (this.selected == null)
 	{
+		return;
+	}
+
+	if (this.selected.system)
+	{
+		this.systemNote('duplicated');
+
 		return;
 	}
 
@@ -687,6 +770,13 @@ HmiTagDialog.prototype.remove = function()
 {
 	if (this.selected == null)
 	{
+		return;
+	}
+
+	if (this.selected.system)
+	{
+		this.systemNote('deleted');
+
 		return;
 	}
 
@@ -879,7 +969,11 @@ HmiTagDialog.csvValue = function(tag, field)
 	return (key != null) ? ((tag.alarms != null) ? tag.alarms[key] : null) : tag[field];
 };
 
-HmiTagDialog.prototype.exportCsv = function()
+/**
+ * The project's tags as CSV. The project's own order, and its tags alone: a
+ * system tag has nothing to export and could not be imported back.
+ */
+HmiTagDialog.prototype.csvText = function()
 {
 	var rows = [HmiTagDialog.CSV_FIELDS.join(',')];
 
@@ -896,9 +990,12 @@ HmiTagDialog.prototype.exportCsv = function()
 		rows.push(cells.join(','));
 	}
 
-	var text = rows.join('\n');
+	return rows.join('\n');
+};
 
-	this.ui.showDialog(new HmiTextDialog(this.ui, 'Export CSV', text,
+HmiTagDialog.prototype.exportCsv = function()
+{
+	this.ui.showDialog(new HmiTextDialog(this.ui, 'Export CSV', this.csvText(),
 		'Copy this into a spreadsheet.').container, 620, 420, true, true);
 };
 
@@ -3361,13 +3458,13 @@ HmiDialogs.showUserInput = function(ui, cfg, runtime)
 			value = n;
 		}
 
-		var writes = {};
-		writes[cfg.tag] = value;
-		var res = rt.driver.write(writes);
+		// Through the runtime rather than straight to the driver, so a system
+		// tag (_TimeFormat, _AckAll) is answered and a refusal is shown
+		var res = rt.writeField(cfg.tag, value);
 
-		if (res[cfg.tag] != null && !res[cfg.tag].ok)
+		if (res != null && !res.ok)
 		{
-			error.innerText = res[cfg.tag].error;
+			error.innerText = res.error;
 
 			return;
 		}
@@ -3392,13 +3489,19 @@ HmiDialogs.showUserInput = function(ui, cfg, runtime)
 
 	div.appendChild(footer);
 
-	var height = 260;
+	// The on-screen keys decide the size of the dialog that holds them
+	var size = {width: 380, height: 260};
 
-	if (cfg.keypad && cfg.kind === 'analog') { height = 500; }
-	else if (cfg.keypad && cfg.kind !== 'discrete') { height = 420; }
+	if (cfg.keypad && cfg.kind === 'analog')
+	{
+		size = HmiDialogs.keypadSize();
+	}
+	else if (cfg.keypad && cfg.kind !== 'discrete')
+	{
+		size = HmiDialogs.withKeyboard(380, HmiDialogs.INPUT_BASE);
+	}
 
-	ui.showDialog(div, (cfg.keypad && cfg.kind === 'string') ? 560 : 380,
-		height, true, true);
+	ui.showDialog(div, size.width, size.height, true, true);
 
 	if (input != null)
 	{
@@ -3444,6 +3547,110 @@ HmiDialogs.rangeText = function(rt, cfg)
 	}
 
 	return 'Range: ' + lo + ' to ' + hi + units;
+};
+
+/**
+ * How big an on-screen key is: a finger's target, not a mouse pointer's.
+ *
+ * css/hmi.css draws the keys (.hmiKeyboardRow button, .hmiKeypad button) and
+ * these numbers are what the dialogs around them are sized from, so the two
+ * must change together -- the rule the title bar's colors and the alarm
+ * objects' colors already follow.
+ *
+ * The keypad's three columns are wider than a keyboard key to begin with, so
+ * there the height and the label are what grow.
+ */
+HmiDialogs.KEY_W = 104;
+HmiDialogs.KEY_H = 74;
+HmiDialogs.KEY_GAP = 4;
+HmiDialogs.KEYPAD_GAP = 6;
+
+/** The widest keyboard row (1234567890) and how many rows it has. */
+HmiDialogs.KEY_COLUMNS = 10;
+HmiDialogs.KEYBOARD_ROWS = 5;
+HmiDialogs.KEYPAD_ROWS = 5;
+
+/** What a dialog holds besides its keys: fields, the error line, the footer. */
+HmiDialogs.INPUT_BASE = 158;
+HmiDialogs.KEYPAD_BASE = 285;
+
+/**
+ * A dialog size that fits on the screen. A touch panel may be narrower than
+ * the keys want, and then the window is as wide as the screen allows and the
+ * keys shrink into it (flex, with no minimum width) rather than overflowing.
+ */
+HmiDialogs.fitsScreen = function(width, height)
+{
+	var w = width;
+	var h = height;
+
+	if (typeof window !== 'undefined')
+	{
+		if (window.innerWidth > 0)
+		{
+			w = Math.min(w, window.innerWidth - 60);
+		}
+
+		if (window.innerHeight > 0)
+		{
+			h = Math.min(h, window.innerHeight - 60);
+		}
+	}
+
+	return {width: w, height: h};
+};
+
+/** How wide the widest keyboard row wants to be, inside a dialog's padding. */
+HmiDialogs.keyboardWidth = function()
+{
+	return HmiDialogs.KEY_COLUMNS * HmiDialogs.KEY_W +
+		(HmiDialogs.KEY_COLUMNS - 1) * HmiDialogs.KEY_GAP + 24;
+};
+
+/** How tall the keyboard itself is: its rows of keys and its top margin. */
+HmiDialogs.keyboardKeysHeight = function()
+{
+	return HmiDialogs.KEYBOARD_ROWS * (HmiDialogs.KEY_H + HmiDialogs.KEY_GAP) + 10;
+};
+
+/**
+ * What a dialog measures once its keyboard is shown: at least as wide as the
+ * keys want, and taller by the keyboard. The three dialogs that offer one
+ * (operator input, Login, the User Manager) all ask this.
+ */
+HmiDialogs.withKeyboard = function(width, height)
+{
+	return HmiDialogs.fitsScreen(Math.max(width, HmiDialogs.keyboardWidth()),
+		height + HmiDialogs.keyboardKeysHeight());
+};
+
+/** The dialog size the numeric keypad needs: as wide as it was, and taller. */
+HmiDialogs.keypadSize = function()
+{
+	return HmiDialogs.fitsScreen(380,
+		HmiDialogs.KEYPAD_ROWS * (HmiDialogs.KEY_H + HmiDialogs.KEYPAD_GAP) +
+			HmiDialogs.KEYPAD_BASE);
+};
+
+/**
+ * Grows the open dialog to hold a keyboard, or shrinks it back.
+ *
+ * A modal dialog is sized when it is created, so the Keyboard button in the
+ * Login and User Manager dialogs resizes the container itself; Dialog adds 48
+ * px of its own padding to the size it was given, and the dialog stays
+ * centered because it is placed with a transform.
+ */
+HmiDialogs.resizeDialog = function(ui, width, height)
+{
+	var dlg = (ui != null) ? ui.dialog : null;
+
+	if (dlg == null || dlg.container == null)
+	{
+		return;
+	}
+
+	dlg.container.style.width = (width + 48) + 'px';
+	dlg.container.style.height = (height + 48) + 'px';
 };
 
 /**
@@ -4252,7 +4459,12 @@ HmiDialogs.showLogin = function(ui, security)
 	{
 		var show = keyboard.style.display === 'none';
 		keyboard.style.display = (show) ? '' : 'none';
-		ui.dialog.container.style.height = (show ? 470 : 250) + 'px';
+
+		// The keys are a touch target, so the dialog grows in both directions
+		var size = (show) ? HmiDialogs.withKeyboard(560, 250) :
+			{width: 560, height: 250};
+
+		HmiDialogs.resizeDialog(ui, size.width, size.height);
 	});
 	footer.appendChild(kb);
 	footer.appendChild(HmiDialogs.el('span', 'hmiSpacer'));
@@ -4478,9 +4690,17 @@ HmiDialogs.showUsers = function(ui, options)
 
 	if (keyboard != null)
 	{
+		var tall = (security != null) ? 720 : 560;
+
 		footer.appendChild(HmiDialogs.button('Keyboard', function()
 		{
-			keyboard.style.display = (keyboard.style.display === 'none') ? '' : 'none';
+			var show = keyboard.style.display === 'none';
+			keyboard.style.display = (show) ? '' : 'none';
+
+			var size = (show) ? HmiDialogs.withKeyboard(560, tall) :
+				{width: 560, height: tall};
+
+			HmiDialogs.resizeDialog(ui, size.width, size.height);
 		}));
 	}
 
@@ -4744,15 +4964,19 @@ HmiDialogs.showTagBrowser = function(ui, project, onPick)
 		onPick(selected.name);
 	};
 
+	// The reserved names are offered too: a script reads _TimeFormat or
+	// _AccessLevel as readily as a tag of the dictionary
+	var all = HmiTypes.systemTagList().concat(project.tags);
+
 	var render = function()
 	{
 		var text = filter.value.toLowerCase();
 		list.innerText = '';
 		var shown = 0;
 
-		for (var i = 0; i < project.tags.length; i++)
+		for (var i = 0; i < all.length; i++)
 		{
-			var tag = project.tags[i];
+			var tag = all[i];
 
 			if (text !== '' && tag.name.toLowerCase().indexOf(text) < 0 &&
 				('' + (tag.comment || '')).toLowerCase().indexOf(text) < 0)
@@ -4767,6 +4991,11 @@ HmiDialogs.showTagBrowser = function(ui, project, onPick)
 				row.setAttribute('data-hmi-tag', t.name);
 				row.appendChild(HmiDialogs.el('span', 'hmiTagName', t.name));
 				row.appendChild(HmiDialogs.el('span', 'hmiTagType', t.type));
+
+				if (t.system)
+				{
+					row.appendChild(HmiDialogs.el('span', 'hmiTagSystem', 'System'));
+				}
 
 				mxEvent.addListener(row, 'click', function()
 				{

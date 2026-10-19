@@ -916,20 +916,28 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 	var dlg = new HmiTagDialog(ui);
 	dlg.init();
 
+	// The project's three, and the reserved names listed with them
+	var systemCount = HmiTypes.systemTagList().length;
+
 	HmiSelfTest.check('tagDialog.listsTags',
-		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 3,
+		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 3 + systemCount,
 		'rows = ' + dlg.listDiv.getElementsByClassName('hmiTagRow').length);
 
 	// Alphabetical, whatever order the project holds them in, and the list
 	// only: the file and the CSV keep the project's own order.
-	var listed = function()
+	var listed = function(wantSystem)
 	{
 		var rows = dlg.listDiv.getElementsByClassName('hmiTagRow');
 		var names = [];
 
 		for (var i = 0; i < rows.length; i++)
 		{
-			names.push(rows[i].firstChild.innerText);
+			var isSystem = rows[i].getElementsByClassName('hmiTagSystem').length > 0;
+
+			if (isSystem === (wantSystem === true))
+			{
+				names.push(rows[i].firstChild.innerText);
+			}
 		}
 
 		return names.join(',');
@@ -937,6 +945,68 @@ HmiSelfTest.testMenusAndDialogs = function(ui)
 
 	HmiSelfTest.check('tagDialog.listsAlphabetically',
 		listed() === 'Pump1_Run,Recipe_Name,Tank_Level', listed());
+
+	// --- the system tags are listed, and cannot be edited ----------------
+	// The names the runtime answers are written down where a designer looks;
+	// the leading underscore sorts them above the project's own tags.
+
+	HmiSelfTest.check('tagDialog.listsSystemTags',
+		listed(true).indexOf('_Now') >= 0 &&
+		listed(true).indexOf('_TimeFormat') >= 0 &&
+		listed(true).indexOf('_AlarmsActive') >= 0, listed(true));
+
+	var firstRow = dlg.listDiv.getElementsByClassName('hmiTagRow')[0];
+
+	HmiSelfTest.check('tagDialog.systemTagsFirst', firstRow != null &&
+		firstRow.getElementsByClassName('hmiTagSystem').length === 1,
+		(firstRow != null) ? firstRow.firstChild.innerText : 'no rows');
+
+	dlg.filter.value = '_timeformat';
+	dlg.renderList();
+
+	// The filter reads comments as well as names, and _Now's comment names
+	// _TimeFormat, so both are found
+	HmiSelfTest.check('tagDialog.filtersSystemTags',
+		dlg.listDiv.getElementsByClassName('hmiTagRow').length === 2,
+		'rows = ' + dlg.listDiv.getElementsByClassName('hmiTagRow').length);
+
+	dlg.container.querySelector('[data-hmi-tag="_TimeFormat"]').click();
+
+	var nameProp = dlg.formDiv.querySelector('[data-hmi-prop="name"]');
+
+	HmiSelfTest.check('tagDialog.systemTagFormIsReadOnly',
+		dlg.selected != null && dlg.selected.name === '_TimeFormat' &&
+		nameProp != null && nameProp.getAttribute('readonly') === 'readonly' &&
+		dlg.formDiv.querySelector('[data-hmi-field="systemTagNote"]') != null,
+		(nameProp != null) ? 'readonly=' + nameProp.getAttribute('readonly') : 'no name field');
+
+	// _TimeFormat is one a script may write, which the form says
+	HmiSelfTest.check('tagDialog.systemTagFormSaysWritable',
+		dlg.formDiv.querySelector('[data-hmi-field="systemTagNote"]').innerText
+			.indexOf('may write') > 0);
+
+	var tagsBefore = ui.hmiProject.tags.length;
+	dlg.duplicate();
+
+	HmiSelfTest.check('tagDialog.systemTagNotDuplicated',
+		ui.hmiProject.tags.length === tagsBefore &&
+		dlg.noteDiv.innerText.indexOf('system tag') > 0, dlg.noteDiv.innerText);
+
+	dlg.remove();
+
+	HmiSelfTest.check('tagDialog.systemTagNotDeleted',
+		dlg.selected != null && dlg.selected.name === '_TimeFormat' &&
+		HmiTypes.systemTag('_TimeFormat') === '_TimeFormat');
+
+	HmiSelfTest.check('tagDialog.csvSkipsSystemTags',
+		dlg.csvText().indexOf('_Now') < 0 &&
+		dlg.csvText().indexOf('Tank_Level') > 0);
+
+	dlg.selected = null;
+	dlg.setNote('');
+	dlg.filter.value = '';
+	dlg.renderList();
+	dlg.renderForm();
 	HmiSelfTest.check('tagDialog.keepsProjectOrder',
 		ui.hmiProject.tags[0].name === 'Tank_Level',
 		ui.hmiProject.tags[0].name);
@@ -2273,8 +2343,136 @@ HmiSelfTest.testClock = function(ui)
 		read('_Hour') + ':' + read('_Minute') + ':' + read('_Second') + '.' + read('_Msec'));
 	check('clock.textFields', read('_DateString') === '2026-10-17' &&
 		read('_TimeString') === '14:05:09' && read('_DateTime') === '2026-10-17 14:05:09.270');
-	check('clock.tenNames', HmiTypes.CLOCK_NAMES.length === 10,
+	check('clock.twelveNames', HmiTypes.CLOCK_NAMES.length === 12,
 		HmiTypes.CLOCK_NAMES.join(','));
+
+	// --- time formats ------------------------------------------------------
+
+	var fmt = function(text) { return HmiTypes.formatTime(when, text); };
+
+	check('clock.defaultFormat', fmt(null) === '14:05:09' &&
+		HmiTypes.DEFAULT_TIME_FORMAT === 'HH:mm:ss', fmt(null));
+	check('clock.formatTokens',
+		fmt('yyyy-MM-dd') === '2026-10-17' &&
+		fmt('yy/M/d') === '26/10/17' &&
+		fmt('HH:mm:ss.fff') === '14:05:09.270' &&
+		fmt('H:m:s') === '14:5:9',
+		fmt('yyyy-MM-dd') + ' ' + fmt('yy/M/d') + ' ' + fmt('H:m:s'));
+	check('clock.format12Hour',
+		fmt('hh:mm tt') === '02:05 PM' && fmt('h:mm t') === '2:05 P',
+		fmt('hh:mm tt') + ' ' + fmt('h:mm t'));
+	check('clock.formatMidnightIsTwelve',
+		HmiTypes.formatTime(new Date(2026, 9, 17, 0, 30, 0), 'hh:mm tt') === '12:30 AM',
+		HmiTypes.formatTime(new Date(2026, 9, 17, 0, 30, 0), 'hh:mm tt'));
+	check('clock.formatNames',
+		fmt('MMMM d, yyyy') === 'October 17, 2026' &&
+		fmt('ddd MMM dd') === 'Sat Oct 17',
+		fmt('MMMM d, yyyy') + ' / ' + fmt('ddd MMM dd'));
+
+	// Longest match first, or yyyy would be two two-digit years
+	check('clock.formatLongestTokenWins', fmt('yyyy') === '2026' && fmt('yy') === '26');
+
+	// A backslash keeps a letter a token would otherwise claim
+	check('clock.formatEscape', fmt('\\H\\H HH') === 'HH 14', fmt('\\H\\H HH'));
+
+	check('clock.formatPresets',
+		fmt('TIME') === '14:05:09' && fmt('time') === '14:05:09' &&
+		fmt('DATE') === '2026-10-17' && fmt('US') === '10/17/2026' &&
+		fmt('EU') === '17/10/2026' && fmt('ISO') === '2026-10-17T14:05:09' &&
+		fmt('DATETIME') === '2026-10-17 14:05:09' &&
+		fmt('HHMM') === '14:05' && fmt('TIME12') === '02:05:09 PM' &&
+		fmt('LONG') === 'Saturday, October 17, 2026',
+		fmt('US') + ' / ' + fmt('LONG'));
+
+	// One definition of the database stamp, whichever way it is asked for
+	check('clock.stampPresetIsTheStamp',
+		fmt('STAMP') === HmiTypes.stampText(when), fmt('STAMP'));
+
+	// What is not a format: no token at all, nothing, or too long
+	// A word is not a format, though single-letter tokens are inside it: text
+	// for a screen is built by joining strings, not by writing it in a pattern
+	check('clock.invalidFormatFallsBack',
+		fmt('Batch report') === '14:05:09' && fmt('') === '14:05:09' &&
+		fmt(null) === '14:05:09' && fmt(12) === '14:05:09' &&
+		fmt('nonsense') === '14:05:09' &&
+		fmt(new Array(70).join('x')) === '14:05:09', fmt('Batch report'));
+	check('clock.formatTakesSeparatorsAndDigits',
+		fmt('HH:mm:ss') === '14:05:09' && fmt('dd.MM.yyyy') === '17.10.2026' &&
+		fmt('yyyyMMdd_HHmmss') === '20261017_140509',
+		fmt('yyyyMMdd_HHmmss'));
+	check('clock.validFormat',
+		HmiTypes.validTimeFormat('HH:mm') === true &&
+		HmiTypes.validTimeFormat('US') === true &&
+		HmiTypes.validTimeFormat('\\a\\t HH:mm') === true &&
+		HmiTypes.validTimeFormat('Batch report') === false &&
+		HmiTypes.validTimeFormat('HH:mm on dd MMM') === false &&
+		HmiTypes.validTimeFormat('') === false);
+
+	// --- _Now and _TimeFormat ---------------------------------------------
+
+	check('clock.nowReadsTheFormat',
+		HmiTypes.readClock('_Now', when, 'US').value === '10/17/2026' &&
+		HmiTypes.readClock('_Now', when).value === '14:05:09',
+		HmiTypes.readClock('_Now', when, 'US').value);
+	check('clock.timeFormatReadsBackThePattern',
+		HmiTypes.readClock('_TimeFormat', when, 'MM/dd/yyyy').value === 'MM/dd/yyyy' &&
+		HmiTypes.readClock('_TimeFormat', when).value === 'HH:mm:ss');
+
+	var clock = new HmiClockManager(null);
+
+	check('clock.managerStartsAtTheDefault',
+		clock.format() === HmiTypes.DEFAULT_TIME_FORMAT);
+
+	clock.setFormat('US');
+
+	check('clock.managerKeepsThePattern', clock.format() === 'MM/dd/yyyy',
+		clock.format());
+
+	clock.setFormat('nonsense');
+
+	check('clock.managerRefusesNonsense',
+		clock.format() === HmiTypes.DEFAULT_TIME_FORMAT, clock.format());
+
+	// A Run begins in the default format, whatever the last one ended in
+	clock.setFormat('DATE');
+	clock.start();
+
+	check('clock.managerResetsOnStart',
+		clock.format() === HmiTypes.DEFAULT_TIME_FORMAT, clock.format());
+
+	// Now(): a function, not an action, so a link may show it
+	check('clock.nowCompilesInALink',
+		HmiExpr.compile('Now()', {project: project}).errors.length === 0 &&
+		HmiExpr.compile('Now("US")', {project: project}).errors.length === 0 &&
+		HmiExpr.compile('Now("a", "b")', {project: project}).errors.length > 0);
+
+	// ... and it ticks: the dependency is what a clock invalidation reaches
+	var nowDeps = HmiExpr.compile('Now("US")', {project: project}).deps;
+
+	check('clock.nowDependsOnTheClock',
+		mxUtils.indexOf(nowDeps, '_Now') >= 0 && nowDeps.length === 1,
+		nowDeps.join(','));
+
+	// No tag is read, so an empty context is enough to run it
+	check('clock.nowRuns',
+		('' + HmiExpr.compile('Now("DATE")', {project: project}).eval({}).value).length === 10 &&
+		HmiExpr.compile('Now("DATE")', {project: project}).eval({}).value ===
+			HmiTypes.formatTime(new Date(), 'DATE'),
+		'' + HmiExpr.compile('Now("DATE")', {project: project}).eval({}).value);
+
+	// A literal format that means nothing is reported, not refused
+	check('clock.badFormatCompiles',
+		HmiExpr.compile('Now("Batch report")', {project: project}).errors.length === 0);
+	check('clock.badFormatIsAProblem',
+		HmiMenus.timeFormatProblems(HmiExpr.compile('Now("Batch report")',
+			{project: project}).ast).length === 1 &&
+		HmiMenus.timeFormatProblems(HmiExpr.compile('Now("US")',
+			{project: project}).ast).length === 0);
+	check('clock.badFormatAssignmentIsAProblem',
+		HmiMenus.timeFormatProblems(HmiExpr.compile('_TimeFormat = "nope";',
+			{project: project, mode: 'script'}).ast).length === 1 &&
+		HmiMenus.timeFormatProblems(HmiExpr.compile('_TimeFormat = "ISO";',
+			{project: project, mode: 'script'}).ast).length === 0);
 	check('clock.goodQuality',
 		HmiTypes.readClock('_Year', when).quality === HmiTypes.QUALITY_GOOD &&
 		HmiTypes.readClock('_Nonsense', when).quality === HmiTypes.QUALITY_BAD);
@@ -2292,7 +2490,13 @@ HmiSelfTest.testClock = function(ui)
 		HmiExpr.compile('"at " + _TimeString', {project: project}).errors.length === 0);
 	check('clock.readOnly',
 		HmiExpr.compile('_Year = 1', {project: project, mode: 'script'}).errors.length > 0 &&
-		HmiExpr.compile('_DateString = "x"', {project: project, mode: 'script'}).errors.length > 0);
+		HmiExpr.compile('_DateString = "x"', {project: project, mode: 'script'}).errors.length > 0 &&
+		HmiExpr.compile('_Now = "x"', {project: project, mode: 'script'}).errors.length > 0);
+
+	// _TimeFormat is the one of them a script may write
+	check('clock.timeFormatIsWritable',
+		HmiExpr.compile('_TimeFormat = "US";', {project: project, mode: 'script'}).errors.length === 0 &&
+		HmiExpr.compile('_TimeFormat = "US";', {project: project}).errors.length > 0);
 
 	// Through a runtime: the value, the one dotfield a system tag has, and
 	// that the driver is never asked for it
@@ -2309,6 +2513,61 @@ HmiSelfTest.testClock = function(ui)
 	check('clock.evaluates', ('' + rt.evaluate('_DateString').value).length === 10 &&
 		rt.evaluate('_Hour >= 0 AND _Hour <= 23').value === true,
 		'' + rt.evaluate('_DateString').value);
+
+	// --- the Run's format, through a runtime -------------------------------
+
+	check('clock.runtimeWithoutAClockUsesTheDefault',
+		rt.timeFormat() === HmiTypes.DEFAULT_TIME_FORMAT &&
+		('' + rt.readField('_Now').value).length === 8,
+		'' + rt.readField('_Now').value);
+
+	// A runtime with no clock manager has nowhere to keep a format, and says
+	// so by changing nothing rather than by failing
+	rt.writeField('_TimeFormat', 'US');
+
+	check('clock.writeWithoutAClockChangesNothing',
+		rt.timeFormat() === HmiTypes.DEFAULT_TIME_FORMAT, rt.timeFormat());
+
+	var timed = new HmiRuntime({graph: ui.editor.graph, project: project,
+		driver: sim, clock: new HmiClockManager(null)});
+
+	check('clock.runtimeTakesTheRunsFormat',
+		timed.timeFormat() === HmiTypes.DEFAULT_TIME_FORMAT &&
+		timed.readField('_TimeFormat').value === 'HH:mm:ss');
+
+	var wrote = timed.writeField('_TimeFormat', 'US');
+
+	check('clock.writeSetsTheFormat', wrote != null && wrote.ok === true &&
+		timed.timeFormat() === 'MM/dd/yyyy' &&
+		timed.readField('_TimeFormat').value === 'MM/dd/yyyy' &&
+		timed.readField('_Now').value === HmiTypes.formatTime(new Date(), 'US'),
+		'' + timed.readField('_Now').value);
+
+	// A script is the documented way to set it
+	timed.runScript('_TimeFormat = "DATETIME";');
+
+	check('clock.scriptSetsTheFormat', timed.timeFormat() === 'yyyy-MM-dd HH:mm:ss' &&
+		('' + timed.readField('_Now').value).length === 19,
+		'' + timed.readField('_Now').value);
+
+	// Nonsense from a script falls back, as Now() does
+	timed.runScript('_TimeFormat = "nope";');
+
+	check('clock.scriptNonsenseFallsBack',
+		timed.timeFormat() === HmiTypes.DEFAULT_TIME_FORMAT, timed.timeFormat());
+
+	// A read-only system tag written from a link is refused, and the reason
+	// is what the operator's input dialog shows
+	var refused = timed.writeField('_Now', 'nope');
+
+	check('clock.readOnlyWriteIsRefused', refused != null && refused.ok === false &&
+		('' + refused.error).indexOf('read-only') > 0, JSON.stringify(refused));
+
+	// An ordinary tag's write still answers with what the driver said
+	var plainWrite = timed.writeField('Pump1_Run', 1);
+
+	check('clock.ordinaryWriteAnswers', plainWrite != null && plainWrite.ok !== false,
+		JSON.stringify(plainWrite));
 
 	// --- the tick ---------------------------------------------------------
 
@@ -2376,8 +2635,41 @@ HmiSelfTest.testClock = function(ui)
 
 	check('clock.systemTagInABindListIsExplained', explained, JSON.stringify(notes));
 
+	// --- a system tag written from a link ---------------------------------
+	// Every write path goes through writeField, so _AckAll works from a
+	// screen and not only from a script -- a pushbutton on it used to write
+	// to the driver, which has no such tag, and nothing happened.
+
+	ui.hmiProject = project;
+	HmiSelfTest.resetGraph(ui);
+
+	var acked = 0;
+	var ackCell = graph.insertVertex(graph.getDefaultParent(), null, '', 40, 40, 120, 40);
+	HmiProject.setCellLinks(graph, ackCell, {'pushbutton': {tag: '_AckAll',
+		action: 'set'}});
+
+	var pushed = new HmiRuntime({graph: graph, project: project, driver: sim,
+		alarms: {
+			ackAll: function() { acked++; },
+			isActive: function() { return false; },
+			isAcked: function() { return true; },
+			condition: function() { return null; },
+			on: function() {},
+			off: function() {}
+		}});
+	pushed.start();
+	pushed.flush();
+	pushed.handleTouch(ackCell, 'click');
+
+	check('clock.systemTagFromAPushbutton', acked === 1,
+		'ackAll called ' + acked + ' time(s)');
+
+	pushed.stop();
+	ui.hmiProject = savedProject;
+	HmiSelfTest.resetGraph(ui);
+
 	// The Run's timer, without a Run: it starts and it stops
-	var fake = {windows: []};
+	var fake = {windows: [], clock: new HmiClockManager(null)};
 	HmiWindowManager.prototype.startClock.call(fake);
 	check('clock.timerStarts', fake.clockTimer != null);
 	HmiWindowManager.prototype.stopClock.call(fake);
@@ -6054,6 +6346,67 @@ HmiSelfTest.testKeypad = function(ui)
 			HmiSelfTest.check('keypad.signToggles', input.value === '-78',
 				'field holds ' + JSON.stringify(input.value));
 		}
+	}
+
+	ui.hideDialog();
+
+	// --- the keys are a touch target --------------------------------------
+	// They were half this size until 1.11.0, which is too small for a finger
+	// on a panel. css/hmi.css draws them and these numbers size the dialog
+	// around them, so the two are checked against each other.
+
+	HmiSelfTest.check('keypad.keyMetric',
+		HmiDialogs.KEY_W === 104 && HmiDialogs.KEY_H === 74,
+		HmiDialogs.KEY_W + 'x' + HmiDialogs.KEY_H);
+
+	HmiSelfTest.check('keypad.keyboardWidthFitsItsKeys',
+		HmiDialogs.keyboardWidth() === HmiDialogs.KEY_COLUMNS * HmiDialogs.KEY_W +
+			(HmiDialogs.KEY_COLUMNS - 1) * HmiDialogs.KEY_GAP + 24,
+		'' + HmiDialogs.keyboardWidth());
+
+	// A panel narrower than the keys want: the window is as wide as the
+	// screen allows and the keys shrink into it
+	var capped = HmiDialogs.fitsScreen(100000, 100000);
+
+	HmiSelfTest.check('keypad.cappedAtTheScreen',
+		capped.width === window.innerWidth - 60 &&
+		capped.height === window.innerHeight - 60,
+		capped.width + 'x' + capped.height);
+
+	var wide = HmiDialogs.withKeyboard(380, HmiDialogs.INPUT_BASE);
+
+	HmiSelfTest.check('keypad.keyboardDialogIsWiderThanItWas',
+		wide.width > 560 || wide.width === window.innerWidth - 60,
+		'' + wide.width);
+
+	HmiDialogs.showUserInput(ui, {kind: 'string', tag: 'Recipe_Name',
+		prompt: 'Batch name', keypad: true});
+
+	var pads = document.getElementsByClassName('hmiKeyboard');
+
+	HmiSelfTest.check('keypad.keyboardShownForText', pads.length === 1,
+		'found ' + pads.length + ' keyboards');
+
+	if (pads.length === 1)
+	{
+		var keys = pads[0].getElementsByTagName('button');
+
+		// 10 + 10 + 9 + 7 letters and digits, then shift, space, - _ . and
+		// the two editing keys
+		HmiSelfTest.check('keypad.keyboardHasAllKeys', keys.length === 43,
+			'found ' + keys.length + ' keys');
+
+		var key = keys[0];
+
+		HmiSelfTest.check('keypad.keysAreTwiceTheSize',
+			key.offsetHeight >= 60 && key.offsetWidth >= 60,
+			key.offsetWidth + 'x' + key.offsetHeight);
+
+		var space = pads[0].getElementsByClassName('hmiKeySpace')[0];
+
+		HmiSelfTest.check('keypad.spaceIsStillTheWidestKey',
+			space != null && space.offsetWidth > key.offsetWidth * 2,
+			(space != null) ? space.offsetWidth + ' vs ' + key.offsetWidth : 'no space key');
 	}
 
 	ui.hideDialog();
@@ -11363,9 +11716,11 @@ HmiSelfTest.testQuickFunctionsDialog = function(ui)
 		{
 			field('browseTags').click();
 			var browser = shown;
+			// The project's tags, and the reserved names offered with them
 			check('quickDlg.browseListsTags', browser != null &&
 				browser.querySelectorAll('[data-hmi-tag]').length ===
-					project.tags.length,
+					project.tags.length + HmiTypes.systemTagList().length &&
+				browser.querySelector('[data-hmi-tag="_TimeFormat"]') != null,
 				(browser != null) ?
 					'' + browser.querySelectorAll('[data-hmi-tag]').length : 'none');
 			check('quickDlg.browseCopyWaitsForAPick',
