@@ -2590,7 +2590,9 @@ HmiDialogs.showAppSettings = function(ui)
 		'How the published application runs on the target PC. Kiosk fills ' +
 		'the screen and hides the taskbar; Windows keys and Ctrl+Alt+Del ' +
 		'still work unless Windows itself is locked down. The exit shortcut ' +
-		'is Ctrl+Alt+Shift+Q.'));
+		'is Ctrl+Alt+Shift+Q, and it works whichever exit is chosen below ' +
+		'apart from Never. Closing the window normally means its close ' +
+		'button, which only a window has, or Alt+F4 in any window mode.'));
 
 	HmiDialogs.select(body, 'Window', windowMode, [
 		{value: 'kiosk', label: 'Kiosk (full screen, locked)'},
@@ -2602,6 +2604,7 @@ HmiDialogs.showAppSettings = function(ui)
 
 	var exitSelect = HmiDialogs.select(body, 'Exit', exitMode, [
 		{value: 'shortcut', label: 'Exit shortcut'},
+		{value: 'close', label: 'Close the window normally (close button or Alt+F4)'},
 		{value: 'password', label: 'Exit shortcut and password'},
 		{value: 'never', label: 'Never (shut down Windows to stop)'}],
 		function(v)

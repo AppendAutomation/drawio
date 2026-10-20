@@ -115,10 +115,11 @@ HmiProject.defaultAppScripts = function()
 /**
  * How a published package runs on the target PC. The exit password is kept
  * only as a salted SHA-256 hash (hex of SHA-256(salt + password)), which the
- * package checks in its main process.
+ * package checks in its main process. 'close' lets the operator close the
+ * window as any program's: its close button, or Alt+F4.
  */
 HmiProject.WINDOW_MODES = ['kiosk', 'fullscreen', 'window'];
-HmiProject.EXIT_MODES = ['shortcut', 'password', 'never'];
+HmiProject.EXIT_MODES = ['shortcut', 'close', 'password', 'never'];
 
 HmiProject.defaultRuntime = function()
 {

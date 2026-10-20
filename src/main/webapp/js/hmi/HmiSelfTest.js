@@ -7041,6 +7041,12 @@ HmiSelfTest.testWindows = function(ui)
 	check('rt.badModesIgnored', HmiProject.fromXml(badRt).settings.runtime.windowMode === 'kiosk' &&
 		HmiProject.fromXml(badRt).settings.runtime.exit === 'shortcut');
 
+	// Closing the window normally keeps no password
+	var closeRt = mxUtils.parseXml('<hmiProject><settings><runtime windowMode="window" ' +
+		'exit="close"/></settings></hmiProject>').documentElement;
+	check('rt.closeMode', HmiProject.fromXml(closeRt).settings.runtime.exit === 'close' &&
+		mxUtils.indexOf(HmiProject.EXIT_MODES, 'close') >= 0);
+
 	// Must match the package's check in src/main/runtime/RuntimeMode.js
 	HmiProject.hashPassword('c0ffee', 'secret').then(function(hash)
 	{
@@ -7604,6 +7610,19 @@ HmiSelfTest.testWindows = function(ui)
 		check('dlg.passwordRequired', ui.dialog != null && ui.dialog.container === dlg &&
 			dlg.querySelector('.hmiError').innerText !== '');
 
+		exitSel.value = 'close';
+		exitSel.dispatchEvent(new Event('change'));
+		check('dlg.closeHidesPassword', pwInput.parentNode.style.display === 'none');
+		dlg.querySelector('.hmiOk').click();
+		check('dlg.closeApplied', project.settings.runtime.exit === 'close' &&
+			project.settings.runtime.hash === '', JSON.stringify(project.settings.runtime));
+
+		HmiDialogs.showAppSettings(ui);
+		dlg = ui.dialog.container;
+		exitSel = dlg.querySelector('[data-hmi-field="exit"]');
+		pwInput = dlg.querySelector('[data-hmi-field="exitPassword"]');
+		exitSel.value = 'password';
+		exitSel.dispatchEvent(new Event('change'));
 		pwInput.value = 'hunter2';
 		dlg.querySelectorAll('select')[1].value = 'window';
 		dlg.querySelectorAll('select')[1].dispatchEvent(new Event('change'));
